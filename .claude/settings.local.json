@@ -12,7 +12,8 @@
       "Bash(npm install:*)",
       "Bash(python:*)",
       "Bash(py:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "mcp__ide__getDiagnostics"
     ]
   }
 }

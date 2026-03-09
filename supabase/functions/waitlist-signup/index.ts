@@ -1,9 +1,11 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { Resend } from 'https://esm.sh/resend@3'
-import { serve } from 'https://deno.land/std@0.201.0/http/server.ts'
 
-// retunr email in env vars for security
-serve(async (req) => {
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
 Deno.serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -44,7 +46,7 @@ Deno.serve(async (req) => {
     if (!alreadySignedUp) {
       const resend = new Resend(Deno.env.get('RESEND_API_KEY')!)
       await resend.emails.send({
-        from: 'Agile OS <onbaording@devaos.com.app>', // change to your verified domain
+        from: 'Agile OS <onboarding@devaos.com.app>', // change to your verified domain
         to: email,
         subject: "You're on the Agile OS waitlist",
         html: thankYouEmail(email),

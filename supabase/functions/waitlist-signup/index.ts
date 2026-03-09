@@ -1,11 +1,8 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { Resend } from 'https://esm.sh/resend@3'
+import { serve } from 'https://deno.land/std@0.201.0/http/server.ts'
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
-
+serve(async (req) => {
 Deno.serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -40,14 +37,13 @@ Deno.serve(async (req) => {
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
-
     const alreadySignedUp = dbError?.code === '23505'
 
     // Send thank you email (skip if already signed up to avoid spam)
     if (!alreadySignedUp) {
       const resend = new Resend(Deno.env.get('RESEND_API_KEY')!)
       await resend.emails.send({
-        from: 'Agile OS <hello@agileos.app>', // change to your verified domain
+        from: 'Agile OS <onbaording@devaos.com.app>', // change to your verified domain
         to: email,
         subject: "You're on the Agile OS waitlist",
         html: thankYouEmail(email),
@@ -67,23 +63,9 @@ Deno.serve(async (req) => {
   }
 })
 
-function thankYouEmail(_email: string): string {
-  const modules: [string, string][] = [
-    ['Scope Cop',        'Ticket quality enforced before planning begins'],
-    ['Sprint Brain',     "Plans built on your team's actual delivery history"],
-    ['Dependency Radar', 'Reliability scores for every external dependency'],
-    ['Velocity Mirror',  "Sprint failures caught before they're inevitable"],
-    ['Retrospective AI', 'Automated learning that compounds every sprint'],
-  ]
-
-  const featureRows = modules.map(([name, desc]) =>
-    `<tr><td style="padding:10px 0;border-bottom:1px solid rgba(240,235,224,0.05);">` +
-    `<p style="margin:0 0 3px;font-size:13px;font-weight:600;color:#f0ebe0;">${name}</p>` +
-    `<p style="margin:0;font-size:12px;color:#7a7470;">${desc}</p>` +
-    `</td></tr>`
-  ).join('')
-
-  return `<!DOCTYPE html>
+function thankYouEmail(email: string): string {
+  return `
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -99,14 +81,18 @@ function thankYouEmail(_email: string): string {
           <!-- Header -->
           <tr>
             <td style="padding-bottom:40px;border-bottom:1px solid rgba(240,235,224,0.08);">
-              <p style="margin:0;font-size:22px;font-weight:400;letter-spacing:6px;color:#f0ebe0;text-transform:uppercase;">AOS</p>
+              <p style="margin:0;font-size:22px;font-weight:400;letter-spacing:6px;color:#f0ebe0;text-transform:uppercase;">
+                AOS
+              </p>
             </td>
           </tr>
 
           <!-- Body -->
           <tr>
             <td style="padding:48px 0 32px;">
-              <h1 style="margin:0 0 24px;font-size:36px;font-weight:300;color:#f0ebe0;line-height:1.2;">You're on the list.</h1>
+              <h1 style="margin:0 0 24px;font-size:36px;font-weight:300;color:#f0ebe0;line-height:1.2;">
+                You're on the list.
+              </h1>
               <p style="margin:0 0 16px;font-size:15px;color:#7a7470;line-height:1.8;">
                 Thank you for signing up for the Agile OS waitlist. We're building the planning and intelligence platform that helps engineering teams stop repeating the same sprint failures.
               </p>
@@ -118,8 +104,24 @@ function thankYouEmail(_email: string): string {
               <table width="100%" cellpadding="0" cellspacing="0" style="background:#0c0c0c;border:1px solid rgba(240,235,224,0.06);margin-bottom:40px;">
                 <tr>
                   <td style="padding:28px 32px;">
-                    <p style="margin:0 0 20px;font-size:10px;font-weight:700;letter-spacing:3px;text-transform:uppercase;color:#c4a35a;">What's coming</p>
-                    <table width="100%" cellpadding="0" cellspacing="0">${featureRows}</table>
+                    <p style="margin:0 0 20px;font-size:10px;font-weight:700;letter-spacing:3px;text-transform:uppercase;color:#c4a35a;">
+                      What's coming
+                    </p>
+                    <table width="100%" cellpadding="0" cellspacing="0">
+                      ${[
+                        ['Scope Cop', 'Ticket quality enforced before planning begins'],
+                        ['Sprint Brain', 'Plans built on your team\'s actual delivery history'],
+                        ['Dependency Radar', 'Reliability scores for every external dependency'],
+                        ['Velocity Mirror', 'Sprint failures caught before they\'re inevitable'],
+                        ['Retrospective AI', 'Automated learning that compounds every sprint'],
+                      ].map(([name, desc]) => `
+                      <tr>
+                        <td style="padding:10px 0;border-bottom:1px solid rgba(240,235,224,0.05);">
+                          <p style="margin:0 0 3px;font-size:13px;font-weight:600;color:#f0ebe0;">${name}</p>
+                          <p style="margin:0;font-size:12px;color:#7a7470;">${desc}</p>
+                        </td>
+                      </tr>`).join('')}
+                    </table>
                   </td>
                 </tr>
               </table>
@@ -133,9 +135,12 @@ function thankYouEmail(_email: string): string {
           <!-- Footer -->
           <tr>
             <td style="padding-top:32px;border-top:1px solid rgba(240,235,224,0.06);">
-              <p style="margin:0 0 8px;font-size:11px;color:#3d3a36;letter-spacing:1px;">AGILE OS — The Operating System for Engineering Teams</p>
+              <p style="margin:0 0 8px;font-size:11px;color:#3d3a36;letter-spacing:1px;">
+                AGILE OS — The Operating System for Engineering Teams
+              </p>
               <p style="margin:0;font-size:11px;color:#3d3a36;">
-                You're receiving this because you signed up at agileos.app.<br/>Reply to unsubscribe at any time.
+                You're receiving this because you signed up at agileos.app.
+                <br/>Reply to unsubscribe at any time.
               </p>
             </td>
           </tr>
@@ -145,5 +150,6 @@ function thankYouEmail(_email: string): string {
     </tr>
   </table>
 </body>
-</html>`
+</html>
+  `.trim()
 }

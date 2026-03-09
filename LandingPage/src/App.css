@@ -1,12 +1,12 @@
 /* ─── Design Tokens ─────────────────────────────────────────── */
 :root {
-  --bg:             #07070D;
-  --bg-surface:     #0E0E1C;
-  --bg-raised:      #141428;
-  --bg-card:        #10101E;
-  --text-primary:   #ECEDF5;
-  --text-secondary: #8585A0;
-  --text-muted:     #414158;
+  --bg:             #000000;
+  --bg-surface:     #080808;
+  --bg-raised:      #111111;
+  --bg-card:        #0C0C0C;
+  --text-primary:   #ECECEC;
+  --text-secondary: #858585;
+  --text-muted:     #414141;
   --gold:           #C9AA5E;
   --gold-light:     #D9BF7A;
   --gold-dim:       rgba(201, 170, 94, 0.12);

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import './App.css'
+import { supabase } from './lib/supabase'
 
 const WAITLIST_COUNT = 2847
 
@@ -11,9 +12,9 @@ const MARQUEE_ITEMS = [
 
 const STATS = [
   { value: '50%+', label: 'Sprint spillover reduced', note: 'within 3 months' },
-  { value: '60%', label: 'Planning time saved', note: 'vs manual estimation' },
-  { value: '30%', label: 'Fewer disruptions', note: 'dependency blindness eliminated' },
-  { value: '85%+', label: 'Estimation accuracy', note: 'within 6 months' },
+  { value: '60%',  label: 'Planning time saved',      note: 'vs manual estimation' },
+  { value: '30%',  label: 'Fewer disruptions',         note: 'dependency blindness eliminated' },
+  { value: '85%+', label: 'Estimation accuracy',       note: 'within 6 months' },
 ]
 
 const MODULES = [
@@ -29,7 +30,7 @@ const MODULES = [
     name: 'Sprint Brain',
     tag: 'Sprint Planner',
     phase: 'Sprint Planning',
-    desc: 'Builds sprint plans matched to each developer\'s actual delivery history — not team averages. Recommends assignments with evidence. Shows you exactly why a sprint will succeed or fail before it starts.',
+    desc: "Builds sprint plans matched to each developer's actual delivery history — not team averages. Recommends assignments with evidence. Shows you exactly why a sprint will succeed or fail before it starts.",
   },
   {
     num: '03',
@@ -43,7 +44,7 @@ const MODULES = [
     name: 'Velocity Mirror',
     tag: 'Live Sprint Dashboard',
     phase: 'During Execution',
-    desc: 'Sprint failures become visible days before they\'re inevitable. Real-time monitoring catches stalled tickets, over-capacity developers, and blocked dependencies — with recommended interventions ranked by impact.',
+    desc: "Sprint failures become visible days before they're inevitable. Real-time monitoring catches stalled tickets, over-capacity developers, and blocked dependencies — with recommended interventions ranked by impact.",
   },
   {
     num: '05',
@@ -55,11 +56,11 @@ const MODULES = [
 ]
 
 const LOOP_STEPS = [
-  { step: '01', event: 'Ticket Created', module: 'Scope Cop', desc: 'Quality enforced at the source' },
-  { step: '02', event: 'Sprint Planning', module: 'Sprint Brain + Dependency Radar', desc: 'Plans built on evidence, not optimism' },
-  { step: '03', event: 'Sprint Execution', module: 'Velocity Mirror', desc: 'Failures caught before they\'re inevitable' },
-  { step: '04', event: 'Sprint Close', module: 'Retrospective AI', desc: 'Learnings captured and tracked automatically' },
-  { step: '05', event: 'Next Sprint', module: 'System gets smarter', desc: 'Historical data compounds into intelligence' },
+  { step: '01', event: 'Ticket Created',   module: 'Scope Cop',                    desc: 'Quality enforced at the source' },
+  { step: '02', event: 'Sprint Planning',  module: 'Sprint Brain + Dependency Radar', desc: 'Plans built on evidence, not optimism' },
+  { step: '03', event: 'Sprint Execution', module: 'Velocity Mirror',               desc: "Failures caught before they're inevitable" },
+  { step: '04', event: 'Sprint Close',     module: 'Retrospective AI',              desc: 'Learnings captured and tracked automatically' },
+  { step: '05', event: 'Next Sprint',      module: 'System gets smarter',           desc: 'Historical data compounds into intelligence' },
 ]
 
 const ArrowIcon = () => (
@@ -73,7 +74,7 @@ function App() {
   const [status, setStatus] = useState('idle')
   const [errorMsg, setErrorMsg] = useState('')
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       setErrorMsg('Please enter a valid email address.')
@@ -81,7 +82,21 @@ function App() {
       return
     }
     setStatus('loading')
-    setTimeout(() => setStatus('success'), 1200)
+    try {
+      const { error } = await supabase.functions.invoke('waitlist-signup', {
+        body: { email },
+      })
+      if (error) throw error
+      setStatus('success')
+    } catch (err) {
+      const msg = err?.message ?? ''
+      if (msg.includes('duplicate') || msg.includes('already')) {
+        setStatus('success')
+      } else {
+        setErrorMsg('Something went wrong. Please try again.')
+        setStatus('error')
+      }
+    }
   }
 
   return (
@@ -98,25 +113,33 @@ function App() {
       <div className="bg-glow" aria-hidden="true" />
 
       {/* Navigation */}
-      <nav className="nav">
+      <nav className="nav" role="navigation" aria-label="Main navigation">
         <div className="nav-brand">
           <span className="nav-logo">AOS</span>
+          <span className="nav-divider" aria-hidden="true" />
           <span className="nav-full-name">Agile OS</span>
         </div>
-        <a href="#waitlist" className="nav-cta">Join Waitlist</a>
+        <div className="nav-links">
+          <a href="#modules" className="nav-link">Features</a>
+          <a href="#waitlist" className="nav-cta">Request Access</a>
+        </div>
       </nav>
 
       <main>
         {/* Hero */}
         <section className="hero">
           <div className="hero-content">
-            <p className="hero-eyebrow animate-1">The Operating System for Engineering Teams</p>
+            <div className="hero-badge animate-1">
+              <span className="hero-badge-dot" aria-hidden="true" />
+              <span>Now in Beta — Limited Access</span>
+            </div>
             <h1 className="hero-title animate-2" aria-label="Agile OS">AOS</h1>
-            <p className="hero-sub animate-3">
+            <p className="hero-tagline animate-3">The Operating System for Engineering Teams</p>
+            <p className="hero-sub animate-4">
               The planning and intelligence platform that helps engineering teams<br />
               <em>stop repeating the same sprint failures.</em>
             </p>
-            <div className="hero-actions animate-4">
+            <div className="hero-actions animate-5">
               <a href="#waitlist" className="btn-primary">
                 <span>Request Early Access</span>
                 <ArrowIcon />
@@ -126,7 +149,7 @@ function App() {
               </a>
             </div>
           </div>
-          <div className="hero-scroll animate-5" aria-hidden="true">
+          <div className="hero-scroll" aria-hidden="true">
             <span className="scroll-line" />
             <span>scroll</span>
           </div>
@@ -175,8 +198,10 @@ function App() {
             <p className="problem-body">
               Agile OS is the intelligence layer that sits across every stage of the sprint lifecycle —
               continuously learning from a team's patterns and making the next sprint smarter than the last.
-              <strong> The longer a team uses it, the smarter it becomes.</strong>
             </p>
+            <div className="problem-callout">
+              <p>The longer a team uses it, the smarter it becomes.</p>
+            </div>
           </div>
         </section>
 
@@ -200,8 +225,8 @@ function App() {
                 </div>
                 {i < LOOP_STEPS.length - 1 && (
                   <span className="loop-arrow" aria-hidden="true">
-                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                      <path d="M4 10h12M12 5l5 5-5 5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                    <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+                      <path d="M4 10h12M12 5l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                     </svg>
                   </span>
                 )}
@@ -222,26 +247,22 @@ function App() {
               <span className="label-line" aria-hidden="true" />
             </div>
             <p className="modules-intro">
-              Each module addresses one stage of the sprint lifecycle.<br />
+              Each module addresses one stage of the sprint lifecycle.
               Together, they form a closed system where every sprint makes the next one smarter.
             </p>
           </div>
-          <div className="modules-list">
+          <div className="modules-grid">
             {MODULES.map((m) => (
-              <article key={m.num} className="module-row">
-                <div className="module-left">
+              <article key={m.num} className="module-card">
+                <div className="module-card-top">
                   <span className="module-num">{m.num}</span>
-                </div>
-                <div className="module-center">
-                  <div className="module-header-row">
-                    <h3 className="module-name">{m.name}</h3>
-                    <span className="module-tag">{m.tag}</span>
-                  </div>
-                  <p className="module-desc">{m.desc}</p>
-                </div>
-                <div className="module-right">
                   <span className="module-phase">{m.phase}</span>
                 </div>
+                <div className="module-header-row">
+                  <h3 className="module-name">{m.name}</h3>
+                  <span className="module-tag">{m.tag}</span>
+                </div>
+                <p className="module-desc">{m.desc}</p>
               </article>
             ))}
           </div>
@@ -256,7 +277,9 @@ function App() {
                 <span key={tool} className="integration-chip">{tool}</span>
               ))}
             </div>
-            <p className="integrations-note">No migration required. Agile OS reads and writes to your existing tools — it doesn't replace them.</p>
+            <p className="integrations-note">
+              No migration required. Agile OS reads and writes to your existing tools — it doesn't replace them.
+            </p>
           </div>
         </section>
 

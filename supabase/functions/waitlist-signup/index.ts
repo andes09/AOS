@@ -2,6 +2,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { Resend } from 'https://esm.sh/resend@3'
 import { serve } from 'https://deno.land/std@0.201.0/http/server.ts'
 
+// retunr email in env vars for security
 serve(async (req) => {
 Deno.serve(async (req) => {
   // Handle CORS preflight

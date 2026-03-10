@@ -88,6 +88,67 @@ _SPRINT_PLAN_TOOL: dict = {
     },
 }
 
+_COMPLEXITY_TOOL: dict = {
+    "name": "analyse_tickets",
+    "description": (
+        "Analyse a list of tickets and return a complexity estimate for each one. "
+        "Focus purely on the work itself — do not consider developer availability."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "ticket_analyses": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "ticket_id": {"type": "string"},
+                        "effort": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                            "description": "Overall implementation effort.",
+                        },
+                        "required_skills": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Technical skills needed, e.g. ['backend', 'sql', 'api-design']. "
+                                "Use domain names from: frontend, backend, infra. "
+                                "Add specifics as extra tags."
+                            ),
+                        },
+                        "complexity_notes": {
+                            "type": "string",
+                            "description": "One sentence explaining the main complexity driver.",
+                        },
+                        "estimated_days": {
+                            "type": "number",
+                            "description": "Estimated calendar days for a mid-level engineer.",
+                        },
+                    },
+                    "required": ["ticket_id", "effort", "required_skills", "complexity_notes", "estimated_days"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["ticket_analyses"],
+        "additionalProperties": False,
+    },
+}
+
+_COMPLEXITY_SYSTEM_PROMPT = """\
+You are a senior software engineer estimating implementation effort for sprint tickets.
+
+For each ticket, assess:
+1. Effort level: low (< 1 day), medium (1–3 days), high (3+ days)
+2. Required skills: use domain terms (frontend, backend, infra) plus specific tags
+3. Complexity notes: one sentence on the main driver of complexity
+4. Estimated days: your best estimate for a mid-level engineer
+
+Focus purely on the work. Ignore team composition and availability.
+Always respond by calling the analyse_tickets tool.\
+"""
+
 _SYSTEM_PROMPT = """\
 You are an expert agile sprint planning assistant with deep expertise in \
 software engineering team dynamics and velocity-based capacity planning.

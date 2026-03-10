@@ -1,6 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from src.config import settings
+from src.auth import get_current_user_id
 
 app = FastAPI(
     title="AgileOS API",
@@ -20,3 +21,8 @@ app.add_middleware(
 @app.get("/health")
 async def health():
     return {"status": "ok", "environment": settings.environment}
+
+
+@app.get("/api/me")
+async def get_me(user_id: str = Depends(get_current_user_id)):
+    return {"user_id": user_id}

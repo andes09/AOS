@@ -65,15 +65,16 @@ button { font-family: inherit; cursor: pointer; }
   inset: 0;
   z-index: -1;
   background:
-    radial-gradient(ellipse 90% 60% at 50% -10%, rgba(84, 104, 255, 0.07) 0%, transparent 65%),
-    radial-gradient(ellipse 50% 50% at 80% 85%,  rgba(201, 170, 94, 0.05) 0%, transparent 60%),
-    radial-gradient(ellipse 40% 40% at 15% 65%,  rgba(84, 104, 255, 0.04) 0%, transparent 60%);
-  animation: bgBreath 20s ease-in-out infinite;
+    radial-gradient(ellipse 120% 55% at 50% 0%,   rgba(84, 104, 255, 0.08) 0%, transparent 60%),
+    radial-gradient(ellipse 70%  50% at 85% 40%,  rgba(201, 170, 94, 0.05) 0%, transparent 55%),
+    radial-gradient(ellipse 60%  50% at 10% 60%,  rgba(84, 104, 255, 0.05) 0%, transparent 55%),
+    radial-gradient(ellipse 80%  50% at 50% 100%, rgba(84, 104, 255, 0.04) 0%, transparent 60%);
+  animation: bgBreath 22s ease-in-out infinite;
 }
 
 @keyframes bgBreath {
   0%, 100% { opacity: 1; }
-  50%       { opacity: 0.6; }
+  50%       { opacity: 0.7; }
 }
 
 /* ─── Entrance Animations ───────────────────────────────────── */
@@ -103,7 +104,7 @@ button { font-family: inherit; cursor: pointer; }
   width: min(calc(100% - 3rem), 900px);
   border: 1px solid var(--border);
   border-radius: 100px;
-  background: rgba(7, 7, 13, 0.82);
+  background: rgba(0, 0, 0, 0.85);
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
   box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 40px rgba(0,0,0,0.5);
@@ -356,7 +357,7 @@ button { font-family: inherit; cursor: pointer; }
   border-bottom: 1px solid var(--border);
   padding: 0.85rem 0;
   overflow: hidden;
-  background: var(--bg-surface);
+  background: transparent;
 }
 
 .marquee-track {
@@ -414,7 +415,7 @@ button { font-family: inherit; cursor: pointer; }
 /* ─── Stats ─────────────────────────────────────────────────── */
 .stats-section {
   border-bottom: 1px solid var(--border);
-  background: var(--bg-surface);
+  background: transparent;
 }
 
 .stats-inner {
@@ -515,7 +516,7 @@ button { font-family: inherit; cursor: pointer; }
 .loop-section {
   padding: 9rem 3rem;
   border-bottom: 1px solid var(--border);
-  background: var(--bg-surface);
+  background: transparent;
 }
 
 .loop-track {

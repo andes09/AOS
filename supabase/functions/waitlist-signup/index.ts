@@ -1,5 +1,3 @@
-import { Resend } from 'https://esm.sh/resend@3'
-
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -20,13 +18,28 @@ Deno.serve(async (req) => {
       )
     }
 
-    const resend = new Resend(Deno.env.get('RESEND_API_KEY')!)
-    await resend.emails.send({
-      from: 'Agile OS <onboarding@devaos.space>',
-      to: email,
-      subject: "You're on the Agile OS waitlist",
-      html: thankYouEmail(email),
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${Deno.env.get('RESEND_API_KEY')}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: 'Agile OS <onboarding@devaos.space>',
+        to: email,
+        subject: "You're on the Agile OS waitlist",
+        html: thankYouEmail(email),
+      }),
     })
+
+    if (!res.ok) {
+      const body = await res.text()
+      console.error('Resend error:', res.status, body)
+      return new Response(
+        JSON.stringify({ error: 'Failed to send email' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
 
     return new Response(
       JSON.stringify({ success: true }),

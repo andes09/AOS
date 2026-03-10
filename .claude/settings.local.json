@@ -15,7 +15,8 @@
       "Bash(npm run:*)",
       "mcp__ide__getDiagnostics",
       "Skill(commit-commands:commit-push-pr)",
-      "Skill(claude-md-management:revise-claude-md)"
+      "Skill(claude-md-management:revise-claude-md)",
+      "Bash(cmd.exe /c \"where pnpm 2>&1\")"
     ]
   }
 }

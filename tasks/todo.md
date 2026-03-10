@@ -15,6 +15,12 @@
 > Full version should replace this with a calendar sync track (Track ??) that auto-detects
 > meetings and feeds them into the capacity model automatically.
 
+> **Future: Custom domain granularity for velocity profiling**
+> The velocity engine currently uses a fixed `Domain` enum (`frontend`, `backend`, `infra`).
+> Consider allowing teams to define custom domains (e.g. `mobile`, `data`, `devops`) so that
+> velocity profiles and Sprint Brain citations reflect the team's actual work taxonomy.
+> Would require extending `Domain` in Track D's schemas and a migration path for existing data.
+
 > **Dependency: DB Models not yet created**
 > `apps/api/src/models/` does not exist. A separate track must create SQLAlchemy models
 > (`Sprint`, `Ticket`, `Developer`, `PtoEntry`) before Track D can be wired to the DB.

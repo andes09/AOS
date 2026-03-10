@@ -1,6 +1,10 @@
 # apps/api/src/services/velocity/profiler.py
 from collections import defaultdict
-from .schemas import TicketRecord, VelocityProfile
+from typing import TypeAlias
+from .schemas import TicketRecord, VelocityProfile, TicketType, Domain
+
+_ProfileKey: TypeAlias = tuple[str, TicketType, Domain, str]  # dev, type, domain, sprint_id
+_GroupKey: TypeAlias = tuple[str, TicketType, Domain]          # dev, type, domain
 
 
 class VelocityProfiler:
@@ -12,13 +16,13 @@ class VelocityProfiler:
         Points within the same sprint are summed before averaging across sprints.
         """
         # Step 1: sum points per (dev, type, domain, sprint)
-        sprint_points: dict[tuple, float] = defaultdict(float)
+        sprint_points: dict[_ProfileKey, float] = defaultdict(float)
         for t in tickets:
             key = (t.developer_id, t.ticket_type, t.domain, t.sprint_id)
             sprint_points[key] += t.story_points
 
         # Step 2: collect per-sprint totals grouped by (dev, type, domain)
-        group_sprints: dict[tuple, list[float]] = defaultdict(list)
+        group_sprints: dict[_GroupKey, list[float]] = defaultdict(list)
         for (dev, ttype, domain, _sprint), pts in sprint_points.items():
             group_sprints[(dev, ttype, domain)].append(pts)
 
@@ -28,7 +32,7 @@ class VelocityProfiler:
                 developer_id=dev,
                 ticket_type=ttype,
                 domain=domain,
-                avg_points_per_sprint=sum(sprint_totals) / len(sprint_totals),
+                avg_points_per_sprint=round(sum(sprint_totals) / len(sprint_totals), 2),
                 sample_count=len(sprint_totals),
             )
             for (dev, ttype, domain), sprint_totals in group_sprints.items()
@@ -48,4 +52,4 @@ class VelocityProfiler:
             sprint_totals[t.sprint_id] += t.story_points
 
         totals = list(sprint_totals.values())
-        return sum(totals) / len(totals)
+        return round(sum(totals) / len(totals), 2)

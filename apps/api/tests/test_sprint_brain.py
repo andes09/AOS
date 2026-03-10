@@ -83,6 +83,17 @@ SAMPLE_OUTPUT = SprintBrainOutput(
 )
 
 
+def test_sprint_brain_output_insufficient_data_devs_defaults_to_empty():
+    output = SprintBrainOutput(
+        assignments=[],
+        confidence_score=0.9,
+        summary="test",
+        warnings=[],
+        what_if_dropped={},
+    )
+    assert output.insufficient_data_devs == []
+
+
 # ---------------------------------------------------------------------------
 # _build_user_message unit tests
 # ---------------------------------------------------------------------------

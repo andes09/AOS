@@ -81,6 +81,8 @@ const { error } = await supabase
         .insert({ email: email.toLowerCase().trim() })
       if (error) throw error
       setStatus('success')
+      // Fire-and-forget confirmation email — failure doesn't affect signup
+      supabase.functions.invoke('waitlist-signup', { body: { email } }).catch(() => {})
     } catch (err) {
       const msg = err?.message ?? ''
       const code = err?.code ?? ''

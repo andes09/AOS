@@ -1,4 +1,3 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { Resend } from 'https://esm.sh/resend@3'
 
 const corsHeaders = {
@@ -7,7 +6,6 @@ const corsHeaders = {
 }
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
   }
@@ -22,36 +20,13 @@ Deno.serve(async (req) => {
       )
     }
 
-    // Insert into Supabase using service role (bypasses RLS)
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    )
-
-    const { error: dbError } = await supabase
-      .from('waitlist')
-      .insert({ email: email.toLowerCase().trim() })
-
-    // 23505 = unique_violation (already signed up) — still send success
-    if (dbError && dbError.code !== '23505') {
-      console.error('DB error:', dbError)
-      return new Response(
-        JSON.stringify({ error: 'Failed to save email' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-    const alreadySignedUp = dbError?.code === '23505'
-
-    // Send thank you email (skip if already signed up to avoid spam)
-    if (!alreadySignedUp) {
-      const resend = new Resend(Deno.env.get('RESEND_API_KEY')!)
-      await resend.emails.send({
-        from: 'Agile OS <onboarding@devaos.com.app>', // change to your verified domain
-        to: email,
-        subject: "You're on the Agile OS waitlist",
-        html: thankYouEmail(email),
-      })
-    }
+    const resend = new Resend(Deno.env.get('RESEND_API_KEY')!)
+    await resend.emails.send({
+      from: 'Agile OS <onboarding@devaos.space>',
+      to: email,
+      subject: "You're on the Agile OS waitlist",
+      html: thankYouEmail(email),
+    })
 
     return new Response(
       JSON.stringify({ success: true }),

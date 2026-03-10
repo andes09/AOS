@@ -13,6 +13,9 @@ from src.services.sprint_brain import (
     SprintBrainOutput,
     _apply_sprint_gate,
     _build_user_message,
+    _build_complexity_message,
+    _extract_complexity,
+    _analyse_ticket_complexity,
     generate_sprint_plan,
     simulate_what_if,
 )
@@ -266,6 +269,94 @@ async def test_simulate_what_if_preserves_other_fields():
     assert modified.sprint_start_date == SAMPLE_INPUT.sprint_start_date
     assert modified.pto_overrides == SAMPLE_INPUT.pto_overrides
     assert modified.developer_profiles == SAMPLE_INPUT.developer_profiles
+
+
+# ---------------------------------------------------------------------------
+# Complexity analysis unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestComplexityAnalysis:
+    def test_build_complexity_message_includes_all_ticket_ids(self):
+        msg = _build_complexity_message(SAMPLE_TICKETS)
+        assert "PROJ-1" in msg
+        assert "PROJ-2" in msg
+        assert "PROJ-3" in msg
+
+    def test_build_complexity_message_includes_summaries(self):
+        msg = _build_complexity_message(SAMPLE_TICKETS)
+        assert "Build login page" in msg
+        assert "Fix null pointer bug" in msg
+
+    def test_build_complexity_message_includes_story_points(self):
+        msg = _build_complexity_message(SAMPLE_TICKETS)
+        assert "3" in msg
+
+    def test_extract_complexity_parses_tool_response(self):
+        tool_block = MagicMock()
+        tool_block.type = "tool_use"
+        tool_block.name = "analyse_tickets"
+        tool_block.input = {
+            "ticket_analyses": [
+                {
+                    "ticket_id": "PROJ-1",
+                    "effort": "medium",
+                    "required_skills": ["frontend", "auth"],
+                    "complexity_notes": "Requires auth integration.",
+                    "estimated_days": 2.0,
+                }
+            ]
+        }
+        response = MagicMock()
+        response.content = [tool_block]
+
+        result = _extract_complexity(response)
+
+        assert len(result) == 1
+        assert result[0]["ticket_id"] == "PROJ-1"
+        assert result[0]["effort"] == "medium"
+        assert result[0]["estimated_days"] == 2.0
+
+    def test_extract_complexity_raises_when_tool_missing(self):
+        text_block = MagicMock()
+        text_block.type = "text"
+        response = MagicMock()
+        response.content = [text_block]
+
+        with pytest.raises(RuntimeError, match="complexity analysis"):
+            _extract_complexity(response)
+
+
+@pytest.mark.asyncio
+async def test_analyse_ticket_complexity_calls_claude():
+    """_analyse_ticket_complexity must call Claude exactly once with the right tool."""
+    tool_block = MagicMock()
+    tool_block.type = "tool_use"
+    tool_block.name = "analyse_tickets"
+    tool_block.input = {
+        "ticket_analyses": [
+            {
+                "ticket_id": "PROJ-1",
+                "effort": "low",
+                "required_skills": ["frontend"],
+                "complexity_notes": "Simple UI.",
+                "estimated_days": 0.5,
+            }
+        ]
+    }
+    mock_response = MagicMock()
+    mock_response.content = [tool_block]
+
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+    result = await _analyse_ticket_complexity(SAMPLE_TICKETS[:1], mock_client)
+
+    mock_client.messages.create.assert_called_once()
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    assert call_kwargs["tool_choice"] == {"type": "tool", "name": "analyse_tickets"}
+    assert len(result) == 1
+    assert result[0]["ticket_id"] == "PROJ-1"
 
 
 # ---------------------------------------------------------------------------

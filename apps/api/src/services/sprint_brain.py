@@ -311,6 +311,60 @@ def _extract_plan(response: anthropic.types.Message) -> SprintBrainOutput:
     )
 
 
+def _build_complexity_message(tickets: list[dict]) -> str:
+    lines = ["## Tickets to Analyse", ""]
+    for i, ticket in enumerate(tickets, 1):
+        tid = ticket.get("id") or ticket.get("ticket_id") or f"ticket-{i}"
+        title = ticket.get("summary") or ticket.get("title") or "(no title)"
+        points = ticket.get("story_points") or ticket.get("points") or "?"
+        priority = ticket.get("priority", "medium")
+        labels = ticket.get("labels") or []
+
+        lines.append(f"{i}. [{tid}] {title}")
+        lines.append(f"   Story points: {points} | Priority: {priority}")
+        if labels:
+            lines.append(f"   Labels: {', '.join(labels)}")
+        if ticket.get("description"):
+            desc = str(ticket["description"])[:200]
+            lines.append(f"   Description: {desc}")
+        lines.append("")
+
+    lines.append("Analyse each ticket and call the analyse_tickets tool with your assessment.")
+    return "\n".join(lines)
+
+
+def _extract_complexity(response: anthropic.types.Message) -> list[dict]:
+    tool_block = next(
+        (b for b in response.content if b.type == "tool_use" and b.name == "analyse_tickets"),
+        None,
+    )
+    if tool_block is None:
+        raise RuntimeError(
+            "Claude did not return a complexity analysis tool call. "
+            "Please try again."
+        )
+    return tool_block.input["ticket_analyses"]
+
+
+async def _analyse_ticket_complexity(
+    tickets: list[dict],
+    client: anthropic.AsyncAnthropic,
+) -> list[dict]:
+    """
+    Claude Call 1: analyse ticket complexity without developer context.
+    Returns a list of per-ticket complexity dicts.
+    """
+    response = await client.messages.create(
+        model=_MODEL,
+        max_tokens=4096,
+        system=_COMPLEXITY_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": _build_complexity_message(tickets)}],
+        tools=[_COMPLEXITY_TOOL],
+        tool_choice={"type": "tool", "name": "analyse_tickets"},
+    )
+    return _extract_complexity(response)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------

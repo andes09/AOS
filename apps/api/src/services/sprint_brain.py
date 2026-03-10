@@ -156,16 +156,26 @@ software engineering team dynamics and velocity-based capacity planning.
 Your responsibilities:
 1. Assign tickets to developers based on their velocity profiles, historical \
    performance, and skill fit.
-2. Respect each developer's recommended capacity — never overload.
+2. Respect each developer's safe capacity — never overload.
 3. Prioritise high-value, unblocked tickets first.
 4. Surface risks proactively: overloaded developers, skill gaps, low-data \
    estimates, sequential dependencies.
 5. Be conservative. A sprint with 80 % confidence is far better than one \
    that looks full on paper but will slip.
+6. For EVERY assignment, include in your reasoning a direct citation of \
+   the historical velocity data you used. \
+   Example: "Based on 4 backend/bug sprints averaging 8.2 pts, this fits \
+   within Alice's safe capacity of 24 pts."
 
 Always respond by calling the create_sprint_plan tool with your complete \
 analysis. Do not respond in prose outside the tool call.\
 """
+
+_CITATION_INSTRUCTION = (
+    "For each assignment, cite the specific historical data you are using. "
+    'Example: "Based on 4 backend/bug sprints averaging 8.2 pts, '
+    "this fits within Alice's safe capacity of 24 pts.\""
+)
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +373,77 @@ async def _analyse_ticket_complexity(
         tool_choice={"type": "tool", "name": "analyse_tickets"},
     )
     return _extract_complexity(response)
+
+
+def _build_assignment_message(
+    inp: SprintBrainInput,
+    complexity_analysis: list[dict],
+    eligible_profiles: list[dict],
+) -> str:
+    # Index complexity by ticket_id for quick lookup
+    complexity_map = {c["ticket_id"]: c for c in complexity_analysis}
+
+    lines: list[str] = [
+        "## Sprint Planning Request",
+        f"Team ID: {inp.team_id}",
+        f"Sprint start: {inp.sprint_start_date}",
+        f"Sprint length: {inp.sprint_length_days} days",
+        "",
+        "## Developer Profiles (eligible assignees only)",
+        _CITATION_INSTRUCTION,
+        "",
+    ]
+
+    for profile in eligible_profiles:
+        dev_id = profile.get("developer_id", "unknown")
+        display = profile.get("display_name", dev_id)
+        capacity = profile.get("safe_capacity_pts", "?")
+        pto = inp.pto_overrides.get(dev_id, 0.0)
+
+        lines.append(f"### {display}  (id: {dev_id})")
+        lines.append(f"  Safe capacity : {capacity} pts this sprint")
+        if pto > 0:
+            lines.append(f"  PTO           : {pto} day(s)")
+
+        breakdown = profile.get("velocity_breakdown") or []
+        if breakdown:
+            lines.append("  Historical velocity breakdown:")
+            for row in breakdown:
+                ttype = row.get("ticket_type", "?")
+                domain = row.get("domain", "?")
+                avg = row.get("avg_pts", "?")
+                count = row.get("sample_count", "?")
+                lines.append(f"    {domain} / {ttype} → {count} sprints, avg {avg} pts/sprint")
+        else:
+            lines.append("  Historical velocity breakdown: no data recorded")
+        lines.append("")
+
+    lines += ["## Candidate Tickets (with complexity analysis)", ""]
+    for i, ticket in enumerate(inp.candidate_tickets, 1):
+        tid = ticket.get("id") or ticket.get("ticket_id") or f"ticket-{i}"
+        title = ticket.get("summary") or ticket.get("title") or "(no title)"
+        points = ticket.get("story_points") or ticket.get("points") or "?"
+        priority = ticket.get("priority", "medium")
+        labels = ticket.get("labels") or []
+        analysis = complexity_map.get(tid, {})
+
+        lines.append(f"{i}. [{tid}] {title}")
+        lines.append(f"   Points: {points} | Priority: {priority}")
+        if labels:
+            lines.append(f"   Labels: {', '.join(labels)}")
+        if analysis:
+            lines.append(f"   Effort    : {analysis.get('effort', '?')}")
+            lines.append(f"   Est. days : {analysis.get('estimated_days', '?')}")
+            lines.append(f"   Skills    : {', '.join(analysis.get('required_skills', []))}")
+            lines.append(f"   Notes     : {analysis.get('complexity_notes', '')}")
+        lines.append("")
+
+    lines += [
+        "Please create the optimal sprint plan. For each ticket, assign it to the "
+        "best-fit developer and include a citation of the specific historical data "
+        "supporting your decision. Populate what_if_dropped for each assigned ticket.",
+    ]
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

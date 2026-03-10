@@ -13,9 +13,11 @@ from src.services.sprint_brain import (
     SprintBrainOutput,
     _apply_sprint_gate,
     _build_user_message,
+    _build_assignment_message,
     _build_complexity_message,
     _extract_complexity,
     _analyse_ticket_complexity,
+    _CITATION_INSTRUCTION,
     generate_sprint_plan,
     simulate_what_if,
 )
@@ -468,3 +470,68 @@ class TestApplySprintGate:
         eligible, insufficient = _apply_sprint_gate([])
         assert eligible == []
         assert insufficient == []
+
+
+# ---------------------------------------------------------------------------
+# _build_assignment_message unit tests
+# ---------------------------------------------------------------------------
+
+COMPLEXITY_ANALYSIS = [
+    {"ticket_id": "PROJ-1", "effort": "low", "required_skills": ["frontend"], "complexity_notes": "Simple UI.", "estimated_days": 1.0},
+    {"ticket_id": "PROJ-2", "effort": "medium", "required_skills": ["backend"], "complexity_notes": "Auth layer.", "estimated_days": 2.0},
+]
+
+# PROFILE_ALICE and PROFILE_CHARLIE are already defined in this file
+NEW_SAMPLE_PROFILES = [PROFILE_ALICE, PROFILE_CHARLIE]
+
+NEW_SAMPLE_INPUT = SprintBrainInput(
+    team_id="team-abc",
+    candidate_tickets=SAMPLE_TICKETS[:2],
+    developer_profiles=NEW_SAMPLE_PROFILES,
+    sprint_length_days=14,
+    sprint_start_date="2026-03-17",
+    pto_overrides={"dev-1": 1.0},
+)
+
+
+class TestBuildAssignmentMessage:
+    def test_includes_team_id(self):
+        msg = _build_assignment_message(NEW_SAMPLE_INPUT, COMPLEXITY_ANALYSIS, NEW_SAMPLE_PROFILES)
+        assert "team-abc" in msg
+
+    def test_includes_ticket_ids(self):
+        msg = _build_assignment_message(NEW_SAMPLE_INPUT, COMPLEXITY_ANALYSIS, NEW_SAMPLE_PROFILES)
+        assert "PROJ-1" in msg
+        assert "PROJ-2" in msg
+
+    def test_includes_complexity_effort(self):
+        msg = _build_assignment_message(NEW_SAMPLE_INPUT, COMPLEXITY_ANALYSIS, NEW_SAMPLE_PROFILES)
+        assert "low" in msg or "medium" in msg
+
+    def test_includes_developer_names(self):
+        msg = _build_assignment_message(NEW_SAMPLE_INPUT, COMPLEXITY_ANALYSIS, NEW_SAMPLE_PROFILES)
+        assert "Alice" in msg
+        assert "Charlie" in msg
+
+    def test_includes_velocity_breakdown(self):
+        msg = _build_assignment_message(NEW_SAMPLE_INPUT, COMPLEXITY_ANALYSIS, NEW_SAMPLE_PROFILES)
+        assert "8.2" in msg   # Alice's backend/bug avg
+
+    def test_includes_safe_capacity(self):
+        msg = _build_assignment_message(NEW_SAMPLE_INPUT, COMPLEXITY_ANALYSIS, NEW_SAMPLE_PROFILES)
+        assert "24" in msg    # Alice's safe_capacity_pts
+
+    def test_includes_pto(self):
+        msg = _build_assignment_message(NEW_SAMPLE_INPUT, COMPLEXITY_ANALYSIS, NEW_SAMPLE_PROFILES)
+        assert "PTO" in msg
+        assert "1.0" in msg
+
+    def test_includes_citation_instruction(self):
+        msg = _build_assignment_message(NEW_SAMPLE_INPUT, COMPLEXITY_ANALYSIS, NEW_SAMPLE_PROFILES)
+        assert _CITATION_INSTRUCTION in msg
+
+    def test_excludes_insufficient_developers(self):
+        # If only Alice is eligible, Bob should not appear
+        msg = _build_assignment_message(NEW_SAMPLE_INPUT, COMPLEXITY_ANALYSIS, [PROFILE_ALICE])
+        assert "Alice" in msg
+        assert "Bob" not in msg

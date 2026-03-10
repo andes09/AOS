@@ -57,6 +57,8 @@ class ConfidenceEngine:
         margin = z * stdev / math.sqrt(n)
 
         return ConfidenceInterval(
+            # Clamp lower to 0 — points cannot be negative. Note: this makes the
+            # interval asymmetric when clamping fires; coverage exceeds confidence_level.
             lower_bound=round(max(0.0, mean - margin), 2),
             upper_bound=round(mean + margin, 2),
             confidence_level=confidence_level,

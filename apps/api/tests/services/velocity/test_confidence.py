@@ -22,17 +22,17 @@ def test_consistent_sprints_narrow_interval():
     engine = ConfidenceEngine()
     historical = [
         sprint_of(budget("alice", 10), budget("bob", 10)),  # team = 20
-        sprint_of(budget("alice", 10), budget("bob", 10)),
-        sprint_of(budget("alice", 10), budget("bob", 10)),
-        sprint_of(budget("alice", 10), budget("bob", 10)),
-        sprint_of(budget("alice", 10), budget("bob", 10)),
+        sprint_of(budget("alice", 10), budget("bob", 11)),  # team = 21
+        sprint_of(budget("alice", 10), budget("bob", 10)),  # team = 20
+        sprint_of(budget("alice", 10), budget("bob", 11)),  # team = 21
+        sprint_of(budget("alice", 10), budget("bob", 10)),  # team = 20
     ]
     result = engine.calculate(historical, confidence_level=0.90)
-    assert result.lower_bound <= 20.0 <= result.upper_bound
+    assert result.lower_bound <= 20.4 <= result.upper_bound
     assert result.confidence_level == 0.90
-    assert result.team_total_adjusted == 20.0
-    # Perfect consistency → interval should be very narrow (near zero stdev)
-    assert result.upper_bound - result.lower_bound < 1.0
+    assert result.team_total_adjusted == 20.0  # last sprint sum
+    # Low variance → narrow interval (not vacuously zero)
+    assert result.upper_bound - result.lower_bound < 2.0
 
 
 def test_high_variance_wide_interval():

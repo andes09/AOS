@@ -27,12 +27,12 @@ class CapacityModel:
             days_off = pto_map.get(dev_id, 0.0)
             # Convert recurring meeting hours into equivalent full days lost
             meeting_days = (meeting_map.get(dev_id, 0.0) * total) / _HOURS_PER_DAY
-            available = max(0.0, total - days_off - meeting_days)
+            available = round(max(0.0, total - days_off - meeting_days), 2)
             ratio = round(available / total, 4)
             results.append(
                 DeveloperCapacity(
                     developer_id=dev_id,
-                    available_days=round(available, 2),
+                    available_days=available,
                     availability_ratio=ratio,
                 )
             )

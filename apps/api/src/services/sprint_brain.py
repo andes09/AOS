@@ -129,6 +129,8 @@ class SprintBrainOutput:
     summary: str
     warnings: list[str]
     what_if_dropped: dict[str, float]  # ticket_id → new overall confidence if dropped
+    insufficient_data_devs: list[dict] = field(default_factory=list)
+    # Each entry: {developer_id, display_name, sprints_recorded, sprints_needed}
 
 
 # ---------------------------------------------------------------------------

@@ -79,6 +79,7 @@ SAMPLE_OUTPUT = SprintBrainOutput(
     summary="Solid sprint with two high-priority items assigned to Alice.",
     warnings=["Bob has insufficient velocity data — treat his capacity as unknown."],
     what_if_dropped={"PROJ-1": 0.91, "PROJ-2": 0.78},
+    insufficient_data_devs=[],
 )
 
 

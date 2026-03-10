@@ -3,7 +3,7 @@
   --bg:             #000000;
   --bg-surface:     #080808;
   --bg-raised:      #111111;
-  --bg-card:        #0C0C0C;
+  --bg-card:        #000000;
   --text-primary:   #ECECEC;
   --text-secondary: #858585;
   --text-muted:     #414141;
@@ -65,15 +65,16 @@ button { font-family: inherit; cursor: pointer; }
   inset: 0;
   z-index: -1;
   background:
-    radial-gradient(ellipse 90% 60% at 50% -10%, rgba(84, 104, 255, 0.07) 0%, transparent 65%),
-    radial-gradient(ellipse 50% 50% at 80% 85%,  rgba(201, 170, 94, 0.05) 0%, transparent 60%),
-    radial-gradient(ellipse 40% 40% at 15% 65%,  rgba(84, 104, 255, 0.04) 0%, transparent 60%);
-  animation: bgBreath 20s ease-in-out infinite;
+    radial-gradient(ellipse 120% 55% at 50% 0%,   rgba(84, 104, 255, 0.08) 0%, transparent 60%),
+    radial-gradient(ellipse 70%  50% at 85% 40%,  rgba(201, 170, 94, 0.05) 0%, transparent 55%),
+    radial-gradient(ellipse 60%  50% at 10% 60%,  rgba(84, 104, 255, 0.05) 0%, transparent 55%),
+    radial-gradient(ellipse 80%  50% at 50% 100%, rgba(84, 104, 255, 0.04) 0%, transparent 60%);
+  animation: bgBreath 22s ease-in-out infinite;
 }
 
 @keyframes bgBreath {
   0%, 100% { opacity: 1; }
-  50%       { opacity: 0.6; }
+  50%       { opacity: 0.7; }
 }
 
 /* ─── Entrance Animations ───────────────────────────────────── */
@@ -103,7 +104,7 @@ button { font-family: inherit; cursor: pointer; }
   width: min(calc(100% - 3rem), 900px);
   border: 1px solid var(--border);
   border-radius: 100px;
-  background: rgba(7, 7, 13, 0.82);
+  background: rgba(0, 0, 0, 0.85);
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
   box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 40px rgba(0,0,0,0.5);
@@ -246,7 +247,7 @@ button { font-family: inherit; cursor: pointer; }
   font-weight: 300;
   line-height: 0.84;
   letter-spacing: -0.01em;
-  background: linear-gradient(170deg, #F5F0E8 0%, #C8BEAC 40%, #3E3A54 100%);
+  background: linear-gradient(170deg, #F5F0E8 0%, #C8BEAC 45%, #1A1A1A 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -285,7 +286,7 @@ button { font-family: inherit; cursor: pointer; }
   font-family: var(--font-ui);
   font-size: 0.85rem;
   font-weight: 600;
-  color: #07070D;
+  color: #000000;
   background: var(--gold);
   border: none;
   padding: 0.9rem 2rem;
@@ -356,7 +357,7 @@ button { font-family: inherit; cursor: pointer; }
   border-bottom: 1px solid var(--border);
   padding: 0.85rem 0;
   overflow: hidden;
-  background: var(--bg-surface);
+  background: transparent;
 }
 
 .marquee-track {
@@ -411,63 +412,6 @@ button { font-family: inherit; cursor: pointer; }
   flex-shrink: 0;
 }
 
-/* ─── Stats ─────────────────────────────────────────────────── */
-.stats-section {
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-surface);
-}
-
-.stats-inner {
-  max-width: var(--max-w);
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-}
-
-.stat {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: 3.5rem 2rem;
-  border-right: 1px solid var(--border);
-  gap: 0.5rem;
-  position: relative;
-  cursor: default;
-}
-.stat:last-child { border-right: none; }
-.stat::after {
-  content: '';
-  position: absolute;
-  bottom: 0; left: 50%; transform: translateX(-50%);
-  width: 0;
-  height: 1px;
-  background: var(--gold);
-  transition: width 0.4s ease;
-}
-.stat:hover::after { width: 40px; }
-
-.stat-value {
-  font-family: var(--font-display);
-  font-size: 3.5rem;
-  font-weight: 300;
-  color: var(--gold);
-  line-height: 1;
-}
-
-.stat-label {
-  font-size: 0.88rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  letter-spacing: 0.02em;
-}
-
-.stat-note {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  font-weight: 400;
-}
-
 /* ─── Problem Section ───────────────────────────────────────── */
 .problem-section {
   padding: 9rem 3rem;
@@ -515,7 +459,7 @@ button { font-family: inherit; cursor: pointer; }
 .loop-section {
   padding: 9rem 3rem;
   border-bottom: 1px solid var(--border);
-  background: var(--bg-surface);
+  background: transparent;
 }
 
 .loop-track {
@@ -751,7 +695,7 @@ button { font-family: inherit; cursor: pointer; }
 /* ─── Integrations ──────────────────────────────────────────── */
 .integrations-section {
   border-bottom: 1px solid var(--border);
-  background: var(--bg-surface);
+  background: transparent;
 }
 
 .integrations-inner {
@@ -938,7 +882,7 @@ button { font-family: inherit; cursor: pointer; }
   font-size: 0.88rem;
   font-weight: 600;
   letter-spacing: 0.01em;
-  color: #07070D;
+  color: #000000;
   background: var(--gold);
   border: none;
   padding: 1rem 2rem;
@@ -967,8 +911,8 @@ button { font-family: inherit; cursor: pointer; }
   display: block;
   width: 17px;
   height: 17px;
-  border: 2px solid rgba(7, 7, 13, 0.2);
-  border-top-color: #07070D;
+  border: 2px solid rgba(0, 0, 0, 0.2);
+  border-top-color: #000000;
   border-radius: 50%;
   animation: spin 0.65s linear infinite;
 }
@@ -1053,9 +997,6 @@ button { font-family: inherit; cursor: pointer; }
 }
 
 @media (max-width: 900px) {
-  .stats-inner { grid-template-columns: repeat(2, 1fr); }
-  .stat:nth-child(2) { border-right: none; }
-  .stat:nth-child(3) { border-top: 1px solid var(--border); }
   .modules-grid { grid-template-columns: 1fr; }
   .module-card:last-child { grid-column: auto; }
   .loop-track { flex-direction: column; }
@@ -1080,9 +1021,6 @@ button { font-family: inherit; cursor: pointer; }
 
   .hero { padding: 7rem 1.5rem 4rem; }
   .hero-title { line-height: 0.86; }
-
-  .stats-inner { grid-template-columns: repeat(2, 1fr); }
-  .stat { padding: 2.5rem 1.25rem; }
 
   .problem-section { padding: 6rem 1.5rem; }
   .problem-callout { padding: 1.25rem 1.5rem; }

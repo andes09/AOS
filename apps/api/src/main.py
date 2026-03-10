@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from src.config import settings
 from src.auth import get_current_user_id
+from src.routers import sprint_brain as sprint_brain_router
 
 app = FastAPI(
     title="AgileOS API",
@@ -16,6 +17,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+app.include_router(sprint_brain_router.router)
 
 
 @app.get("/health")

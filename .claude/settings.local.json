@@ -13,7 +13,9 @@
       "Bash(python:*)",
       "Bash(py:*)",
       "Bash(npm run:*)",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "Skill(commit-commands:commit-push-pr)",
+      "Skill(claude-md-management:revise-claude-md)"
     ]
   }
 }

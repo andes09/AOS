@@ -1,0 +1,15 @@
+{
+  "name": "agile-os",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "dev:web": "pnpm --filter web dev",
+    "dev:landing": "pnpm --filter landing dev",
+    "build:web": "pnpm --filter web build",
+    "build:landing": "pnpm --filter landing build"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

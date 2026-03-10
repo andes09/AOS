@@ -76,14 +76,15 @@ function App() {
     }
     setStatus('loading')
     try {
-      const { error } = await supabase.functions.invoke('waitlist-signup', {
-        body: { email },
-      })
+const { error } = await supabase
+        .from('waitlist')
+        .insert({ email: email.toLowerCase().trim() })
       if (error) throw error
       setStatus('success')
     } catch (err) {
       const msg = err?.message ?? ''
-      if (msg.includes('duplicate') || msg.includes('already')) {
+      const code = err?.code ?? ''
+      if (msg.includes('duplicate') || msg.includes('already') || code === '23505') {
         setStatus('success')
       } else {
         setErrorMsg('Something went wrong. Please try again.')

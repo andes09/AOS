@@ -48,13 +48,6 @@ const MODULES = [
   },
 ]
 
-const LOOP_STEPS = [
-  { step: '01', event: 'Ticket Created',   module: 'Scope Cop',                    desc: 'Quality enforced at the source' },
-  { step: '02', event: 'Sprint Planning',  module: 'Sprint Brain + Dependency Radar', desc: 'Plans built on evidence, not optimism' },
-  { step: '03', event: 'Sprint Execution', module: 'Velocity Mirror',               desc: "Failures caught before they're inevitable" },
-  { step: '04', event: 'Sprint Close',     module: 'Retrospective AI',              desc: 'Learnings captured and tracked automatically' },
-  { step: '05', event: 'Next Sprint',      module: 'System gets smarter',           desc: 'Historical data compounds into intelligence' },
-]
 
 const ArrowIcon = () => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -188,38 +181,6 @@ const { error } = await supabase
           </div>
         </section>
 
-        {/* The Loop */}
-        <section className="loop-section" aria-labelledby="loop-heading">
-          <div className="section-label" id="loop-heading">
-            <span className="label-line" aria-hidden="true" />
-            <span>The closed loop</span>
-            <span className="label-line" aria-hidden="true" />
-          </div>
-          <div className="loop-track">
-            {LOOP_STEPS.map((s, i) => (
-              <div key={s.step} className="loop-step">
-                <div className="loop-step-inner">
-                  <span className="loop-num">{s.step}</span>
-                  <div className="loop-content">
-                    <span className="loop-event">{s.event}</span>
-                    <span className="loop-module">{s.module}</span>
-                    <span className="loop-desc">{s.desc}</span>
-                  </div>
-                </div>
-                {i < LOOP_STEPS.length - 1 && (
-                  <span className="loop-arrow" aria-hidden="true">
-                    <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
-                      <path d="M4 10h12M12 5l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  </span>
-                )}
-                {i === LOOP_STEPS.length - 1 && (
-                  <span className="loop-cycle" aria-hidden="true">↺</span>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
 
         {/* Modules */}
         <section className="modules-section" id="modules" aria-labelledby="modules-heading">

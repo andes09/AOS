@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from src.services.sprint_brain import (
     SprintBrainInput,
     SprintBrainOutput,
+    _apply_sprint_gate,
     _build_user_message,
     generate_sprint_plan,
     simulate_what_if,
@@ -296,3 +297,83 @@ async def test_what_if_endpoint_requires_auth():
             json={"team_id": "team-abc", "dropped_ticket_ids": []},
         )
     assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# _apply_sprint_gate unit tests  (Track F profile shape)
+# ---------------------------------------------------------------------------
+
+# New profile shape used in Track F tests
+PROFILE_ALICE = {
+    "developer_id": "dev-1",
+    "display_name": "Alice",
+    "sprint_count": 5,
+    "velocity_breakdown": [
+        {"ticket_type": "bug", "domain": "backend", "avg_pts": 8.2, "sample_count": 4},
+        {"ticket_type": "story", "domain": "frontend", "avg_pts": 5.0, "sample_count": 2},
+    ],
+    "safe_capacity_pts": 24.0,
+}
+
+PROFILE_BOB = {
+    "developer_id": "dev-2",
+    "display_name": "Bob",
+    "sprint_count": 1,
+    "velocity_breakdown": [
+        {"ticket_type": "story", "domain": "backend", "avg_pts": 3.0, "sample_count": 1},
+    ],
+    "safe_capacity_pts": 8.0,
+}
+
+PROFILE_CHARLIE = {
+    "developer_id": "dev-3",
+    "display_name": "Charlie",
+    "sprint_count": 3,
+    "velocity_breakdown": [
+        {"ticket_type": "task", "domain": "infra", "avg_pts": 6.0, "sample_count": 3},
+    ],
+    "safe_capacity_pts": 18.0,
+}
+
+
+class TestApplySprintGate:
+    def test_eligible_developer_passes(self):
+        eligible, insufficient = _apply_sprint_gate([PROFILE_ALICE])
+        assert len(eligible) == 1
+        assert len(insufficient) == 0
+
+    def test_insufficient_developer_fails(self):
+        eligible, insufficient = _apply_sprint_gate([PROFILE_BOB])
+        assert len(eligible) == 0
+        assert len(insufficient) == 1
+
+    def test_exactly_three_sprints_passes(self):
+        eligible, insufficient = _apply_sprint_gate([PROFILE_CHARLIE])
+        assert len(eligible) == 1
+        assert len(insufficient) == 0
+
+    def test_mixed_profiles_split_correctly(self):
+        eligible, insufficient = _apply_sprint_gate([PROFILE_ALICE, PROFILE_BOB, PROFILE_CHARLIE])
+        assert len(eligible) == 2
+        assert len(insufficient) == 1
+        assert insufficient[0]["developer_id"] == "dev-2"
+
+    def test_insufficient_entry_has_required_fields(self):
+        _, insufficient = _apply_sprint_gate([PROFILE_BOB])
+        entry = insufficient[0]
+        assert entry["developer_id"] == "dev-2"
+        assert entry["display_name"] == "Bob"
+        assert entry["sprints_recorded"] == 1
+        assert entry["sprints_needed"] == 2  # 3 - 1
+
+    def test_missing_sprint_count_treated_as_zero(self):
+        profile_no_count = {"developer_id": "dev-x", "display_name": "X"}
+        eligible, insufficient = _apply_sprint_gate([profile_no_count])
+        assert len(eligible) == 0
+        assert insufficient[0]["sprints_recorded"] == 0
+        assert insufficient[0]["sprints_needed"] == 3
+
+    def test_empty_profiles_returns_empty_buckets(self):
+        eligible, insufficient = _apply_sprint_gate([])
+        assert eligible == []
+        assert insufficient == []

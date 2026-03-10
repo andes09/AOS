@@ -137,6 +137,36 @@ class SprintBrainOutput:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+_MIN_SPRINTS = 3
+
+
+def _apply_sprint_gate(
+    developer_profiles: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """
+    Split developer profiles into eligible and insufficient-data buckets.
+
+    A developer is eligible if their top-level sprint_count >= _MIN_SPRINTS.
+    Returns (eligible_profiles, insufficient_data_entries).
+    """
+    eligible: list[dict] = []
+    insufficient: list[dict] = []
+
+    for profile in developer_profiles:
+        recorded = int(profile.get("sprint_count", 0))
+        if recorded >= _MIN_SPRINTS:
+            eligible.append(profile)
+        else:
+            needed = max(0, _MIN_SPRINTS - recorded)
+            insufficient.append({
+                "developer_id": profile.get("developer_id", "unknown"),
+                "display_name": profile.get("display_name", "Unknown"),
+                "sprints_recorded": recorded,
+                "sprints_needed": needed,
+            })
+
+    return eligible, insufficient
+
 
 def _build_user_message(inp: SprintBrainInput) -> str:
     lines: list[str] = [

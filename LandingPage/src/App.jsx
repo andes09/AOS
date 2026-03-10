@@ -10,13 +10,6 @@ const MARQUEE_ITEMS = [
   'RETROSPECTIVE AI', '·', 'JIRA INTEGRATION', '·', 'BETA NOW OPEN', '·',
 ]
 
-const STATS = [
-  { value: '50%+', label: 'Sprint spillover reduced', note: 'within 3 months' },
-  { value: '60%',  label: 'Planning time saved',      note: 'vs manual estimation' },
-  { value: '30%',  label: 'Fewer disruptions',         note: 'dependency blindness eliminated' },
-  { value: '85%+', label: 'Estimation accuracy',       note: 'within 6 months' },
-]
-
 const MODULES = [
   {
     num: '01',
@@ -165,19 +158,6 @@ function App() {
             ))}
           </div>
         </div>
-
-        {/* Stats */}
-        <section className="stats-section" aria-label="Key metrics">
-          <div className="stats-inner">
-            {STATS.map((s) => (
-              <div key={s.value} className="stat">
-                <span className="stat-value">{s.value}</span>
-                <span className="stat-label">{s.label}</span>
-                <span className="stat-note">{s.note}</span>
-              </div>
-            ))}
-          </div>
-        </section>
 
         {/* Problem */}
         <section className="problem-section">

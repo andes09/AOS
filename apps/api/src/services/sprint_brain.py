@@ -153,7 +153,11 @@ def _apply_sprint_gate(
     insufficient: list[dict] = []
 
     for profile in developer_profiles:
-        recorded = int(profile.get("sprint_count", 0))
+        raw = profile.get("sprint_count") or 0
+        try:
+            recorded = int(raw)
+        except (TypeError, ValueError):
+            recorded = 0
         if recorded >= _MIN_SPRINTS:
             eligible.append(profile)
         else:

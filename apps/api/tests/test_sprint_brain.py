@@ -158,6 +158,7 @@ def _make_mock_response(plan_input: dict):
 
 @pytest.mark.asyncio
 async def test_generate_sprint_plan_returns_output():
+    complexity_response = _make_complexity_response(SAMPLE_COMPLEXITY)
     plan_dict = {
         "assignments": SAMPLE_OUTPUT.assignments,
         "confidence_score": SAMPLE_OUTPUT.confidence_score,
@@ -165,13 +166,13 @@ async def test_generate_sprint_plan_returns_output():
         "warnings": SAMPLE_OUTPUT.warnings,
         "what_if_dropped": SAMPLE_OUTPUT.what_if_dropped,
     }
-    mock_response = _make_mock_response(plan_dict)
+    plan_response = _make_mock_response(plan_dict)
 
     with patch("src.services.sprint_brain.anthropic.AsyncAnthropic") as MockClient:
         instance = MockClient.return_value
-        instance.messages.create = AsyncMock(return_value=mock_response)
+        instance.messages.create = AsyncMock(side_effect=[complexity_response, plan_response])
 
-        result = await generate_sprint_plan(SAMPLE_INPUT, "sk-ant-test")
+        result = await generate_sprint_plan(NEW_SAMPLE_INPUT, "sk-ant-test")
 
     assert isinstance(result, SprintBrainOutput)
     assert result.confidence_score == pytest.approx(0.82)
@@ -193,7 +194,7 @@ async def test_generate_sprint_plan_raises_on_auth_error():
             )
         )
         with pytest.raises(ValueError, match="Invalid Anthropic API key"):
-            await generate_sprint_plan(SAMPLE_INPUT, "bad-key")
+            await generate_sprint_plan(NEW_SAMPLE_INPUT, "bad-key")
 
 
 @pytest.mark.asyncio
@@ -210,24 +211,23 @@ async def test_generate_sprint_plan_raises_on_rate_limit():
             )
         )
         with pytest.raises(RuntimeError, match="rate limit"):
-            await generate_sprint_plan(SAMPLE_INPUT, "sk-ant-test")
+            await generate_sprint_plan(NEW_SAMPLE_INPUT, "sk-ant-test")
 
 
 @pytest.mark.asyncio
 async def test_generate_sprint_plan_raises_when_no_tool_call():
+    complexity_response = _make_complexity_response(SAMPLE_COMPLEXITY)
     text_block = MagicMock()
     text_block.type = "text"
-    text_block.text = "Here is a plan..."
-
-    mock_response = MagicMock()
-    mock_response.content = [text_block]
+    bad_response = MagicMock()
+    bad_response.content = [text_block]
 
     with patch("src.services.sprint_brain.anthropic.AsyncAnthropic") as MockClient:
         instance = MockClient.return_value
-        instance.messages.create = AsyncMock(return_value=mock_response)
+        instance.messages.create = AsyncMock(side_effect=[complexity_response, bad_response])
 
         with pytest.raises(RuntimeError, match="did not return a sprint plan"):
-            await generate_sprint_plan(SAMPLE_INPUT, "sk-ant-test")
+            await generate_sprint_plan(NEW_SAMPLE_INPUT, "sk-ant-test")
 
 
 # ---------------------------------------------------------------------------
@@ -535,3 +535,111 @@ class TestBuildAssignmentMessage:
         msg = _build_assignment_message(NEW_SAMPLE_INPUT, COMPLEXITY_ANALYSIS, [PROFILE_ALICE])
         assert "Alice" in msg
         assert "Bob" not in msg
+
+
+# ---------------------------------------------------------------------------
+# Two-step generate_sprint_plan tests
+# ---------------------------------------------------------------------------
+
+
+def _make_complexity_response(analyses: list[dict]):
+    """Build a mock response for the complexity analysis Claude call."""
+    tool_block = MagicMock()
+    tool_block.type = "tool_use"
+    tool_block.name = "analyse_tickets"
+    tool_block.input = {"ticket_analyses": analyses}
+    response = MagicMock()
+    response.content = [tool_block]
+    return response
+
+
+SAMPLE_COMPLEXITY = [
+    {"ticket_id": "PROJ-1", "effort": "low", "required_skills": ["frontend"], "complexity_notes": "Simple.", "estimated_days": 1.0},
+    {"ticket_id": "PROJ-2", "effort": "medium", "required_skills": ["backend"], "complexity_notes": "Auth.", "estimated_days": 2.0},
+    {"ticket_id": "PROJ-3", "effort": "high", "required_skills": ["backend", "infra"], "complexity_notes": "Perf.", "estimated_days": 4.0},
+]
+
+PLAN_DICT = {
+    "assignments": [
+        {"ticket_id": "PROJ-1", "developer_id": "dev-1", "reasoning": "Based on 4 backend/bug sprints averaging 8.2 pts.", "confidence": 0.88, "story_points": 3},
+    ],
+    "confidence_score": 0.85,
+    "summary": "One ticket assigned to Alice based on her backend history.",
+    "warnings": [],
+    "what_if_dropped": {"PROJ-1": 1.0},
+}
+
+
+@pytest.mark.asyncio
+async def test_generate_sprint_plan_makes_two_claude_calls():
+    """generate_sprint_plan must call the Anthropic API exactly twice."""
+    complexity_response = _make_complexity_response(SAMPLE_COMPLEXITY)
+    plan_response = _make_mock_response(PLAN_DICT)
+
+    with patch("src.services.sprint_brain.anthropic.AsyncAnthropic") as MockClient:
+        instance = MockClient.return_value
+        instance.messages.create = AsyncMock(side_effect=[complexity_response, plan_response])
+
+        result = await generate_sprint_plan(NEW_SAMPLE_INPUT, "sk-ant-test")
+
+    assert instance.messages.create.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_sprint_plan_attaches_insufficient_data_devs():
+    """Developers who fail the gate appear in insufficient_data_devs."""
+    mixed_input = SprintBrainInput(
+        team_id="team-abc",
+        candidate_tickets=SAMPLE_TICKETS,
+        developer_profiles=[PROFILE_ALICE, PROFILE_BOB],  # Bob fails gate
+        sprint_length_days=14,
+        sprint_start_date="2026-03-17",
+    )
+    complexity_response = _make_complexity_response(SAMPLE_COMPLEXITY)
+    plan_response = _make_mock_response(PLAN_DICT)
+
+    with patch("src.services.sprint_brain.anthropic.AsyncAnthropic") as MockClient:
+        instance = MockClient.return_value
+        instance.messages.create = AsyncMock(side_effect=[complexity_response, plan_response])
+
+        result = await generate_sprint_plan(mixed_input, "sk-ant-test")
+
+    assert len(result.insufficient_data_devs) == 1
+    assert result.insufficient_data_devs[0]["developer_id"] == "dev-2"
+
+
+@pytest.mark.asyncio
+async def test_generate_sprint_plan_raises_when_all_devs_insufficient():
+    """If all developers fail the gate, raise RuntimeError before calling Claude."""
+    all_insufficient_input = SprintBrainInput(
+        team_id="team-abc",
+        candidate_tickets=SAMPLE_TICKETS,
+        developer_profiles=[PROFILE_BOB],  # only Bob — fails gate
+        sprint_length_days=14,
+        sprint_start_date="2026-03-17",
+    )
+
+    with patch("src.services.sprint_brain.anthropic.AsyncAnthropic") as MockClient:
+        instance = MockClient.return_value
+        instance.messages.create = AsyncMock()
+
+        with pytest.raises(RuntimeError, match="no eligible developers"):
+            await generate_sprint_plan(all_insufficient_input, "sk-ant-test")
+
+    instance.messages.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_sprint_plan_second_call_uses_assignment_tool():
+    """The second Claude call must use create_sprint_plan tool, not analyse_tickets."""
+    complexity_response = _make_complexity_response(SAMPLE_COMPLEXITY)
+    plan_response = _make_mock_response(PLAN_DICT)
+
+    with patch("src.services.sprint_brain.anthropic.AsyncAnthropic") as MockClient:
+        instance = MockClient.return_value
+        instance.messages.create = AsyncMock(side_effect=[complexity_response, plan_response])
+
+        await generate_sprint_plan(NEW_SAMPLE_INPUT, "sk-ant-test")
+
+    second_call_kwargs = instance.messages.create.call_args_list[1].kwargs
+    assert second_call_kwargs["tool_choice"] == {"type": "tool", "name": "create_sprint_plan"}

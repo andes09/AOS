@@ -62,3 +62,18 @@ async def test_get_current_org_id_raises_401_on_bad_token():
         with pytest.raises(HTTPException) as exc_info:
             await get_current_org_id(credentials)
     assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_id_raises_401_when_sub_missing():
+    from src.auth import get_current_user_id
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token")
+    with patch("src.auth.httpx.AsyncClient") as MockClient:
+        instance = MockClient.return_value.__aenter__.return_value
+        instance.get = AsyncMock(return_value=MagicMock(
+            status_code=200,
+            json=lambda: {},  # no sub claim
+        ))
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user_id(credentials)
+    assert exc_info.value.status_code == 401

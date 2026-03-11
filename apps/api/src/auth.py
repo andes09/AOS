@@ -36,7 +36,13 @@ async def get_current_user_id(
 ) -> str:
     """Verify Clerk JWT and return the user ID (sub claim)."""
     data = await _verify_token(credentials)
-    return data["sub"]
+    user_id = data.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+        )
+    return user_id
 
 
 async def get_current_org_id(

@@ -6,10 +6,8 @@ import httpx
 security = HTTPBearer()
 
 
-async def get_current_user_id(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-) -> str:
-    """Verify Clerk JWT and return the user ID (sub claim)."""
+async def _verify_token(credentials: HTTPAuthorizationCredentials) -> dict:
+    """Verify Clerk JWT and return the full claims dict."""
     token = credentials.credentials
     try:
         async with httpx.AsyncClient() as client:
@@ -23,8 +21,7 @@ async def get_current_user_id(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired token",
             )
-        data = response.json()
-        return data["sub"]
+        return response.json()
     except HTTPException:
         raise
     except Exception:
@@ -32,3 +29,25 @@ async def get_current_user_id(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
         )
+
+
+async def get_current_user_id(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> str:
+    """Verify Clerk JWT and return the user ID (sub claim)."""
+    data = await _verify_token(credentials)
+    return data["sub"]
+
+
+async def get_current_org_id(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> str:
+    """Verify Clerk JWT and return the Clerk organisation ID (org_id claim)."""
+    data = await _verify_token(credentials)
+    org_id = data.get("org_id")
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No organisation context — sign in with an organisation account.",
+        )
+    return org_id

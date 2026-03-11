@@ -188,7 +188,6 @@ async def get_team_velocity(
     for row in profile_rows:
         rows_by_dev[row.developer_id].append(row)
 
-    dev_map = {d.id: d for d in developers}
     profiles = []
     for dev in developers:
         rows = rows_by_dev.get(dev.id, [])

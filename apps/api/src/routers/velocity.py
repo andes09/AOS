@@ -28,7 +28,7 @@ from src.models.sprint import Sprint, SprintStatus
 from src.models.team import Team
 from src.models.velocity import DeveloperVelocityProfile
 from src.services.velocity import CapacityModel
-from src.services.velocity.schemas import MeetingOverhead, PtoEntry, SprintMeta
+from src.services.velocity.schemas import SprintMeta
 
 router = APIRouter(prefix="/api/teams", tags=["velocity"])
 
@@ -166,7 +166,7 @@ async def get_team_velocity(
     developers = (
         await db.scalars(
             select(Developer).where(
-                Developer.team_id == team.id, Developer.is_active == True
+                Developer.team_id == team.id, Developer.is_active.is_(True)
             )
         )
     ).all()
@@ -189,11 +189,22 @@ async def get_team_velocity(
         rows_by_dev[row.developer_id].append(row)
 
     dev_map = {d.id: d for d in developers}
-    profiles = [
-        _build_profile_response(dev_map[dev_id], rows)
-        for dev_id, rows in rows_by_dev.items()
-        if dev_id in dev_map
-    ]
+    profiles = []
+    for dev in developers:
+        rows = rows_by_dev.get(dev.id, [])
+        if rows:
+            profiles.append(_build_profile_response(dev, rows))
+        else:
+            profiles.append(
+                VelocityProfileResponse(
+                    developer_id=str(dev.id),
+                    name=dev.name,
+                    mean_completion_days={},
+                    confidence_score=None,
+                    sprint_count=0,
+                    is_sufficient_data=False,
+                )
+            )
 
     return TeamVelocityResponse(team_id=str(team.id), profiles=profiles)
 
@@ -209,7 +220,7 @@ async def get_developer_velocity(
         select(Developer).where(
             Developer.id == developer_id,
             Developer.team_id == team.id,
-            Developer.is_active == True,
+            Developer.is_active.is_(True),
         )
     )
     if not developer:
@@ -246,7 +257,7 @@ async def get_team_capacity(
     developers = (
         await db.scalars(
             select(Developer).where(
-                Developer.team_id == team.id, Developer.is_active == True
+                Developer.team_id == team.id, Developer.is_active.is_(True)
             )
         )
     ).all()
@@ -265,7 +276,7 @@ async def get_team_capacity(
         .order_by(Sprint.start_date.desc())
     )
     total_days = (
-        (active_sprint.end_date - active_sprint.start_date).days
+        (active_sprint.end_date - active_sprint.start_date).days  # Raw calendar days — does not exclude weekends or holidays (MVP)
         if active_sprint and active_sprint.start_date and active_sprint.end_date
         else team.sprint_length_days
     )

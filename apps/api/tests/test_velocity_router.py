@@ -58,32 +58,6 @@ def _make_profile(dev_id, ticket_type, sprint_count, mean_days, std_dev):
     return p
 
 
-def _mock_db_scalars(session, return_sequence):
-    """
-    Configure session.scalars to return successive values.
-    Each value in return_sequence is returned by .all() or scalar() in order.
-    """
-    results = []
-    for val in return_sequence:
-        mock_result = MagicMock()
-        if isinstance(val, list):
-            mock_result.all.return_value = val
-        else:
-            mock_result = val  # used for scalar()
-        results.append(mock_result)
-
-    call_count = 0
-
-    async def fake_scalars(query):
-        nonlocal call_count
-        result = results[call_count]
-        call_count += 1
-        return result
-
-    session.scalars = fake_scalars
-    return session
-
-
 # ---------------------------------------------------------------------------
 # GET /api/teams/{team_id}/velocity
 # ---------------------------------------------------------------------------
@@ -201,6 +175,68 @@ async def test_team_velocity_returns_404_when_team_not_in_org():
         app.dependency_overrides.clear()
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_team_velocity_includes_developer_with_no_profile_rows():
+    from src.main import app
+
+    org = _make_org()
+    team = _make_team()
+    dev_a = _make_developer(DEV_A_ID, "Alice")  # has profile rows
+    dev_b = _make_developer(DEV_B_ID, "Bob")    # has NO profile rows
+
+    profile_a = _make_profile(DEV_A_ID, "story", sprint_count=5, mean_days=3.0, std_dev=0.5)
+
+    session = MagicMock()
+    call_idx = 0
+    scalar_results = [org, team]
+    scalars_results = [[dev_a, dev_b], [profile_a]]  # only Alice has a profile row
+
+    async def fake_scalar(query):
+        nonlocal call_idx
+        val = scalar_results[call_idx]
+        call_idx += 1
+        return val
+
+    si = 0
+
+    async def fake_scalars(query):
+        nonlocal si
+        mock_result = MagicMock()
+        mock_result.all.return_value = scalars_results[si]
+        si += 1
+        return mock_result
+
+    session.scalar = fake_scalar
+    session.scalars = fake_scalars
+
+    async def override_db():
+        yield session
+
+    async def override_org():
+        return ORG_CLERK_ID
+
+    from src.auth import get_current_org_id
+    from src.database import get_db
+    app.dependency_overrides[get_current_org_id] = override_org
+    app.dependency_overrides[get_db] = override_db
+
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(f"/api/teams/{TEAM_ID}/velocity")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["profiles"]) == 2
+
+    bob = next(p for p in data["profiles"] if p["name"] == "Bob")
+    assert bob["sprint_count"] == 0
+    assert bob["is_sufficient_data"] is False
+    assert bob["confidence_score"] is None
+    assert bob["mean_completion_days"] == {}
 
 
 # ---------------------------------------------------------------------------

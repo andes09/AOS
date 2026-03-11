@@ -506,7 +506,7 @@ class TestBuildAssignmentMessage:
 
     def test_includes_complexity_effort(self):
         msg = _build_assignment_message(NEW_SAMPLE_INPUT, COMPLEXITY_ANALYSIS, NEW_SAMPLE_PROFILES)
-        assert "low" in msg or "medium" in msg
+        assert "Effort    : low" in msg or "Effort    : medium" in msg
 
     def test_includes_developer_names(self):
         msg = _build_assignment_message(NEW_SAMPLE_INPUT, COMPLEXITY_ANALYSIS, NEW_SAMPLE_PROFILES)
@@ -519,7 +519,7 @@ class TestBuildAssignmentMessage:
 
     def test_includes_safe_capacity(self):
         msg = _build_assignment_message(NEW_SAMPLE_INPUT, COMPLEXITY_ANALYSIS, NEW_SAMPLE_PROFILES)
-        assert "24" in msg    # Alice's safe_capacity_pts
+        assert "24.0 pts" in msg    # Alice's safe_capacity_pts
 
     def test_includes_pto(self):
         msg = _build_assignment_message(NEW_SAMPLE_INPUT, COMPLEXITY_ANALYSIS, NEW_SAMPLE_PROFILES)

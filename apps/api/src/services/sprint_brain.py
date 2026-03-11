@@ -390,7 +390,6 @@ def _build_assignment_message(
         f"Sprint length: {inp.sprint_length_days} days",
         "",
         "## Developer Profiles (eligible assignees only)",
-        _CITATION_INSTRUCTION,
         "",
     ]
 
@@ -439,6 +438,8 @@ def _build_assignment_message(
         lines.append("")
 
     lines += [
+        _CITATION_INSTRUCTION,
+        "",
         "Please create the optimal sprint plan. For each ticket, assign it to the "
         "best-fit developer and include a citation of the specific historical data "
         "supporting your decision. Populate what_if_dropped for each assigned ticket.",

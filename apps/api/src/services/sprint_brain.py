@@ -243,60 +243,6 @@ def _apply_sprint_gate(
     return eligible, insufficient
 
 
-def _build_user_message(inp: SprintBrainInput) -> str:
-    lines: list[str] = [
-        "## Sprint Planning Request",
-        f"Team ID: {inp.team_id}",
-        f"Sprint start: {inp.sprint_start_date}",
-        f"Sprint length: {inp.sprint_length_days} days",
-        "",
-        "## Developer Profiles",
-    ]
-
-    for profile in inp.developer_profiles:
-        dev_id = profile.get("developer_id", "unknown")
-        display = profile.get("display_name", dev_id)
-        velocity = profile.get("velocity", {})
-        pto = inp.pto_overrides.get(dev_id, 0.0)
-
-        lines.append(f"\n### {display}  (id: {dev_id})")
-        if velocity.get("has_sufficient_data"):
-            lines.append(f"  Mean velocity : {velocity.get('mean_velocity')} pts/sprint")
-            lines.append(f"  Std deviation : {velocity.get('std_dev')} pts")
-            lines.append(f"  Safe capacity : {velocity.get('confidence_capacity')} pts  "
-                         f"(based on {velocity.get('sprint_count')} sprints)")
-        else:
-            needed = velocity.get("sprints_needed", "unknown")
-            lines.append(f"  Velocity data : insufficient ({needed} more sprints needed)")
-        if pto > 0:
-            lines.append(f"  PTO this sprint: {pto} day(s)")
-
-    lines += ["", "## Candidate Tickets  (ordered by priority)"]
-    for i, ticket in enumerate(inp.candidate_tickets, 1):
-        tid = ticket.get("id") or ticket.get("ticket_id") or f"ticket-{i}"
-        title = ticket.get("summary") or ticket.get("title") or "(no title)"
-        points = ticket.get("story_points") or ticket.get("points") or "?"
-        priority = ticket.get("priority", "medium")
-        labels = ticket.get("labels") or []
-
-        lines.append(f"\n{i}. [{tid}] {title}")
-        lines.append(f"   Points: {points} | Priority: {priority}")
-        if labels:
-            lines.append(f"   Labels: {', '.join(labels)}")
-        if ticket.get("description"):
-            desc = str(ticket["description"])[:200]
-            lines.append(f"   Description: {desc}")
-
-    lines += [
-        "",
-        "Please create the optimal sprint plan. For each ticket you include, "
-        "assign it to the best-fit developer. Also populate what_if_dropped: "
-        "for each assigned ticket, what would the overall confidence be if "
-        "we removed only that ticket?",
-    ]
-    return "\n".join(lines)
-
-
 def _extract_plan(response: anthropic.types.Message) -> SprintBrainOutput:
     tool_block = next(
         (

@@ -12,7 +12,6 @@ from src.services.sprint_brain import (
     SprintBrainInput,
     SprintBrainOutput,
     _apply_sprint_gate,
-    _build_user_message,
     _build_assignment_message,
     _build_complexity_message,
     _extract_complexity,
@@ -98,45 +97,6 @@ def test_sprint_brain_output_insufficient_data_devs_defaults_to_empty():
         what_if_dropped={},
     )
     assert output.insufficient_data_devs == []
-
-
-# ---------------------------------------------------------------------------
-# _build_user_message unit tests
-# ---------------------------------------------------------------------------
-
-
-def test_build_user_message_includes_team_id():
-    msg = _build_user_message(SAMPLE_INPUT)
-    assert "team-abc" in msg
-
-
-def test_build_user_message_includes_tickets():
-    msg = _build_user_message(SAMPLE_INPUT)
-    assert "PROJ-1" in msg
-    assert "PROJ-2" in msg
-    assert "Build login page" in msg
-
-
-def test_build_user_message_includes_developer_profiles():
-    msg = _build_user_message(SAMPLE_INPUT)
-    assert "Alice" in msg
-    assert "Bob" in msg
-
-
-def test_build_user_message_shows_pto():
-    msg = _build_user_message(SAMPLE_INPUT)
-    assert "PTO" in msg
-    assert "1.0" in msg
-
-
-def test_build_user_message_marks_insufficient_data():
-    msg = _build_user_message(SAMPLE_INPUT)
-    assert "insufficient" in msg.lower()
-
-
-def test_build_user_message_shows_velocity_stats():
-    msg = _build_user_message(SAMPLE_INPUT)
-    assert "9.25" in msg  # confidence_capacity for Alice
 
 
 # ---------------------------------------------------------------------------

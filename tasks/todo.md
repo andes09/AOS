@@ -26,3 +26,9 @@
 > (`Sprint`, `Ticket`, `Developer`, `PtoEntry`) before Track D can be wired to the DB.
 > Track D will be built with Pydantic input schemas as stand-ins so logic is fully decoupled
 > and can be integrated once models land.
+
+> **Future: Clerk Webhook Handler**
+> `clerk_webhook_secret` is currently optional and unused. If user data needs to be synced
+> to the local DB on signup/update (e.g. creating a `User` record on `user.created` event),
+> a webhook handler must be built at `POST /api/webhooks/clerk` using svix signature
+> verification. Required events: `user.created`, `user.updated`, `user.deleted`.

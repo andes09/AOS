@@ -1,8 +1,14 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Look for .env in the api directory, then fall back to repo root
+_api_dir = Path(__file__).parent.parent
+_env_files = [_api_dir / ".env", _api_dir.parent.parent / ".env"]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=[str(p) for p in _env_files], env_file_encoding="utf-8")
 
     database_url: str
     database_url_sync: str
@@ -10,7 +16,7 @@ class Settings(BaseSettings):
 
     clerk_secret_key: str
     clerk_publishable_key: str
-    clerk_webhook_secret: str
+    clerk_webhook_secret: str = ""
 
     jira_client_id: str = ""
     jira_client_secret: str = ""

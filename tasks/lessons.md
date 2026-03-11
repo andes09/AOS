@@ -17,3 +17,11 @@
 
 **Rule:** Before touching code, ask: "Does this change actually improve the user experience or just mask the same error differently?" If the answer is no, don't make the change.
 
+---
+
+## Warn about unmet track dependencies before proceeding to the next phase
+
+**Pattern:** Tracks were built out of dependency order (e.g. UI and service logic built before DB models and route wiring), resulting in a frontend that calls endpoints that don't exist.
+
+**Rule:** Before starting any new track, explicitly verify all prerequisite tracks are fully complete (not just partially done). If a dependency is unmet, stop and call it out to the user before proceeding. The plan's dependency order exists for a reason — don't skip it.
+

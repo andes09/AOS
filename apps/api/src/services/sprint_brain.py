@@ -494,6 +494,8 @@ async def generate_sprint_plan(
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": assignment_message}],
             tools=[_SPRINT_PLAN_TOOL],
+            # Note: thinking={"type": "adaptive"} is intentionally omitted here.
+            # Forced tool_choice is incompatible with extended thinking in the Anthropic API.
             tool_choice={"type": "tool", "name": "create_sprint_plan"},
         )
 

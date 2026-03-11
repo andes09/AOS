@@ -156,6 +156,34 @@ def _make_mock_response(plan_input: dict):
     return response
 
 
+def _make_complexity_response(analyses: list[dict]):
+    """Build a mock response for the complexity analysis Claude call."""
+    tool_block = MagicMock()
+    tool_block.type = "tool_use"
+    tool_block.name = "analyse_tickets"
+    tool_block.input = {"ticket_analyses": analyses}
+    response = MagicMock()
+    response.content = [tool_block]
+    return response
+
+
+SAMPLE_COMPLEXITY = [
+    {"ticket_id": "PROJ-1", "effort": "low", "required_skills": ["frontend"], "complexity_notes": "Simple.", "estimated_days": 1.0},
+    {"ticket_id": "PROJ-2", "effort": "medium", "required_skills": ["backend"], "complexity_notes": "Auth.", "estimated_days": 2.0},
+    {"ticket_id": "PROJ-3", "effort": "high", "required_skills": ["backend", "infra"], "complexity_notes": "Perf.", "estimated_days": 4.0},
+]
+
+PLAN_DICT = {
+    "assignments": [
+        {"ticket_id": "PROJ-1", "developer_id": "dev-1", "reasoning": "Based on 4 backend/bug sprints averaging 8.2 pts.", "confidence": 0.88, "story_points": 3},
+    ],
+    "confidence_score": 0.85,
+    "summary": "One ticket assigned to Alice based on her backend history.",
+    "warnings": [],
+    "what_if_dropped": {"PROJ-1": 1.0},
+}
+
+
 @pytest.mark.asyncio
 async def test_generate_sprint_plan_returns_output():
     complexity_response = _make_complexity_response(SAMPLE_COMPLEXITY)
@@ -228,6 +256,22 @@ async def test_generate_sprint_plan_raises_when_no_tool_call():
 
         with pytest.raises(RuntimeError, match="did not return a sprint plan"):
             await generate_sprint_plan(NEW_SAMPLE_INPUT, "sk-ant-test")
+
+
+@pytest.mark.asyncio
+async def test_generate_sprint_plan_raises_when_complexity_call_returns_no_tool_call():
+    """Call 1 returns only a text block → RuntimeError with 'complexity analysis'."""
+    import anthropic as ant
+
+    text_only_response = MagicMock()
+    text_only_response.content = [MagicMock(type="text", text="I can't help with that.")]
+
+    with patch("src.services.sprint_brain.anthropic.AsyncAnthropic") as MockClient:
+        instance = MockClient.return_value
+        instance.messages.create = AsyncMock(return_value=text_only_response)
+
+        with pytest.raises(RuntimeError, match="complexity analysis"):
+            await generate_sprint_plan(NEW_SAMPLE_INPUT, "test-key")
 
 
 # ---------------------------------------------------------------------------
@@ -540,34 +584,6 @@ class TestBuildAssignmentMessage:
 # ---------------------------------------------------------------------------
 # Two-step generate_sprint_plan tests
 # ---------------------------------------------------------------------------
-
-
-def _make_complexity_response(analyses: list[dict]):
-    """Build a mock response for the complexity analysis Claude call."""
-    tool_block = MagicMock()
-    tool_block.type = "tool_use"
-    tool_block.name = "analyse_tickets"
-    tool_block.input = {"ticket_analyses": analyses}
-    response = MagicMock()
-    response.content = [tool_block]
-    return response
-
-
-SAMPLE_COMPLEXITY = [
-    {"ticket_id": "PROJ-1", "effort": "low", "required_skills": ["frontend"], "complexity_notes": "Simple.", "estimated_days": 1.0},
-    {"ticket_id": "PROJ-2", "effort": "medium", "required_skills": ["backend"], "complexity_notes": "Auth.", "estimated_days": 2.0},
-    {"ticket_id": "PROJ-3", "effort": "high", "required_skills": ["backend", "infra"], "complexity_notes": "Perf.", "estimated_days": 4.0},
-]
-
-PLAN_DICT = {
-    "assignments": [
-        {"ticket_id": "PROJ-1", "developer_id": "dev-1", "reasoning": "Based on 4 backend/bug sprints averaging 8.2 pts.", "confidence": 0.88, "story_points": 3},
-    ],
-    "confidence_score": 0.85,
-    "summary": "One ticket assigned to Alice based on her backend history.",
-    "warnings": [],
-    "what_if_dropped": {"PROJ-1": 1.0},
-}
 
 
 @pytest.mark.asyncio

@@ -243,60 +243,6 @@ def _apply_sprint_gate(
     return eligible, insufficient
 
 
-def _build_user_message(inp: SprintBrainInput) -> str:
-    lines: list[str] = [
-        "## Sprint Planning Request",
-        f"Team ID: {inp.team_id}",
-        f"Sprint start: {inp.sprint_start_date}",
-        f"Sprint length: {inp.sprint_length_days} days",
-        "",
-        "## Developer Profiles",
-    ]
-
-    for profile in inp.developer_profiles:
-        dev_id = profile.get("developer_id", "unknown")
-        display = profile.get("display_name", dev_id)
-        velocity = profile.get("velocity", {})
-        pto = inp.pto_overrides.get(dev_id, 0.0)
-
-        lines.append(f"\n### {display}  (id: {dev_id})")
-        if velocity.get("has_sufficient_data"):
-            lines.append(f"  Mean velocity : {velocity.get('mean_velocity')} pts/sprint")
-            lines.append(f"  Std deviation : {velocity.get('std_dev')} pts")
-            lines.append(f"  Safe capacity : {velocity.get('confidence_capacity')} pts  "
-                         f"(based on {velocity.get('sprint_count')} sprints)")
-        else:
-            needed = velocity.get("sprints_needed", "unknown")
-            lines.append(f"  Velocity data : insufficient ({needed} more sprints needed)")
-        if pto > 0:
-            lines.append(f"  PTO this sprint: {pto} day(s)")
-
-    lines += ["", "## Candidate Tickets  (ordered by priority)"]
-    for i, ticket in enumerate(inp.candidate_tickets, 1):
-        tid = ticket.get("id") or ticket.get("ticket_id") or f"ticket-{i}"
-        title = ticket.get("summary") or ticket.get("title") or "(no title)"
-        points = ticket.get("story_points") or ticket.get("points") or "?"
-        priority = ticket.get("priority", "medium")
-        labels = ticket.get("labels") or []
-
-        lines.append(f"\n{i}. [{tid}] {title}")
-        lines.append(f"   Points: {points} | Priority: {priority}")
-        if labels:
-            lines.append(f"   Labels: {', '.join(labels)}")
-        if ticket.get("description"):
-            desc = str(ticket["description"])[:200]
-            lines.append(f"   Description: {desc}")
-
-    lines += [
-        "",
-        "Please create the optimal sprint plan. For each ticket you include, "
-        "assign it to the best-fit developer. Also populate what_if_dropped: "
-        "for each assigned ticket, what would the overall confidence be if "
-        "we removed only that ticket?",
-    ]
-    return "\n".join(lines)
-
-
 def _extract_plan(response: anthropic.types.Message) -> SprintBrainOutput:
     tool_block = next(
         (
@@ -390,7 +336,6 @@ def _build_assignment_message(
         f"Sprint length: {inp.sprint_length_days} days",
         "",
         "## Developer Profiles (eligible assignees only)",
-        _CITATION_INSTRUCTION,
         "",
     ]
 
@@ -439,6 +384,8 @@ def _build_assignment_message(
         lines.append("")
 
     lines += [
+        _CITATION_INSTRUCTION,
+        "",
         "Please create the optimal sprint plan. For each ticket, assign it to the "
         "best-fit developer and include a citation of the specific historical data "
         "supporting your decision. Populate what_if_dropped for each assigned ticket.",
@@ -456,28 +403,48 @@ async def generate_sprint_plan(
     anthropic_api_key: str,
 ) -> SprintBrainOutput:
     """
-    Generate an AI-powered sprint plan using Claude Opus 4.6 with adaptive
-    thinking and structured output via tool_use.
+    Generate an AI-powered sprint plan using a two-step Claude Opus 4.6 pipeline.
+
+    Step 1 — Analyse ticket complexity (no developer context).
+    Step 2 — Generate assignments with velocity-grounded reasoning and citations.
+
+    Developers with fewer than 3 sprints of data are gated out before either call.
+    Their cards are returned in SprintBrainOutput.insufficient_data_devs.
 
     The anthropic_api_key must come from the customer (BYOK) — never from env.
 
     Raises:
         ValueError: if the API key is invalid.
-        RuntimeError: on rate limits, API errors, or unexpected model output.
+        RuntimeError: if all developers fail the data gate, on rate limits,
+                      API errors, or unexpected model output.
     """
+    eligible_profiles, insufficient_data_devs = _apply_sprint_gate(inp.developer_profiles)
+
+    if not eligible_profiles:
+        raise RuntimeError(
+            "Sprint plan cannot be generated: no eligible developers. "
+            "All team members have fewer than 3 sprints of recorded data."
+        )
+
     client = anthropic.AsyncAnthropic(api_key=anthropic_api_key)
-    user_message = _build_user_message(inp)
 
     try:
+        # --- Call 1: ticket complexity analysis ---
+        complexity_analysis = await _analyse_ticket_complexity(inp.candidate_tickets, client)
+
+        # --- Call 2: assignment generation with historical citations ---
+        assignment_message = _build_assignment_message(inp, complexity_analysis, eligible_profiles)
         response = await client.messages.create(
             model=_MODEL,
             max_tokens=16384,
-            thinking={"type": "adaptive"},
             system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
+            messages=[{"role": "user", "content": assignment_message}],
             tools=[_SPRINT_PLAN_TOOL],
+            # Note: thinking={"type": "adaptive"} is intentionally omitted here.
+            # Forced tool_choice is incompatible with extended thinking in the Anthropic API.
             tool_choice={"type": "tool", "name": "create_sprint_plan"},
         )
+
     except anthropic.AuthenticationError as exc:
         raise ValueError(
             "Invalid Anthropic API key. Please update your key in Settings."
@@ -489,7 +456,9 @@ async def generate_sprint_plan(
     except anthropic.APIError as exc:
         raise RuntimeError(f"Anthropic API error: {exc.message}") from exc
 
-    return _extract_plan(response)
+    plan = _extract_plan(response)
+    plan.insufficient_data_devs = insufficient_data_devs
+    return plan
 
 
 async def simulate_what_if(

@@ -169,6 +169,7 @@ def _sprint_plan_response(team_id: str, sprint_start: str, plan: SprintBrainOutp
         "summary": plan.summary,
         "warnings": plan.warnings,
         "what_if_dropped": plan.what_if_dropped,
+        "insufficient_data_devs": plan.insufficient_data_devs,
     }
 
 
@@ -287,5 +288,6 @@ async def what_if_scenario(
             "confidence_score": plan.confidence_score,
             "summary": plan.summary,
             "warnings": plan.warnings,
+            "insufficient_data_devs": plan.insufficient_data_devs,
         },
     }

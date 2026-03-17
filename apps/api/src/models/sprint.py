@@ -30,6 +30,7 @@ class Sprint(Base):
 
     team: Mapped["Team"] = relationship(back_populates="sprints")
     sprint_tickets: Mapped[list["SprintTicket"]] = relationship(back_populates="sprint")
+    sprint_alerts: Mapped[list["SprintAlert"]] = relationship(back_populates="sprint")
 
 
 class SprintTicket(Base):

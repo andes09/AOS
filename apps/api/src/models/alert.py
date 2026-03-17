@@ -1,7 +1,7 @@
 import uuid
 import enum
 from datetime import datetime
-from sqlalchemy import String, DateTime, Boolean, ForeignKey, Text, Enum as SAEnum
+from sqlalchemy import DateTime, Boolean, ForeignKey, Text, Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from src.database import Base
@@ -26,5 +26,5 @@ class SprintAlert(Base):
     dismissed: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    sprint: Mapped["Sprint"] = relationship()
-    team: Mapped["Team"] = relationship()
+    sprint: Mapped["Sprint"] = relationship(back_populates="sprint_alerts")
+    team: Mapped["Team"] = relationship(back_populates="sprint_alerts")

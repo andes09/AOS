@@ -5,6 +5,7 @@ from src.auth import get_current_user_id
 from src.routers import sprint_brain as sprint_brain_router
 from src.routers import velocity as velocity_router
 from src.routers import sprints as sprints_router
+from src.routers import alerts as alerts_router
 
 app = FastAPI(
     title="AgileOS API",
@@ -25,6 +26,7 @@ app.include_router(sprint_brain_router.router)
 app.include_router(velocity_router.router)
 app.include_router(velocity_router.dashboard_router)
 app.include_router(sprints_router.router)
+app.include_router(alerts_router.router)
 
 
 @app.get("/health")

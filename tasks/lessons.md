@@ -19,6 +19,36 @@
 
 ---
 
+## Always create a new branch when the prompt instructs it
+
+**Pattern:** User explicitly asked to create a new branch in their prompt, but I started work without doing so.
+
+**Root cause:** Did not read the full prompt before acting.
+
+**Rule:** Read the entire prompt before taking any action. If branch creation is mentioned anywhere in the prompt, create the branch as the very first step before any implementation work begins.
+
+---
+
+## Write lessons to tasks/lessons.md, not just memory
+
+**Pattern:** After a user correction, I wrote the lesson only to the memory system and skipped `tasks/lessons.md`.
+
+**Root cause:** CLAUDE.md explicitly states to update `tasks/lessons.md` after any correction. I did not follow this.
+
+**Rule:** After ANY correction from the user, ALWAYS write the lesson to `tasks/lessons.md`. The memory system is supplementary, not a replacement.
+
+---
+
+## Verify both sides before touching code on a 4xx bug report
+
+**Pattern:** A route returns 401. Assumption is frontend isn't attaching the token or backend is missing auth. Read both sides before changing anything.
+
+**Root cause:** Jumping to a fix without tracing the full request path.
+
+**Rule:** For any auth error, read (1) the exact component/hook making the call, (2) the `useApi()` / fetch wrapper, and (3) the route's `Depends(...)` list. Only write code if a real gap is found. If both sides are correct, the issue is configuration (wrong Clerk key, expired token, network to Clerk's verify endpoint) — not code.
+
+---
+
 ## Warn about unmet track dependencies before proceeding to the next phase
 
 **Pattern:** Tracks were built out of dependency order (e.g. UI and service logic built before DB models and route wiring), resulting in a frontend that calls endpoints that don't exist.

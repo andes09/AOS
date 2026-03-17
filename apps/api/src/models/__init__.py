@@ -4,6 +4,7 @@ from src.models.developer import Developer
 from src.models.sprint import Sprint, SprintTicket, SprintStatus
 from src.models.velocity import DeveloperVelocityProfile
 from src.models.jira_connection import JiraConnection
+from src.models.alert import SprintAlert, AlertType
 
 __all__ = [
     "Organization",
@@ -14,4 +15,6 @@ __all__ = [
     "SprintStatus",
     "DeveloperVelocityProfile",
     "JiraConnection",
+    "SprintAlert",
+    "AlertType",
 ]

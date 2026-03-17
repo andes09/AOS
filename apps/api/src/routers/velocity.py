@@ -14,6 +14,7 @@ GET /api/teams/{team_id}/capacity
 """
 import uuid
 from collections import defaultdict
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -22,15 +23,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import get_current_org_id
 from src.database import get_db
+from src.dependencies import resolve_team as resolve_team_query
 from src.models.developer import Developer
 from src.models.organization import Organization
-from src.models.sprint import Sprint, SprintStatus
+from src.models.sprint import Sprint, SprintStatus, SprintTicket
 from src.models.team import Team
 from src.models.velocity import DeveloperVelocityProfile
 from src.services.velocity import CapacityModel
 from src.services.velocity.schemas import SprintMeta
 
 router = APIRouter(prefix="/api/teams", tags=["velocity"])
+dashboard_router = APIRouter(prefix="/api/velocity", tags=["velocity-dashboard"])
 
 _SUFFICIENT_SPRINT_THRESHOLD = 3
 
@@ -305,3 +308,222 @@ async def get_team_capacity(
         sprint_length_days=total_days,
         capacity=items,
     )
+
+
+# ---------------------------------------------------------------------------
+# Dashboard response models
+# ---------------------------------------------------------------------------
+
+
+class BurndownPoint(BaseModel):
+    date: date
+    points: float
+
+
+class BurndownResponse(BaseModel):
+    sprint_id: str
+    ideal: list[BurndownPoint]
+    actual: list[BurndownPoint]
+    predicted: list[BurndownPoint]
+    is_at_risk: bool
+
+
+class SprintCapacityResponse(BaseModel):
+    sprint_id: str
+    sprint_length_days: int
+    capacity: list[DeveloperCapacityItem]
+
+
+class HealthScoreResponse(BaseModel):
+    score: int
+    trend: str
+    reasons: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Dashboard helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_ideal(start: date, end: date, committed: float) -> list[BurndownPoint]:
+    total_days = (end - start).days
+    if total_days <= 0:
+        return [BurndownPoint(date=start, points=committed)]
+    return [
+        BurndownPoint(date=start + timedelta(days=i), points=round(committed * (1 - i / total_days), 2))
+        for i in range(total_days + 1)
+    ]
+
+
+def _build_predicted(
+    start: date, end: date, committed: float, remaining: float, today: date
+) -> list[BurndownPoint]:
+    days_elapsed = max((today - start).days, 1)
+    burned = committed - remaining
+    daily_burn = burned / days_elapsed if days_elapsed > 0 else 0
+    if daily_burn <= 0:
+        return [BurndownPoint(date=today, points=remaining), BurndownPoint(date=end, points=remaining)]
+    days_to_zero = remaining / daily_burn
+    predicted_end = today + timedelta(days=int(days_to_zero) + 1)
+    points = [BurndownPoint(date=today, points=round(remaining, 2))]
+    step = max(1, int(days_to_zero / 5))
+    d = today + timedelta(days=step)
+    while d < predicted_end:
+        pts = max(0.0, remaining - daily_burn * (d - today).days)
+        points.append(BurndownPoint(date=d, points=round(pts, 2)))
+        d += timedelta(days=step)
+    points.append(BurndownPoint(date=predicted_end, points=0.0))
+    return points
+
+
+def _compute_health_score(
+    committed: float,
+    remaining: float,
+    start: date,
+    end: date,
+    today: date,
+    ticket_count: int,
+    completed_count: int,
+) -> tuple[int, str, list[str]]:
+    reasons: list[str] = []
+    total_days = max((end - start).days, 1)
+    elapsed = max((today - start).days, 0)
+    ideal_burned = committed * (elapsed / total_days) if committed > 0 else 0
+    actual_burned = committed - remaining
+
+    if committed <= 0:
+        pace_score = 20
+        reasons.append("No committed points recorded — pace cannot be measured.")
+    else:
+        ratio = actual_burned / ideal_burned if ideal_burned > 0 else (1.0 if actual_burned > 0 else 0.0)
+        pace_score = int(min(40, max(0, ratio * 40)))
+        if ratio >= 0.9:
+            reasons.append(f"Burn pace is on track ({actual_burned:.0f} of {ideal_burned:.0f} ideal points burned).")
+        elif ratio >= 0.6:
+            reasons.append(f"Burn pace is slightly behind ({actual_burned:.0f} burned vs {ideal_burned:.0f} ideal).")
+        else:
+            reasons.append(f"Burn pace is significantly behind — only {actual_burned:.0f} of {ideal_burned:.0f} ideal points burned.")
+
+    completion_ratio = completed_count / ticket_count if ticket_count > 0 else 0.0
+    completion_score = int(completion_ratio * 40)
+    if completion_ratio >= 0.7:
+        reasons.append(f"{completed_count} of {ticket_count} tickets completed ({int(completion_ratio*100)}%).")
+    elif completion_ratio >= 0.4:
+        reasons.append(f"Moderate progress: {completed_count} of {ticket_count} tickets done ({int(completion_ratio*100)}%).")
+    else:
+        reasons.append(f"Low ticket completion: only {completed_count} of {ticket_count} tickets done.")
+
+    scope_score = 20 if committed > 0 else 0
+    if committed > 0:
+        reasons.append(f"Sprint has {committed:.0f} committed points with clear scope.")
+    else:
+        reasons.append("Sprint has no committed points — consider grooming the backlog.")
+
+    score = pace_score + completion_score + scope_score
+    trend = "up" if score >= 60 else ("down" if score <= 40 else "stable")
+    return score, trend, reasons
+
+
+# ---------------------------------------------------------------------------
+# Dashboard endpoints
+# ---------------------------------------------------------------------------
+
+
+@dashboard_router.get("/burndown", response_model=BurndownResponse)
+async def get_burndown(
+    team: Team = Depends(resolve_team_query),
+    db: AsyncSession = Depends(get_db),
+):
+    """Burndown data for the active sprint."""
+    sprint = await db.scalar(
+        select(Sprint).where(Sprint.team_id == team.id, Sprint.status == SprintStatus.ACTIVE)
+        .order_by(Sprint.start_date.desc())
+    )
+    if not sprint:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active sprint")
+
+    tickets = (await db.scalars(select(SprintTicket).where(SprintTicket.sprint_id == sprint.id))).all()
+    committed = sprint.committed_points or sum(t.estimated_points or 0 for t in tickets)
+    completed_pts = sum(t.estimated_points or 0 for t in tickets if t.completed)
+    remaining = max(0.0, committed - completed_pts)
+    today = date.today()
+    start = sprint.start_date or today
+    end = sprint.end_date or (start + timedelta(days=team.sprint_length_days))
+
+    ideal = _build_ideal(start, end, committed)
+    actual = [BurndownPoint(date=today, points=round(remaining, 2))]
+    predicted = _build_predicted(start, end, committed, remaining, today)
+    is_at_risk = bool(predicted and predicted[-1].date > end)
+
+    return BurndownResponse(sprint_id=str(sprint.id), ideal=ideal, actual=actual, predicted=predicted, is_at_risk=is_at_risk)
+
+
+@dashboard_router.get("/capacity", response_model=SprintCapacityResponse)
+async def get_sprint_capacity(
+    team: Team = Depends(resolve_team_query),
+    db: AsyncSession = Depends(get_db),
+):
+    """Current capacity per developer for the active sprint."""
+    active_sprint = await db.scalar(
+        select(Sprint).where(Sprint.team_id == team.id, Sprint.status == SprintStatus.ACTIVE)
+        .order_by(Sprint.start_date.desc())
+    )
+    if not active_sprint:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active sprint")
+
+    developers = (
+        await db.scalars(select(Developer).where(Developer.team_id == team.id, Developer.is_active.is_(True)))
+    ).all()
+
+    total_days = (
+        (active_sprint.end_date - active_sprint.start_date).days
+        if active_sprint.start_date and active_sprint.end_date
+        else team.sprint_length_days
+    )
+
+    if not developers:
+        return SprintCapacityResponse(sprint_id=str(active_sprint.id), sprint_length_days=max(1, total_days), capacity=[])
+
+    sprint_meta = SprintMeta(total_working_days=max(1, total_days), team_members=[str(d.id) for d in developers])
+    capacity_rows = CapacityModel().model(sprint=sprint_meta, pto=[], meetings=[])
+    dev_map = {str(d.id): d for d in developers}
+    items = [
+        DeveloperCapacityItem(
+            developer_id=row.developer_id,
+            name=dev_map[row.developer_id].name,
+            available_days=row.available_days,
+            availability_ratio=row.availability_ratio,
+        )
+        for row in capacity_rows
+        if row.developer_id in dev_map
+    ]
+    return SprintCapacityResponse(sprint_id=str(active_sprint.id), sprint_length_days=total_days, capacity=items)
+
+
+@dashboard_router.get("/health-score", response_model=HealthScoreResponse)
+async def get_health_score(
+    team: Team = Depends(resolve_team_query),
+    db: AsyncSession = Depends(get_db),
+):
+    """Sprint health score (0–100) with trend and three explanatory bullets."""
+    sprint = await db.scalar(
+        select(Sprint).where(Sprint.team_id == team.id, Sprint.status == SprintStatus.ACTIVE)
+        .order_by(Sprint.start_date.desc())
+    )
+    if not sprint:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active sprint")
+
+    tickets = (await db.scalars(select(SprintTicket).where(SprintTicket.sprint_id == sprint.id))).all()
+    committed = sprint.committed_points or sum(t.estimated_points or 0 for t in tickets)
+    completed_pts = sum(t.estimated_points or 0 for t in tickets if t.completed)
+    remaining = max(0.0, committed - completed_pts)
+    today = date.today()
+    start = sprint.start_date or today
+    end = sprint.end_date or (start + timedelta(days=team.sprint_length_days))
+    completed_count = sum(1 for t in tickets if t.completed)
+
+    score, trend, reasons = _compute_health_score(
+        committed=committed, remaining=remaining, start=start, end=end,
+        today=today, ticket_count=len(tickets), completed_count=completed_count,
+    )
+    return HealthScoreResponse(score=score, trend=trend, reasons=reasons)

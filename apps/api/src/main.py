@@ -23,6 +23,7 @@ app.add_middleware(
 
 app.include_router(sprint_brain_router.router)
 app.include_router(velocity_router.router)
+app.include_router(velocity_router.dashboard_router)
 app.include_router(sprints_router.router)
 
 

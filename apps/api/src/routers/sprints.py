@@ -6,18 +6,16 @@ Endpoints
 GET /api/sprints/current?team_id=<uuid>
     Returns the active sprint for the authenticated team.
 """
-import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import date
 
-from src.auth import get_current_org_id
 from src.database import get_db
-from src.models.organization import Organization
 from src.models.sprint import Sprint, SprintStatus
 from src.models.team import Team
+from src.dependencies import resolve_team
 
 router = APIRouter(prefix="/api/sprints", tags=["sprints"])
 
@@ -32,23 +30,9 @@ class CurrentSprintResponse(BaseModel):
     status: str
 
 
-async def _resolve_team(
-    team_id: uuid.UUID,
-    clerk_org_id: str = Depends(get_current_org_id),
-    db: AsyncSession = Depends(get_db),
-) -> Team:
-    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
-    if not org:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
-    team = await db.scalar(select(Team).where(Team.id == team_id, Team.organization_id == org.id))
-    if not team:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
-    return team
-
-
 @router.get("/current", response_model=CurrentSprintResponse)
 async def get_current_sprint(
-    team: Team = Depends(_resolve_team),
+    team: Team = Depends(resolve_team),
     db: AsyncSession = Depends(get_db),
 ):
     """Return the active sprint for the authenticated team."""

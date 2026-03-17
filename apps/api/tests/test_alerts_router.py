@@ -104,6 +104,7 @@ async def test_dismiss_alert_returns_200():
         nonlocal call_idx; val = scalar_results[call_idx]; call_idx += 1; return val
     session.scalar = fake_scalar
     session.commit = AsyncMock()
+    session.refresh = AsyncMock()
     async def override_db(): yield session
     async def override_org(): return ORG_CLERK_ID
     from src.auth import get_current_org_id

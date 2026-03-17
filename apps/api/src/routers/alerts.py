@@ -91,6 +91,7 @@ async def dismiss_alert(
 
     alert.dismissed = True
     await db.commit()
+    await db.refresh(alert)
 
     return AlertResponse(
         id=str(alert.id),

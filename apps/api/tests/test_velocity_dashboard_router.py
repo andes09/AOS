@@ -135,6 +135,30 @@ async def test_sprint_capacity_returns_developer_list():
     assert names == {"Alice", "Bob"}
 
 
+@pytest.mark.asyncio
+async def test_sprint_capacity_returns_404_when_no_active_sprint():
+    from src.main import app
+    org = _make_org(); team = _make_team()
+    session = MagicMock()
+    call_idx = 0
+    scalar_results = [org, team, None]
+    async def fake_scalar(q):
+        nonlocal call_idx; val = scalar_results[call_idx]; call_idx += 1; return val
+    session.scalar = fake_scalar
+    async def override_db(): yield session
+    async def override_org(): return ORG_CLERK_ID
+    from src.auth import get_current_org_id
+    from src.database import get_db
+    app.dependency_overrides[get_current_org_id] = override_org
+    app.dependency_overrides[get_db] = override_db
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(f"/api/velocity/capacity?team_id={TEAM_ID}")
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 404
+
+
 # --- health-score ---
 
 @pytest.mark.asyncio

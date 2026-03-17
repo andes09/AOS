@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import get_current_org_id
 from src.database import get_db
-from src.dependencies import resolve_team as resolve_team_query
+from src.dependencies import resolve_team as resolve_team_query  # query-param version; _resolve_team below is path-param for /api/teams/{team_id}/...
 from src.models.developer import Developer
 from src.models.organization import Organization
 from src.models.sprint import Sprint, SprintStatus, SprintTicket
@@ -364,7 +364,7 @@ def _build_predicted(
     if daily_burn <= 0:
         return [BurndownPoint(date=today, points=remaining), BurndownPoint(date=end, points=remaining)]
     days_to_zero = remaining / daily_burn
-    predicted_end = today + timedelta(days=int(days_to_zero) + 1)
+    predicted_end = today + timedelta(days=days_to_zero)
     points = [BurndownPoint(date=today, points=round(remaining, 2))]
     step = max(1, int(days_to_zero / 5))
     d = today + timedelta(days=step)

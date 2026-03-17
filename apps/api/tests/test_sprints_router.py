@@ -1,9 +1,10 @@
 """Tests for GET /api/sprints/current"""
 import uuid
 import pytest
-from datetime import date, datetime
-from unittest.mock import MagicMock, AsyncMock
+from datetime import date
+from unittest.mock import MagicMock
 from httpx import AsyncClient, ASGITransport
+from src.models.sprint import SprintStatus
 
 ORG_CLERK_ID = "org_sprint_test"
 ORG_ID = uuid.uuid4()
@@ -17,8 +18,7 @@ def _make_org():
 def _make_team():
     t = MagicMock(); t.id = TEAM_ID; t.organization_id = ORG_ID; t.sprint_length_days = 14; return t
 
-def _make_sprint(status="active"):
-    from src.models.sprint import SprintStatus
+def _make_sprint(status=SprintStatus.ACTIVE):
     s = MagicMock()
     s.id = SPRINT_ID
     s.team_id = TEAM_ID
@@ -27,7 +27,7 @@ def _make_sprint(status="active"):
     s.end_date = date(2026, 3, 24)
     s.committed_points = 40.0
     s.delivered_points = 12.0
-    s.status = SprintStatus.ACTIVE
+    s.status = status
     return s
 
 

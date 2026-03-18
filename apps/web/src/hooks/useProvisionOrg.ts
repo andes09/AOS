@@ -17,12 +17,13 @@ export function useProvisionOrg() {
   useEffect(() => {
     if (!organization) return
 
-    // Reset status when org switches so the new org gets provisioned
-    if (provisionedOrgId.current !== null && provisionedOrgId.current !== organization.id) {
-      setStatus('idle')
-    }
+    // Already provisioned for this org — nothing to do
+    if (provisionedOrgId.current === organization.id) return
 
-    if (status !== 'idle') return
+    // Org switched — reset ref so we re-provision for the new org
+    if (provisionedOrgId.current !== null) {
+      provisionedOrgId.current = null
+    }
 
     let cancelled = false
     setStatus('loading')
@@ -36,8 +37,9 @@ export function useProvisionOrg() {
       })
       .catch(() => { if (!cancelled) setStatus('error') })
 
+    // On cleanup (Strict Mode re-run or org switch), cancel the in-flight request
     return () => { cancelled = true }
-  }, [organization?.id, status]) // include status so effect re-runs after reset
+  }, [organization?.id])
 
   return { provisioned: status === 'done', error: status === 'error' }
 }

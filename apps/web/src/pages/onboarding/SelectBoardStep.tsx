@@ -6,19 +6,21 @@ import { useApi } from '../../lib/api'
 import type { JiraBoard } from '../../types/sprint'
 
 interface SelectBoardStepProps {
+  connectionId: string
   onNext: () => void
   onBack: () => void
 }
 
-export function SelectBoardStep({ onNext, onBack }: SelectBoardStepProps) {
+export function SelectBoardStep({ connectionId, onNext, onBack }: SelectBoardStepProps) {
   const [selectedBoardId, setSelectedBoardId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const { get, post } = useApi()
 
-  const { data: boards, isLoading, error: fetchError } = useQuery({
-    queryKey: ['jira-boards'],
-    queryFn: () => get<JiraBoard[]>('/api/jira/boards'),
+  const { data: boards, isLoading, error: fetchError, refetch } = useQuery({
+    queryKey: ['jira-boards', connectionId],
+    queryFn: () => get<JiraBoard[]>(`/api/integrations/jira/boards?connection_id=${connectionId}`),
+    enabled: !!connectionId,
   })
 
   async function handleSave() {
@@ -28,7 +30,11 @@ export function SelectBoardStep({ onNext, onBack }: SelectBoardStepProps) {
     setSaving(true)
     setSaveError(null)
     try {
-      await post('/api/jira/board-selection', { board_id: board.id, project_key: board.project_key })
+      await post('/api/integrations/jira/board-selection', {
+        connection_id: connectionId,
+        board_id: board.id,
+        project_key: board.project_key,
+      })
       onNext()
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save board selection')
@@ -49,8 +55,11 @@ export function SelectBoardStep({ onNext, onBack }: SelectBoardStepProps) {
         <div style={{ color: '#64748b', fontSize: 14, marginBottom: '1.5rem' }}>Loading boards...</div>
       )}
       {fetchError && (
-        <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 12 }}>
-          Failed to load boards. Check your Jira connection.
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 8 }}>
+            Failed to load boards. Check your Jira connection.
+          </div>
+          <button onClick={() => refetch()} style={ghostButtonStyle}>Retry</button>
         </div>
       )}
       {saveError && (
@@ -61,7 +70,7 @@ export function SelectBoardStep({ onNext, onBack }: SelectBoardStepProps) {
         <div style={{ marginBottom: '1.5rem' }}>
           {boards.length === 0 ? (
             <div style={{ color: '#64748b', fontSize: 14 }}>
-              No boards found. Make sure your Jira account has access to at least one project.
+              No scrum boards found. Make sure your Jira account has access to at least one scrum project.
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

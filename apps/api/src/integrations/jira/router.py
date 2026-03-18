@@ -111,7 +111,6 @@ async def jira_callback(
         scopes=tokens.get("scope", "").split(),
     )
     db.add(connection)
-    await db.flush()
     await db.commit()
 
     return RedirectResponse(
@@ -176,7 +175,7 @@ async def jira_disconnect(
 @router.get("/boards")
 async def get_jira_boards(
     connection_id: str = Query(...),
-    user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     """List scrum boards for a Jira connection."""
@@ -188,6 +187,12 @@ async def get_jira_boards(
     connection = await db.get(JiraConnection, conn_uuid)
     if not connection or not connection.is_active:
         raise HTTPException(status_code=404, detail="Jira connection not found")
+
+    org = await db.scalar(
+        select(Organization).where(Organization.clerk_org_id == clerk_org_id)
+    )
+    if not org or connection.organization_id != org.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     access_token = decrypt(connection.encrypted_access_token)
 
@@ -225,7 +230,7 @@ class BoardSelectionRequest(BaseModel):
 @router.post("/board-selection")
 async def save_board_selection(
     body: BoardSelectionRequest,
-    user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Save the selected scrum board to the team and trigger initial sync."""
@@ -237,6 +242,12 @@ async def save_board_selection(
     connection = await db.get(JiraConnection, conn_uuid)
     if not connection or not connection.is_active:
         raise HTTPException(status_code=404, detail="Jira connection not found")
+
+    org = await db.scalar(
+        select(Organization).where(Organization.clerk_org_id == clerk_org_id)
+    )
+    if not org or connection.organization_id != org.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     team = await db.scalar(
         select(Team).where(Team.organization_id == connection.organization_id)

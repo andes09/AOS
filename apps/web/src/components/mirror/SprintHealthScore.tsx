@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@clerk/clerk-react'
-import { useApi } from '../../lib/api'
+import { useApi, ApiError } from '../../lib/api'
 
 interface HealthScoreResponse {
   score: number
@@ -34,7 +34,7 @@ export function SprintHealthScore({ sprintId }: SprintHealthScoreProps) {
   const { get } = useApi()
   const { isLoaded, isSignedIn } = useAuth()
 
-  const { data, isLoading, isFetching, isError } = useQuery<HealthScoreResponse>({
+  const { data, isLoading, isFetching, isError, error } = useQuery<HealthScoreResponse>({
     queryKey: ['sprint-health-score', sprintId],
     queryFn: () =>
       get<HealthScoreResponse>(
@@ -53,9 +53,12 @@ export function SprintHealthScore({ sprintId }: SprintHealthScoreProps) {
   }
 
   if (isError || !data) {
+    const is404 = error instanceof ApiError && error.status === 404
     return (
       <div style={{ background: '#1e2030', borderRadius: 8, padding: '1rem', minWidth: 160, textAlign: 'center' }}>
-        <div style={{ color: '#ef4444', fontSize: 13 }}>Health score unavailable</div>
+        <div style={{ color: is404 ? '#475569' : '#ef4444', fontSize: 13 }}>
+          {is404 ? 'No active sprint' : 'Health score unavailable'}
+        </div>
       </div>
     )
   }

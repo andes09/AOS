@@ -1,6 +1,7 @@
 // apps/web/src/components/mirror/BurndownChart.tsx
 
 import { useQuery } from '@tanstack/react-query'
+import { useAuth } from '@clerk/clerk-react'
 import {
   AreaChart,
   Area,
@@ -35,11 +36,12 @@ interface BurndownApiResponse {
 
 export function BurndownChart({ data, sprintLength, predictedEndDay }: BurndownChartProps) {
   const { get } = useApi()
+  const { isLoaded, isSignedIn } = useAuth()
 
   const query = useQuery<BurndownApiResponse>({
     queryKey: ['burndown'],
     queryFn: () => get<BurndownApiResponse>('/api/velocity/burndown'),
-    enabled: !data,
+    enabled: !data && isLoaded && isSignedIn,
   })
 
   const chartData = data ?? query.data?.data ?? []

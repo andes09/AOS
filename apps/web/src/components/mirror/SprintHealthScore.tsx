@@ -1,6 +1,7 @@
 // apps/web/src/components/mirror/SprintHealthScore.tsx
 
 import { useQuery } from '@tanstack/react-query'
+import { useAuth } from '@clerk/clerk-react'
 import { useApi } from '../../lib/api'
 
 interface HealthScoreResponse {
@@ -31,6 +32,7 @@ function timeAgo(iso: string): string {
 
 export function SprintHealthScore({ sprintId }: SprintHealthScoreProps) {
   const { get } = useApi()
+  const { isLoaded, isSignedIn } = useAuth()
 
   const { data, isLoading, isFetching, isError } = useQuery<HealthScoreResponse>({
     queryKey: ['sprint-health-score', sprintId],
@@ -38,6 +40,7 @@ export function SprintHealthScore({ sprintId }: SprintHealthScoreProps) {
       get<HealthScoreResponse>(
         sprintId ? `/api/velocity/health-score?sprintId=${sprintId}` : '/api/velocity/health-score'
       ),
+    enabled: isLoaded && isSignedIn,
     refetchInterval: 300_000,
   })
 

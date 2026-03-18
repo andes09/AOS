@@ -1,6 +1,7 @@
 // apps/web/src/pages/VelocityMirrorPage.tsx
 
 import { useQuery } from '@tanstack/react-query'
+import { useAuth } from '@clerk/clerk-react'
 import { useApi } from '../lib/api'
 import { BurndownChart } from '../components/mirror/BurndownChart'
 import { DeveloperCapacityRow } from '../components/mirror/DeveloperCapacityRow'
@@ -18,10 +19,12 @@ interface CurrentSprint {
 
 export function VelocityMirrorPage() {
   const { get } = useApi()
+  const { isLoaded, isSignedIn } = useAuth()
 
   const { data: sprint, isLoading, isError } = useQuery<CurrentSprint>({
     queryKey: ['current-sprint'],
     queryFn: () => get<CurrentSprint>('/api/sprints/current'),
+    enabled: isLoaded && isSignedIn,
   })
 
   return (

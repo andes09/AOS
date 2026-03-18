@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useAuth } from '@clerk/clerk-react'
 import { useApi } from '../../lib/api'
 
 export type AlertType = 'stalled_ticket' | 'over_capacity' | 'dependency_risk' | 'spillover_prediction'
@@ -110,11 +111,13 @@ function AlertCard({
 
 export function AlertFeed() {
   const { get, patch } = useApi()
+  const { isLoaded, isSignedIn } = useAuth()
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
 
   const { data: alerts = [], isLoading, isError } = useQuery<Alert[]>({
     queryKey: ['alerts'],
     queryFn: () => get<Alert[]>('/api/alerts'),
+    enabled: isLoaded && isSignedIn,
   })
 
   function handleDismiss(id: string) {

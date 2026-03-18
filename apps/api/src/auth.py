@@ -1,42 +1,40 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from clerk_backend_api import Clerk
+from clerk_backend_api.security.types import AuthenticateRequestOptions
 from src.config import settings
-import httpx
 
 security = HTTPBearer()
 
+_clerk = Clerk(bearer_auth=settings.clerk_secret_key)
+
+
+class _BearerRequest:
+    """Minimal request shim that satisfies the Requestish protocol."""
+    def __init__(self, token: str):
+        self.headers = {"Authorization": f"Bearer {token}"}
+
 
 async def _verify_token(credentials: HTTPAuthorizationCredentials) -> dict:
-    """Verify Clerk JWT and return the full claims dict."""
-    token = credentials.credentials
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                "https://api.clerk.com/v1/tokens/verify",
-                headers={"Authorization": f"Bearer {settings.clerk_secret_key}"},
-                params={"token": token},
-            )
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired token",
-            )
-        return response.json()
-    except HTTPException:
-        raise
-    except Exception:
+    """Verify Clerk JWT via JWKS and return the claims payload."""
+    state = await _clerk.authenticate_request_async(
+        _BearerRequest(credentials.credentials),
+        AuthenticateRequestOptions(secret_key=settings.clerk_secret_key),
+    )
+    if not state.is_signed_in or state.payload is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
+            detail="Invalid or expired token",
         )
+    return state.payload
 
 
 async def get_current_user_id(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> str:
     """Verify Clerk JWT and return the user ID (sub claim)."""
-    data = await _verify_token(credentials)
-    user_id = data.get("sub")
+    payload = await _verify_token(credentials)
+    user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -49,8 +47,8 @@ async def get_current_org_id(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> str:
     """Verify Clerk JWT and return the Clerk organisation ID (org_id claim)."""
-    data = await _verify_token(credentials)
-    org_id = data.get("org_id")
+    payload = await _verify_token(credentials)
+    org_id = payload.get("org_id")
     if not org_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

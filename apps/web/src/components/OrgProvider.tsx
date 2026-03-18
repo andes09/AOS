@@ -24,7 +24,22 @@ export function OrgProvider({ children }: Props) {
         color: '#64748b',
         fontSize: 14,
       }}>
-        {error ? 'Failed to initialize workspace. Please refresh.' : 'Setting up workspace…'}
+        Setting up workspace…
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        color: '#64748b',
+        fontSize: 14,
+      }}>
+        Failed to initialize workspace. Please refresh.
       </div>
     )
   }

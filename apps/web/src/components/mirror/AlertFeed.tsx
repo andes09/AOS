@@ -109,7 +109,7 @@ function AlertCard({
 }
 
 export function AlertFeed() {
-  const { get } = useApi()
+  const { get, patch } = useApi()
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
 
   const { data: alerts = [], isLoading, isError } = useQuery<Alert[]>({
@@ -120,7 +120,7 @@ export function AlertFeed() {
   function handleDismiss(id: string) {
     setDismissedIds(prev => new Set([...prev, id]))
     // Fire-and-forget — optimistic dismiss
-    get(`/api/alerts/${id}/dismiss`).catch(() => {
+    patch(`/api/alerts/${id}/dismiss`).catch(() => {
       // Roll back if the call fails
       setDismissedIds(prev => {
         const next = new Set(prev)

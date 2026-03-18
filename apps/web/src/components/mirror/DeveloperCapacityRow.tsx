@@ -4,13 +4,19 @@ import { useQuery } from '@tanstack/react-query'
 import { useApi } from '../../lib/api'
 
 export interface DeveloperCapacity {
-  id: string
+  developerId: string
   name: string
-  avatarInitial: string
+  availableDays: number
+  availabilityRatio: number
   committedPoints: number
-  capacityPoints: number
   completedPoints: number
   isOverCapacity: boolean
+}
+
+interface SprintCapacityResponse {
+  sprintId: string
+  sprintLengthDays: number
+  capacity: DeveloperCapacity[]
 }
 
 interface DeveloperCapacityRowProps {
@@ -24,10 +30,11 @@ function utilisationColour(ratio: number): string {
 }
 
 function DevCard({ dev }: { dev: DeveloperCapacity }) {
-  const ratio = dev.capacityPoints > 0 ? dev.committedPoints / dev.capacityPoints : 0
+  const ratio = dev.availableDays > 0 ? dev.committedPoints / (dev.availableDays * 2) : 0
   const completeRatio = dev.committedPoints > 0 ? dev.completedPoints / dev.committedPoints : 0
   const barColour = utilisationColour(ratio)
   const utilPct = Math.round(ratio * 100)
+  const avatarInitial = dev.name.charAt(0).toUpperCase()
 
   return (
     <div style={{
@@ -70,7 +77,7 @@ function DevCard({ dev }: { dev: DeveloperCapacity }) {
           justifyContent: 'center',
           flexShrink: 0,
         }}>
-          {dev.avatarInitial}
+          {avatarInitial}
         </div>
         <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {dev.name}
@@ -104,13 +111,13 @@ function DevCard({ dev }: { dev: DeveloperCapacity }) {
 export function DeveloperCapacityRow({ developers }: DeveloperCapacityRowProps) {
   const { get } = useApi()
 
-  const query = useQuery<DeveloperCapacity[]>({
+  const query = useQuery<SprintCapacityResponse>({
     queryKey: ['velocity-capacity'],
-    queryFn: () => get<DeveloperCapacity[]>('/api/velocity/capacity'),
+    queryFn: () => get<SprintCapacityResponse>('/api/velocity/capacity'),
     enabled: !developers,
   })
 
-  const devs = developers ?? query.data ?? []
+  const devs = developers ?? query.data?.capacity ?? []
 
   if (!developers && query.isLoading) {
     return (
@@ -142,7 +149,7 @@ export function DeveloperCapacityRow({ developers }: DeveloperCapacityRowProps) 
         {devs.length === 0 ? (
           <div style={{ color: '#475569', fontSize: 13 }}>No capacity data available</div>
         ) : (
-          devs.map(dev => <DevCard key={dev.id} dev={dev} />)
+          devs.map(dev => <DevCard key={dev.developerId} dev={dev} />)
         )}
       </div>
     </div>

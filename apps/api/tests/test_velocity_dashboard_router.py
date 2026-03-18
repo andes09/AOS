@@ -67,13 +67,14 @@ async def test_burndown_returns_three_series():
         app.dependency_overrides.clear()
     assert response.status_code == 200
     data = response.json()
-    assert "ideal" in data
-    assert "actual" in data
-    assert "predicted" in data
-    assert isinstance(data["is_at_risk"], bool)
-    assert len(data["ideal"]) > 0
-    assert "date" in data["ideal"][0]
-    assert "points" in data["ideal"][0]
+    assert "data" in data
+    assert "sprintLength" in data
+    assert "predictedEndDay" in data
+    assert len(data["data"]) > 0
+    assert "day" in data["data"][0]
+    assert "ideal" in data["data"][0]
+    assert "actual" in data["data"][0]
+    assert "predicted" in data["data"][0]
 
 
 @pytest.mark.asyncio
@@ -129,7 +130,7 @@ async def test_sprint_capacity_returns_developer_list():
         app.dependency_overrides.clear()
     assert response.status_code == 200
     data = response.json()
-    assert "sprint_id" in data
+    assert "sprintId" in data
     assert len(data["capacity"]) == 2
     names = {item["name"] for item in data["capacity"]}
     assert names == {"Alice", "Bob"}
@@ -190,3 +191,4 @@ async def test_health_score_returns_score_and_reasons():
     assert 0 <= data["score"] <= 100
     assert data["trend"] in ("up", "down", "stable")
     assert len(data["reasons"]) == 3
+    assert "updatedAt" in data

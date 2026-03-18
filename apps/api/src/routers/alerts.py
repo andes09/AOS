@@ -3,17 +3,18 @@ Alerts API router.
 
 Endpoints
 ---------
-GET  /api/alerts?team_id=<uuid>
+GET  /api/alerts
     Returns active (non-dismissed) alerts for the current sprint.
     Returns [] when no active sprint exists (not 404).
 
-PATCH /api/alerts/{alert_id}/dismiss?team_id=<uuid>
+PATCH /api/alerts/{alert_id}/dismiss
     Marks an alert as dismissed.
 """
 import uuid
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,10 +26,19 @@ from src.models.team import Team
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
+ALERT_TITLES = {
+    "stalled_ticket": "Stalled Ticket",
+    "over_capacity": "Over Capacity",
+    "dependency_risk": "Dependency Risk",
+    "spillover_prediction": "Spillover Risk",
+}
+
 
 class AlertResponse(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
     id: str
     type: str
+    title: str
     description: str
     recommended_action: str
     created_at: datetime
@@ -64,6 +74,7 @@ async def get_alerts(
         AlertResponse(
             id=str(a.id),
             type=a.type.value,
+            title=ALERT_TITLES.get(a.type.value, a.type.value),
             description=a.description,
             recommended_action=a.recommended_action,
             created_at=a.created_at,
@@ -96,6 +107,7 @@ async def dismiss_alert(
     return AlertResponse(
         id=str(alert.id),
         type=alert.type.value,
+        title=ALERT_TITLES.get(alert.type.value, alert.type.value),
         description=alert.description,
         recommended_action=alert.recommended_action,
         created_at=alert.created_at,

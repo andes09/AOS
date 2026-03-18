@@ -396,7 +396,7 @@ async def test_team_capacity_returns_developer_availability():
     assert len(data["capacity"]) == 2
     # No PTO or meetings in DB yet → full availability
     for item in data["capacity"]:
-        assert item["availability_ratio"] == 1.0
+        assert item["availabilityRatio"] == 1.0
         assert item["name"] in ("Alice", "Bob")
 
 

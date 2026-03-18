@@ -64,8 +64,9 @@ async def test_get_alerts_returns_active_alerts():
     assert len(data) == 1
     assert data[0]["type"] == "stalled_ticket"
     assert data[0]["id"] == str(ALERT_ID)
+    assert data[0]["title"] == "Stalled Ticket"
     assert "description" in data[0]
-    assert "recommended_action" in data[0]
+    assert "recommendedAction" in data[0]
 
 
 @pytest.mark.asyncio

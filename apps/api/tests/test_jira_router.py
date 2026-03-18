@@ -121,3 +121,53 @@ async def test_jira_callback_stores_real_org_id(tmp_db):
         assert conn is not None
         assert str(conn.organization_id) != "00000000-0000-0000-0000-000000000000"
         break
+
+
+@pytest.mark.asyncio
+async def test_board_selection_saves_to_team(tmp_db):
+    """POST /board-selection saves board_id and project_key to the team."""
+    from src.models.organization import Organization
+    from src.models.team import Team
+    from src.models.jira_connection import JiraConnection
+    from src.database import get_db
+    from sqlalchemy import select
+    import uuid
+
+    org_id = uuid.uuid4()
+    team_id = uuid.uuid4()
+    conn_id = uuid.uuid4()
+
+    async for db in app.dependency_overrides[get_db]():
+        org = Organization(id=org_id, clerk_org_id="org_bs", name="BS Org", slug="org_bs", use_managed_key=False)
+        team = Team(id=team_id, organization_id=org_id, name="BS Team", sprint_length_days=14)
+        conn = JiraConnection(
+            id=conn_id,
+            organization_id=org_id,
+            jira_cloud_id="cloud_bs",
+            jira_cloud_url="https://bs.atlassian.net",
+            encrypted_access_token="enc_at",
+            encrypted_refresh_token="enc_rt",
+            is_active=True,
+        )
+        db.add_all([org, team, conn])
+        await db.commit()
+        break
+
+    with _patch_clerk(org_id="org_bs"):
+        # Patch at the sync module level since the router imports lazily
+        with patch("src.integrations.jira.sync.sync_jira_team") as mock_task:
+            mock_task.delay = MagicMock()
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/api/integrations/jira/board-selection",
+                    json={"connection_id": str(conn_id), "board_id": "42", "project_key": "PROJ"},
+                    headers={"Authorization": "Bearer tok"},
+                )
+    assert resp.status_code == 200
+    assert resp.json()["saved"] is True
+
+    async for db in app.dependency_overrides[get_db]():
+        team = await db.get(Team, team_id)
+        assert team.jira_board_id == "42"
+        assert team.jira_project_key == "PROJ"
+        break

@@ -9,7 +9,7 @@ POST /api/organizations
     Returns 201 on creation, 200 if org already existed.
 """
 import uuid
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +40,8 @@ async def provision_organization(
 
     if org:
         team = await db.scalar(select(Team).where(Team.organization_id == org.id))
+        if team is None:
+            raise HTTPException(status_code=500, detail="Organisation exists but has no default team.")
         response.status_code = 200
         return {"orgId": str(org.id), "teamId": str(team.id), "isNew": False}
 

@@ -39,6 +39,16 @@
 
 ---
 
+## Check infrastructure first when debugging network errors
+
+**Pattern:** Browser showed `net::ERR_FAILED` on all authenticated API calls. Spent many steps debugging CORS headers, token expiry, JWT format, and Playwright context — when the real cause was PostgreSQL not running. The DB being down caused a 500 with no CORS headers, which the browser surfaced as `ERR_FAILED`.
+
+**Root cause:** Started debugging at the application layer instead of the infrastructure layer.
+
+**Rule:** When debugging `net::ERR_FAILED` or unexpected 500s, check infrastructure FIRST — DB running? External services reachable? A single connection test takes 5 seconds; chasing application-layer red herrings takes an hour.
+
+---
+
 ## Verify both sides before touching code on a 4xx bug report
 
 **Pattern:** A route returns 401. Assumption is frontend isn't attaching the token or backend is missing auth. Read both sides before changing anything.

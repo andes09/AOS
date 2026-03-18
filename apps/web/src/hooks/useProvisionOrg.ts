@@ -16,11 +16,14 @@ export function useProvisionOrg() {
   useEffect(() => {
     if (!organization || status !== 'idle') return
 
+    let cancelled = false
     setStatus('loading')
     api
       .post('/api/organizations', { name: organization.name })
-      .then(() => setStatus('done'))
-      .catch(() => setStatus('error'))
+      .then(() => { if (!cancelled) setStatus('done') })
+      .catch(() => { if (!cancelled) setStatus('error') })
+
+    return () => { cancelled = true }
   }, [organization?.id]) // re-run if org switches
 
   return { provisioned: status === 'done', error: status === 'error' }

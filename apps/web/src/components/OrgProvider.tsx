@@ -14,7 +14,37 @@ export function OrgProvider({ children }: Props) {
   const { organization, isLoaded } = useOrganization()
   const { provisioned, error } = useProvisionOrg()
 
-  if (!isLoaded || (!provisioned && !error)) {
+  if (!isLoaded) {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        color: '#64748b',
+        fontSize: 14,
+      }}>
+        Setting up workspace…
+      </div>
+    )
+  }
+
+  if (!organization) {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        color: '#64748b',
+        fontSize: 14,
+      }}>
+        No organisation found. Please sign in with an organisation account.
+      </div>
+    )
+  }
+
+  if (!provisioned && !error) {
     return (
       <div style={{
         display: 'flex',
@@ -40,21 +70,6 @@ export function OrgProvider({ children }: Props) {
         fontSize: 14,
       }}>
         Failed to initialize workspace. Please refresh.
-      </div>
-    )
-  }
-
-  if (!organization) {
-    return (
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100vh',
-        color: '#64748b',
-        fontSize: 14,
-      }}>
-        No organisation found. Please sign in with an organisation account.
       </div>
     )
   }

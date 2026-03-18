@@ -55,8 +55,8 @@ async def test_current_sprint_returns_active_sprint():
     assert response.status_code == 200
     data = response.json()
     assert data["name"] == "Sprint 12"
-    assert data["committed_points"] == 40.0
-    assert data["delivered_points"] == 12.0
+    assert data["totalPoints"] == 40.0
+    assert data["sprintLength"] == 14
     assert data["status"] == "active"
 
 

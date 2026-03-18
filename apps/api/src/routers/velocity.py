@@ -14,10 +14,11 @@ GET /api/teams/{team_id}/capacity
 """
 import uuid
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,10 +59,14 @@ class TeamVelocityResponse(BaseModel):
 
 
 class DeveloperCapacityItem(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
     developer_id: str
     name: str
     available_days: float
     availability_ratio: float
+    committed_points: float = 0.0
+    completed_points: float = 0.0
+    is_over_capacity: bool = False
 
 
 class TeamCapacityResponse(BaseModel):
@@ -315,29 +320,33 @@ async def get_team_capacity(
 # ---------------------------------------------------------------------------
 
 
-class BurndownPoint(BaseModel):
-    date: date
-    points: float
+class BurndownDataPoint(BaseModel):
+    day: int
+    ideal: float
+    actual: float | None
+    predicted: float | None
 
 
 class BurndownResponse(BaseModel):
-    sprint_id: str
-    ideal: list[BurndownPoint]
-    actual: list[BurndownPoint]
-    predicted: list[BurndownPoint]
-    is_at_risk: bool
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    data: list[BurndownDataPoint]
+    sprint_length: int
+    predicted_end_day: int
 
 
 class SprintCapacityResponse(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
     sprint_id: str
     sprint_length_days: int
     capacity: list[DeveloperCapacityItem]
 
 
 class HealthScoreResponse(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
     score: int
     trend: str
     reasons: list[str]
+    updated_at: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -345,35 +354,30 @@ class HealthScoreResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _build_ideal(start: date, end: date, committed: float) -> list[BurndownPoint]:
-    total_days = (end - start).days
-    if total_days <= 0:
-        return [BurndownPoint(date=start, points=committed)]
-    return [
-        BurndownPoint(date=start + timedelta(days=i), points=round(committed * (1 - i / total_days), 2))
-        for i in range(total_days + 1)
-    ]
-
-
-def _build_predicted(
+def _build_burndown_data(
     start: date, end: date, committed: float, remaining: float, today: date
-) -> list[BurndownPoint]:
-    days_elapsed = max((today - start).days, 1)
+) -> tuple[list[BurndownDataPoint], int]:
+    """Build merged burndown data points indexed by sprint day, plus predicted end day."""
+    total_days = max((end - start).days, 1)
+    days_elapsed = max((today - start).days, 0)
     burned = committed - remaining
-    daily_burn = burned / days_elapsed if days_elapsed > 0 else 0
-    if daily_burn <= 0:
-        return [BurndownPoint(date=today, points=remaining), BurndownPoint(date=end, points=remaining)]
-    days_to_zero = remaining / daily_burn
-    predicted_end = today + timedelta(days=days_to_zero)
-    points = [BurndownPoint(date=today, points=round(remaining, 2))]
-    step = max(1, int(days_to_zero / 5))
-    d = today + timedelta(days=step)
-    while d < predicted_end:
-        pts = max(0.0, remaining - daily_burn * (d - today).days)
-        points.append(BurndownPoint(date=d, points=round(pts, 2)))
-        d += timedelta(days=step)
-    points.append(BurndownPoint(date=predicted_end, points=0.0))
-    return points
+    daily_burn = burned / max(days_elapsed, 1) if days_elapsed > 0 else 0
+    days_to_zero = (remaining / daily_burn) if daily_burn > 0 else total_days
+    predicted_end_day = min(int(days_elapsed + days_to_zero), total_days * 2)
+
+    points: list[BurndownDataPoint] = []
+    for i in range(total_days + 1):
+        ideal = round(committed * (1 - i / total_days), 2)
+        actual: float | None = None
+        if i <= days_elapsed:
+            actual = max(0.0, round(committed - (burned * i / max(days_elapsed, 1)), 2))
+        predicted: float | None = None
+        if i >= days_elapsed:
+            pred_val = remaining - daily_burn * (i - days_elapsed)
+            predicted = round(max(0.0, pred_val), 2)
+        points.append(BurndownDataPoint(day=i, ideal=ideal, actual=actual, predicted=predicted))
+
+    return points, predicted_end_day
 
 
 def _compute_health_score(
@@ -450,12 +454,10 @@ async def get_burndown(
     start = sprint.start_date or today
     end = sprint.end_date or (start + timedelta(days=team.sprint_length_days))
 
-    ideal = _build_ideal(start, end, committed)
-    actual = [BurndownPoint(date=today, points=round(remaining, 2))]
-    predicted = _build_predicted(start, end, committed, remaining, today)
-    is_at_risk = bool(predicted and predicted[-1].date > end)
+    data, predicted_end_day = _build_burndown_data(start, end, committed, remaining, today)
+    sprint_length = (end - start).days
 
-    return BurndownResponse(sprint_id=str(sprint.id), ideal=ideal, actual=actual, predicted=predicted, is_at_risk=is_at_risk)
+    return BurndownResponse(data=data, sprint_length=sprint_length, predicted_end_day=predicted_end_day)
 
 
 @dashboard_router.get("/capacity", response_model=SprintCapacityResponse)
@@ -526,4 +528,4 @@ async def get_health_score(
         committed=committed, remaining=remaining, start=start, end=end,
         today=today, ticket_count=len(tickets), completed_count=completed_count,
     )
-    return HealthScoreResponse(score=score, trend=trend, reasons=reasons)
+    return HealthScoreResponse(score=score, trend=trend, reasons=reasons, updated_at=datetime.now(timezone.utc))

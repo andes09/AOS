@@ -336,3 +336,61 @@ def _upsert_issues(db: Session, team, sprint, jira_issues: list[dict]):
 
         if ticket_status == TicketStatus.DONE and not ticket.completed_at:
             ticket.completed_at = _parse_datetime(fields.get("resolutiondate")) or datetime.utcnow()
+
+
+@celery_app.task
+def sync_all_teams():
+    """Full sync for every org that has an active Jira connection and a configured board."""
+    from src.models.jira_connection import JiraConnection
+    from src.models.team import Team
+
+    db = _get_sync_session()
+    try:
+        connections = db.execute(
+            select(JiraConnection).where(JiraConnection.is_active == True)
+        ).scalars().all()
+
+        for conn in connections:
+            teams = db.execute(
+                select(Team).where(
+                    Team.organization_id == conn.organization_id,
+                    Team.jira_board_id.isnot(None),
+                )
+            ).scalars().all()
+            for team in teams:
+                sync_jira_team.delay(str(team.id))
+    finally:
+        db.close()
+
+
+@celery_app.task
+def incremental_sync_all_teams():
+    """Incremental sync of the active sprint for every configured team."""
+    from src.models.jira_connection import JiraConnection
+    from src.models.team import Team
+    from src.models.sprint import Sprint, SprintStatus
+
+    db = _get_sync_session()
+    try:
+        connections = db.execute(
+            select(JiraConnection).where(JiraConnection.is_active == True)
+        ).scalars().all()
+
+        for conn in connections:
+            teams = db.execute(
+                select(Team).where(
+                    Team.organization_id == conn.organization_id,
+                    Team.jira_board_id.isnot(None),
+                )
+            ).scalars().all()
+            for team in teams:
+                active_sprint = db.execute(
+                    select(Sprint).where(
+                        Sprint.team_id == team.id,
+                        Sprint.status == SprintStatus.ACTIVE,
+                    )
+                ).scalar_one_or_none()
+                if active_sprint and active_sprint.jira_sprint_id:
+                    sync_jira_sprint.delay(str(team.id), active_sprint.jira_sprint_id)
+    finally:
+        db.close()

@@ -1,6 +1,7 @@
 // apps/web/src/components/mirror/DeveloperCapacityRow.tsx
 
 import { useQuery } from '@tanstack/react-query'
+import { useAuth } from '@clerk/clerk-react'
 import { useApi } from '../../lib/api'
 
 export interface DeveloperCapacity {
@@ -110,11 +111,12 @@ function DevCard({ dev }: { dev: DeveloperCapacity }) {
 
 export function DeveloperCapacityRow({ developers }: DeveloperCapacityRowProps) {
   const { get } = useApi()
+  const { isLoaded, isSignedIn } = useAuth()
 
   const query = useQuery<SprintCapacityResponse>({
     queryKey: ['velocity-capacity'],
     queryFn: () => get<SprintCapacityResponse>('/api/velocity/capacity'),
-    enabled: !developers,
+    enabled: !developers && isLoaded && !!isSignedIn,
   })
 
   const devs = developers ?? query.data?.capacity ?? []

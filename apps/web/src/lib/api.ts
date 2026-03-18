@@ -7,6 +7,7 @@ export function useApi() {
 
   async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const token = await getToken()
+    if (!token) throw new Error('Not authenticated')
     const response = await fetch(`${API_URL}${path}`, {
       ...options,
       headers: {

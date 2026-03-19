@@ -15,6 +15,8 @@ export function ConnectJiraStep({ onNext }: ConnectJiraStepProps) {
   const { get } = useApi()
 
   // Backend redirects back here with ?connection_id= after successful OAuth.
+  // Dependency array is intentionally empty — this must run exactly once on mount.
+  // Adding searchParams/onNext as deps would cause a re-entrant loop on each render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const connectionId = searchParams.get('connection_id')

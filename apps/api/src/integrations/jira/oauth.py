@@ -25,7 +25,7 @@ async def exchange_code_for_tokens(code: str) -> dict:
     async with httpx.AsyncClient() as client:
         response = await client.post(
             JIRA_TOKEN_URL,
-            json={
+            data={
                 "grant_type": "authorization_code",
                 "client_id": settings.jira_client_id,
                 "client_secret": settings.jira_client_secret,
@@ -51,7 +51,7 @@ async def refresh_access_token(refresh_token: str) -> dict:
     async with httpx.AsyncClient() as client:
         response = await client.post(
             JIRA_TOKEN_URL,
-            json={
+            data={
                 "grant_type": "refresh_token",
                 "client_id": settings.jira_client_id,
                 "client_secret": settings.jira_client_secret,

@@ -18,6 +18,16 @@ class JiraClient:
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.access_token}", "Accept": "application/json"}
 
+    async def get_projects(self) -> list[dict]:
+        async with httpx.AsyncClient() as c:
+            r = await c.get(
+                f"{self.base_url}/project/search",
+                headers=self._headers(),
+                params={"maxResults": 50, "orderBy": "name"},
+            )
+            r.raise_for_status()
+            return r.json().get("values", [])
+
     async def get_boards(self) -> list[dict]:
         async with httpx.AsyncClient() as c:
             r = await c.get(

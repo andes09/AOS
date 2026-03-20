@@ -14,6 +14,8 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    broker_transport_options={"socket_connect_timeout": 2, "socket_timeout": 2},
+    broker_connection_retry=False,
 )
 
 celery_app.conf.beat_schedule = {

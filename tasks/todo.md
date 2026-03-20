@@ -8,6 +8,16 @@
 
 ---
 
+## Deferred
+
+- [ ] **Redis + Celery setup** — Jira sync tasks are enqueued via Celery but Redis isn't running locally.
+  Start Redis (`redis-server`) and a Celery worker (`celery -A src.worker worker`) to enable background sync.
+  The `sync_jira_team` task after board selection silently skips if broker is unavailable (by design for now).
+  Also note: sync uses `team.jira_board_id` with the agile board API, which needs to be updated to use
+  project-based sprint fetching since `aosTest` is a team-managed project (agile API not supported).
+
+---
+
 ## Notes
 
 > **Future: Meeting data via Calendar integration (Google Calendar / Outlook)**

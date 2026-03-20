@@ -19,8 +19,28 @@ from src.auth import get_current_org_id
 from src.database import get_db
 from src.models.organization import Organization
 from src.models.team import Team
+from src.services.encryption import encrypt
 
 router = APIRouter(prefix="/api/organizations", tags=["organizations"])
+settings_router = APIRouter(prefix="/api/settings", tags=["settings"])
+
+
+class AnthropicKeyRequest(BaseModel):
+    key: str
+
+
+@settings_router.post("/anthropic-key")
+async def save_anthropic_key(
+    body: AnthropicKeyRequest,
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+    org.encrypted_anthropic_key = encrypt(body.key.strip())
+    await db.commit()
+    return {"saved": True}
 
 
 class ProvisionRequest(BaseModel):

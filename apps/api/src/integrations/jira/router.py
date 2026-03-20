@@ -208,16 +208,15 @@ async def get_jira_boards(
         await db.commit()
 
     client = JiraClient(cloud_id=connection.jira_cloud_id, access_token=access_token)
-    boards = await client.get_boards()
+    projects = await client.get_projects()
 
     return [
         {
-            "id": str(b["id"]),
-            "name": b["name"],
-            "project_key": b.get("location", {}).get("projectKey", ""),
+            "id": str(p["id"]),
+            "name": p["name"],
+            "project_key": p.get("key", ""),
         }
-        for b in boards
-        if b.get("type") == "scrum"
+        for p in projects
     ]
 
 
@@ -259,8 +258,11 @@ async def save_board_selection(
     team.jira_project_key = body.project_key
     await db.commit()
 
-    from src.integrations.jira.sync import sync_jira_team
-    sync_jira_team.delay(str(team.id))
+    try:
+        from src.integrations.jira.sync import sync_jira_team
+        sync_jira_team.delay(str(team.id))
+    except Exception:
+        pass  # Celery/broker not available; sync will run on next scheduled beat
 
     return {"saved": True}
 

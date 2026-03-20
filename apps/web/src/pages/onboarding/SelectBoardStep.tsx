@@ -70,7 +70,7 @@ export function SelectBoardStep({ connectionId, onNext, onBack }: SelectBoardSte
         <div style={{ marginBottom: '1.5rem' }}>
           {boards.length === 0 ? (
             <div style={{ color: '#64748b', fontSize: 14 }}>
-              No scrum boards found. Make sure your Jira account has access to at least one scrum project.
+              No boards found. Make sure your Jira account has access to at least one project board.
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

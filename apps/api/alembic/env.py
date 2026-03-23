@@ -42,18 +42,25 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
+    import sys
+    print("[migration] building engine", flush=True, file=sys.stderr)
     configuration = config.get_section(config.config_ini_section, {})
     configuration["sqlalchemy.url"] = _get_url()
     connectable = async_engine_from_config(
         configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args={"command_timeout": 30},
     )
+    print("[migration] connecting", flush=True, file=sys.stderr)
     async with connectable.connect() as connection:
-        # Fail fast if a previous deployment holds a DDL lock instead of hanging
+        print("[migration] connected — setting lock_timeout", flush=True, file=sys.stderr)
         await connection.execute(text("SET lock_timeout = '15s'"))
+        print("[migration] running migrations", flush=True, file=sys.stderr)
         await connection.run_sync(do_run_migrations)
+        print("[migration] done", flush=True, file=sys.stderr)
     await connectable.dispose()
+    print("[migration] disposed", flush=True, file=sys.stderr)
 
 
 def run_migrations_online() -> None:

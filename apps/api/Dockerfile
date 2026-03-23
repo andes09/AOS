@@ -2,6 +2,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Force Python stdout/stderr to be unbuffered so logs appear in Railway
+ENV PYTHONUNBUFFERED=1
+
 # Install uv
 RUN pip install uv
 

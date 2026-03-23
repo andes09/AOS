@@ -2,12 +2,11 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Copy package files from apps/web (build context is repo root)
-COPY apps/web/package*.json ./
+# Build context is apps/web (Railway Root Directory = apps/web)
+COPY package*.json ./
 RUN npm install
 
-# Copy source and build
-COPY apps/web/ .
+COPY . .
 RUN npm run build
 
 # Production stage - serve the static build

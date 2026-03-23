@@ -3,7 +3,7 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 
 # Build context is apps/web (Railway Root Directory = apps/web)
-COPY package*.json ./
+COPY package.json .npmrc ./
 RUN npm install
 
 COPY . .

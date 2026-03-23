@@ -1,6 +1,4 @@
 import logging
-import sys
-print("[startup] loading src.main", flush=True, file=sys.stderr)
 from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse

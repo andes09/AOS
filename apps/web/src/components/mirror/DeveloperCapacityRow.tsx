@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@clerk/clerk-react'
-import { useApi } from '../../lib/api'
+import { useApi, ApiError } from '../../lib/api'
 
 export interface DeveloperCapacity {
   developerId: string
@@ -113,7 +113,7 @@ export function DeveloperCapacityRow({ developers }: DeveloperCapacityRowProps) 
   const { get } = useApi()
   const { isLoaded, isSignedIn } = useAuth()
 
-  const query = useQuery<SprintCapacityResponse>({
+  const query = useQuery<SprintCapacityResponse, ApiError>({
     queryKey: ['velocity-capacity'],
     queryFn: () => get<SprintCapacityResponse>('/api/velocity/capacity'),
     enabled: !developers && isLoaded && !!isSignedIn,
@@ -130,9 +130,10 @@ export function DeveloperCapacityRow({ developers }: DeveloperCapacityRowProps) 
   }
 
   if (!developers && query.isError) {
+    const is404 = query.error instanceof ApiError && query.error.status === 404
     return (
-      <div style={{ background: '#1e2030', borderRadius: 8, padding: '0.875rem 1rem', color: '#ef4444', fontSize: 13 }}>
-        Failed to load capacity data
+      <div style={{ background: '#1e2030', borderRadius: 8, padding: '0.875rem 1rem', color: is404 ? '#475569' : '#ef4444', fontSize: 13 }}>
+        {is404 ? 'No active sprint — capacity data unavailable' : 'Failed to load capacity data'}
       </div>
     )
   }

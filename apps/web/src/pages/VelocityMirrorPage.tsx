@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@clerk/clerk-react'
-import { useApi } from '../lib/api'
+import { useApi, ApiError } from '../lib/api'
 import { BurndownChart } from '../components/mirror/BurndownChart'
 import { DeveloperCapacityRow } from '../components/mirror/DeveloperCapacityRow'
 import { AlertFeed } from '../components/mirror/AlertFeed'
@@ -21,7 +21,7 @@ export function VelocityMirrorPage() {
   const { get } = useApi()
   const { isLoaded, isSignedIn } = useAuth()
 
-  const { data: sprint, isLoading, isError } = useQuery<CurrentSprint>({
+  const { data: sprint, isLoading, isError, error } = useQuery<CurrentSprint, ApiError>({
     queryKey: ['current-sprint'],
     queryFn: () => get<CurrentSprint>('/api/sprints/current'),
     enabled: isLoaded && isSignedIn,
@@ -45,7 +45,9 @@ export function VelocityMirrorPage() {
             <div style={{ color: '#64748b', fontSize: 13, marginTop: 4 }}>Loading sprint…</div>
           )}
           {isError && (
-            <div style={{ color: '#ef4444', fontSize: 13, marginTop: 4 }}>Could not load sprint data</div>
+            <div style={{ color: error instanceof ApiError && error.status === 404 ? '#475569' : '#ef4444', fontSize: 13, marginTop: 4 }}>
+              {error instanceof ApiError && error.status === 404 ? 'No active sprint — connect Jira to get started' : 'Could not load sprint data'}
+            </div>
           )}
           {sprint && (
             <div style={{ color: '#64748b', fontSize: 13, marginTop: 4 }}>

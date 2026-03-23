@@ -20,16 +20,20 @@ async def test_health_does_not_require_auth():
     assert response.status_code == 200
 
 
+def _mock_state(payload: dict | None):
+    state = MagicMock()
+    state.is_signed_in = payload is not None
+    state.payload = payload
+    return state
+
+
 @pytest.mark.asyncio
 async def test_get_current_org_id_returns_org_id():
     from src.auth import get_current_org_id
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="valid-token")
-    with patch("src.auth.httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
-        instance.get = AsyncMock(return_value=MagicMock(
-            status_code=200,
-            json=lambda: {"sub": "user_abc", "org_id": "org_clerk_123"},
-        ))
+    with patch("src.auth._clerk.authenticate_request_async", new=AsyncMock(
+        return_value=_mock_state({"sub": "user_abc", "org_id": "org_clerk_123"})
+    )):
         result = await get_current_org_id(credentials)
     assert result == "org_clerk_123"
 
@@ -38,12 +42,9 @@ async def test_get_current_org_id_returns_org_id():
 async def test_get_current_org_id_raises_403_when_no_org_in_token():
     from src.auth import get_current_org_id
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="personal-token")
-    with patch("src.auth.httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
-        instance.get = AsyncMock(return_value=MagicMock(
-            status_code=200,
-            json=lambda: {"sub": "user_abc"},  # no org_id
-        ))
+    with patch("src.auth._clerk.authenticate_request_async", new=AsyncMock(
+        return_value=_mock_state({"sub": "user_abc"})  # no org_id
+    )):
         with pytest.raises(HTTPException) as exc_info:
             await get_current_org_id(credentials)
     assert exc_info.value.status_code == 403
@@ -53,12 +54,9 @@ async def test_get_current_org_id_raises_403_when_no_org_in_token():
 async def test_get_current_org_id_raises_401_on_bad_token():
     from src.auth import get_current_org_id
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="bad-token")
-    with patch("src.auth.httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
-        instance.get = AsyncMock(return_value=MagicMock(
-            status_code=401,
-            json=lambda: {},
-        ))
+    with patch("src.auth._clerk.authenticate_request_async", new=AsyncMock(
+        return_value=_mock_state(None)  # not signed in
+    )):
         with pytest.raises(HTTPException) as exc_info:
             await get_current_org_id(credentials)
     assert exc_info.value.status_code == 401
@@ -68,12 +66,9 @@ async def test_get_current_org_id_raises_401_on_bad_token():
 async def test_get_current_user_id_raises_401_when_sub_missing():
     from src.auth import get_current_user_id
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token")
-    with patch("src.auth.httpx.AsyncClient") as MockClient:
-        instance = MockClient.return_value.__aenter__.return_value
-        instance.get = AsyncMock(return_value=MagicMock(
-            status_code=200,
-            json=lambda: {},  # no sub claim
-        ))
+    with patch("src.auth._clerk.authenticate_request_async", new=AsyncMock(
+        return_value=_mock_state({})  # no sub claim
+    )):
         with pytest.raises(HTTPException) as exc_info:
             await get_current_user_id(credentials)
     assert exc_info.value.status_code == 401

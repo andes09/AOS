@@ -26,8 +26,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.auth import get_current_user_id
+from sqlalchemy import select
+
+from src.auth import get_current_user_id, get_current_org_id
 from src.database import get_db
+from src.models.organization import Organization
+from src.services.encryption import decrypt
 from src.services.sprint_brain import (
     SprintBrainInput,
     SprintBrainOutput,
@@ -63,27 +67,14 @@ class WhatIfRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-async def _get_anthropic_key(user_id: str, db: AsyncSession) -> str:
-    """
-    STUB — fetch the organisation's encrypted Anthropic API key and decrypt it.
-
-    TODO (coordinator): implement once these are available:
-      - src.models.organization.Organization  (Track C)
-      - src.services.encryption.decrypt       (Track B / encryption service)
-
-    Expected implementation sketch:
-        org = await db.scalar(select(Organization).where(Organization.owner_id == user_id))
-        if not org or not org.encrypted_anthropic_key:
-            raise HTTPException(402, "No Anthropic key configured — add it in Settings.")
-        return decrypt(org.encrypted_anthropic_key)
-    """
-    raise HTTPException(
-        status_code=status.HTTP_402_PAYMENT_REQUIRED,
-        detail=(
-            "No Anthropic API key configured. "
-            "Please add your key in Settings → Integrations → Anthropic."
-        ),
-    )
+async def _get_anthropic_key(clerk_org_id: str, db: AsyncSession) -> str:
+    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+    if not org or not org.encrypted_anthropic_key:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="No Anthropic API key configured. Please add your key in Settings.",
+        )
+    return decrypt(org.encrypted_anthropic_key)
 
 
 async def _get_developer_profiles(team_id: str, db: AsyncSession) -> list[dict]:
@@ -215,7 +206,7 @@ async def _build_brain_input(
 @router.post("/plan")
 async def create_sprint_plan(
     request: PlanRequest,
-    user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -225,7 +216,7 @@ async def create_sprint_plan(
     asks Claude to assign tickets to developers and return a confidence score,
     plain-English summary, risk warnings, and what-if analysis for each ticket.
     """
-    api_key = await _get_anthropic_key(user_id, db)
+    api_key = await _get_anthropic_key(clerk_org_id, db)
 
     brain_input, sprint_start = await _build_brain_input(
         team_id=request.team_id,
@@ -250,7 +241,7 @@ async def create_sprint_plan(
 @router.post("/what-if")
 async def what_if_scenario(
     request: WhatIfRequest,
-    user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -260,7 +251,7 @@ async def what_if_scenario(
     pool and returns the revised plan. Compare `confidence_score` before and
     after to quantify the benefit of descoping.
     """
-    api_key = await _get_anthropic_key(user_id, db)
+    api_key = await _get_anthropic_key(clerk_org_id, db)
 
     brain_input, sprint_start = await _build_brain_input(
         team_id=request.team_id,

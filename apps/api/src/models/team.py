@@ -13,6 +13,7 @@ class Team(Base):
     organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), index=True)
     name: Mapped[str] = mapped_column(String(255))
     jira_board_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    jira_project_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
     sprint_length_days: Mapped[int] = mapped_column(Integer, default=14)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

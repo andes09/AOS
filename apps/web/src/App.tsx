@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { SignedIn, SignedOut, RedirectToSignIn, SignIn } from '@clerk/clerk-react'
 import { DashboardLayout } from './layouts/DashboardLayout'
+import { OrgProvider } from './components/OrgProvider'
 import { SprintPlannerPage } from './pages/SprintPlannerPage'
 import { VelocityMirrorPage } from './pages/VelocityMirrorPage'
 import { OnboardingPage } from './pages/OnboardingPage'
@@ -20,7 +21,9 @@ export default function App() {
       <Route path="/app" element={
         <>
           <SignedIn>
-            <DashboardLayout />
+            <OrgProvider>
+              <DashboardLayout />
+            </OrgProvider>
           </SignedIn>
           <SignedOut>
             <RedirectToSignIn />

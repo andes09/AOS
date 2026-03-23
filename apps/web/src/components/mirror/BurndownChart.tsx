@@ -13,7 +13,7 @@ import {
   ReferenceArea,
   ResponsiveContainer,
 } from 'recharts'
-import { useApi } from '../../lib/api'
+import { useApi, ApiError } from '../../lib/api'
 
 export interface BurndownDataPoint {
   day: number
@@ -59,9 +59,12 @@ export function BurndownChart({ data, sprintLength, predictedEndDay }: BurndownC
   }
 
   if (!data && query.isError) {
+    const is404 = query.error instanceof ApiError && query.error.status === 404
     return (
       <div style={{ background: '#1e2030', borderRadius: 8, padding: '1.5rem', height: 280, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <span style={{ color: '#ef4444', fontSize: 13 }}>Failed to load burndown data</span>
+        <span style={{ color: is404 ? '#475569' : '#ef4444', fontSize: 13 }}>
+          {is404 ? 'No active sprint — connect Jira to sync sprint data' : 'Failed to load burndown data'}
+        </span>
       </div>
     )
   }

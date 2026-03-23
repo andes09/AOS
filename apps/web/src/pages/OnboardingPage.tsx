@@ -16,13 +16,21 @@ export function OnboardingPage() {
     const saved = localStorage.getItem(STORAGE_KEY)
     return saved ? parseInt(saved, 10) : 0
   })
+  // connectionId is set when the backend OAuth callback returns ?connection_id=.
+  // Known limitation: this is held in React state only — a page refresh while on
+  // SelectBoardStep will lose it, leaving the boards query disabled. The user
+  // must re-connect Jira in that case (step 0 will re-run the OAuth flow).
+  const [connectionId, setConnectionId] = useState<string | null>(null)
 
   function goTo(next: number) {
     localStorage.setItem(STORAGE_KEY, String(next))
     setStep(next)
   }
 
-  function advance() {
+  function advance(data?: string) {
+    if (typeof data === 'string') {
+      setConnectionId(data)
+    }
     if (step === STEPS.length - 1) {
       localStorage.removeItem(STORAGE_KEY)
       navigate('/app/sprint-planner')
@@ -70,7 +78,7 @@ export function OnboardingPage() {
       </div>
 
       {step === 0 && <ConnectJiraStep onNext={advance} />}
-      {step === 1 && <SelectBoardStep onNext={advance} onBack={back} />}
+      {step === 1 && <SelectBoardStep connectionId={connectionId ?? ''} onNext={advance} onBack={back} />}
       {step === 2 && <SaveAnthropicKeyStep onNext={advance} onBack={back} />}
     </OnboardingLayout>
   )

@@ -32,5 +32,9 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.environment == "production"
 
+    @property
+    def allowed_origins(self) -> list[str]:
+        return [u.strip() for u in self.frontend_url.split(",")]
+
 
 settings = Settings()

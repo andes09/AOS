@@ -2,7 +2,7 @@
 buildCommand = "npm install && npm run build"
 
 [deploy]
-startCommand = "sh -c 'npx serve dist --single -l $PORT'"
+startCommand = "sh -c 'npm run preview -- --port $PORT --host 0.0.0.0'"
 healthcheckPath = "/"
 healthcheckTimeout = 60
 restartPolicyType = "on_failure"

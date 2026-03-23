@@ -1,7 +1,7 @@
 import asyncio
 from logging.config import fileConfig
 
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -50,6 +50,8 @@ async def run_async_migrations() -> None:
         poolclass=pool.NullPool,
     )
     async with connectable.connect() as connection:
+        # Fail fast if a previous deployment holds a DDL lock instead of hanging
+        await connection.execute(text("SET lock_timeout = '15s'"))
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
 

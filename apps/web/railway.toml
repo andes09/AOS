@@ -1,0 +1,9 @@
+[build]
+buildCommand = "npm install && npm run build"
+
+[deploy]
+startCommand = "sh -c 'npx serve dist --single -l $PORT'"
+healthcheckPath = "/"
+healthcheckTimeout = 60
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3

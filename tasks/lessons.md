@@ -159,3 +159,29 @@
 
 **Rule:** Before committing, run `git status` and ask: "Does any uncommitted file affect the correctness or testability of what I'm about to commit?" If yes, commit it together or first.
 
+---
+
+## Railway Dockerfile deployments do not expand shell variables in startCommand
+
+**Pattern:** `startCommand = "uvicorn ... --port $PORT"` caused uvicorn to receive the literal string `$PORT` instead of the actual port number. Healthcheck failed with "service unavailable" and deploy logs showed `Error: Invalid value for '--port': '$PORT' is not a valid integer`.
+
+**Root cause:** Railway runs `startCommand` in exec form (no shell) for Dockerfile-based deployments. Shell variable expansion (`$PORT`) only happens when a shell processes the command.
+
+**Rule:** Always wrap Railway `startCommand` in `sh -c '...'` for Dockerfile deployments: `startCommand = "sh -c 'uvicorn ... --port $PORT'"`.
+
+---
+
+## PYTHONUNBUFFERED=1 is required in Python Docker containers
+
+**Pattern:** Python process was crashing on startup with no output in Railway deploy logs. The error existed but was buffered in memory and never flushed before the process exited.
+
+**Rule:** Always set `ENV PYTHONUNBUFFERED=1` in Python Dockerfiles. Without it, stdout/stderr are buffered and crash output is silently lost.
+
+---
+
+## Decouple alembic migrations from the server start command
+
+**Pattern:** Running `alembic upgrade head && uvicorn ...` in `startCommand` caused healthcheck failures whenever the migration hung or was slow. The `&&` meant uvicorn never started if alembic failed, and the healthcheck timer ran against both operations combined.
+
+**Rule:** Use Railway's `preDeployCommand` for migrations and `startCommand` only for the server. Migrations and server availability are independent concerns — don't couple them.
+

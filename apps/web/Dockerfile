@@ -12,7 +12,11 @@ RUN npm run build
 # Production stage — nginx for static serving
 FROM nginx:alpine
 
-# Remove default config; nginx docker image auto-runs envsubst on *.conf.template
 RUN rm /etc/nginx/conf.d/default.conf
-COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY nginx.conf.template /tmp/nginx.conf.template
 COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Explicitly substitute only $PORT (with fallback to 3000), then start nginx.
+# Avoids relying on the nginx entrypoint's template magic which silently drops
+# variables that aren't set in the environment.
+CMD ["/bin/sh", "-c", "export PORT=${PORT:-3000} && envsubst '$PORT' < /tmp/nginx.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]

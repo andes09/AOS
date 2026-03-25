@@ -9,12 +9,10 @@ RUN npm install
 COPY . .
 RUN npm run build
 
-# Production stage - serve the static build
-FROM node:22-alpine
+# Production stage — nginx for static serving
+FROM nginx:alpine
 
-WORKDIR /app
-RUN npm install -g serve
-COPY --from=builder /app/dist ./dist
-
-EXPOSE 3000
-CMD sh -c "serve -s dist --listen tcp://0.0.0.0:${PORT:-3000}"
+# Remove default config; nginx docker image auto-runs envsubst on *.conf.template
+RUN rm /etc/nginx/conf.d/default.conf
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY --from=builder /app/dist /usr/share/nginx/html

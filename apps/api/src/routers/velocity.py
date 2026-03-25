@@ -16,7 +16,7 @@ import uuid
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
@@ -32,6 +32,7 @@ from src.models.team import Team
 from src.models.velocity import DeveloperVelocityProfile
 from src.services.velocity import CapacityModel
 from src.services.velocity.schemas import SprintMeta
+from src.services.velocity.stats import compute_velocity_stats
 
 router = APIRouter(prefix="/api/teams", tags=["velocity"])
 dashboard_router = APIRouter(prefix="/api/velocity", tags=["velocity-dashboard"])
@@ -349,6 +350,40 @@ class HealthScoreResponse(BaseModel):
     updated_at: datetime
 
 
+class ConfidenceIntervalRange(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    lower: float
+    upper: float
+
+
+class ForecastRange(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    point: float
+    lower: float
+    upper: float
+
+
+class SprintPoint(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    name: str
+    velocity: float
+
+
+class VelocityStatsResponse(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    team_id: str
+    window: int
+    sprint_count: int
+    rolling_avg: float
+    weighted_avg: float
+    std_dev: float
+    trend: float
+    confidence_interval: ConfidenceIntervalRange
+    outlier_sprints: list[str]
+    forecast: ForecastRange
+    sprint_window: list[SprintPoint]
+
+
 # ---------------------------------------------------------------------------
 # Dashboard helpers
 # ---------------------------------------------------------------------------
@@ -529,3 +564,66 @@ async def get_health_score(
         today=today, ticket_count=len(tickets), completed_count=completed_count,
     )
     return HealthScoreResponse(score=score, trend=trend, reasons=reasons, updated_at=datetime.now(timezone.utc))
+
+
+@dashboard_router.get("/stats", response_model=VelocityStatsResponse)
+async def get_velocity_stats(
+    window: int = Query(default=6, ge=3, le=12),
+    team: Team = Depends(resolve_team_query),
+    db: AsyncSession = Depends(get_db),
+):
+    """Statistical velocity analysis for the team over the last N completed sprints."""
+    sprints = (
+        await db.scalars(
+            select(Sprint)
+            .where(
+                Sprint.team_id == team.id,
+                Sprint.status == SprintStatus.COMPLETED,
+                Sprint.delivered_points.isnot(None),
+            )
+            .order_by(Sprint.end_date.asc())
+        )
+    ).all()
+
+    if len(sprints) < 3:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Insufficient sprint data (need at least 3 completed sprints with delivered points)",
+        )
+
+    velocities = [float(s.delivered_points) for s in sprints]
+    stats = compute_velocity_stats(velocities, window=window)
+
+    # Map outlier indices (relative to window slice) → sprint IDs
+    window_sprints = list(sprints[-window:])
+    outlier_sprint_ids = [
+        str(window_sprints[i].id)
+        for i in stats.outlier_sprint_indices
+        if i < len(window_sprints)
+    ]
+
+    sprint_window_points = [
+        SprintPoint(name=s.name, velocity=float(s.delivered_points))
+        for s in window_sprints
+    ]
+
+    return VelocityStatsResponse(
+        team_id=str(team.id),
+        window=window,
+        sprint_count=len(sprints),
+        rolling_avg=stats.rolling_avg,
+        weighted_avg=stats.weighted_avg,
+        std_dev=stats.std_dev,
+        trend=stats.trend,
+        confidence_interval=ConfidenceIntervalRange(
+            lower=stats.ci_lower,
+            upper=stats.ci_upper,
+        ),
+        outlier_sprints=outlier_sprint_ids,
+        forecast=ForecastRange(
+            point=stats.forecast_point,
+            lower=stats.forecast_lower,
+            upper=stats.forecast_upper,
+        ),
+        sprint_window=sprint_window_points,
+    )

@@ -7,6 +7,7 @@ import { BurndownChart } from '../components/mirror/BurndownChart'
 import { DeveloperCapacityRow } from '../components/mirror/DeveloperCapacityRow'
 import { AlertFeed } from '../components/mirror/AlertFeed'
 import { SprintHealthScore } from '../components/mirror/SprintHealthScore'
+import { VelocityStatsChart } from '../components/mirror/VelocityStatsChart'
 
 interface CurrentSprint {
   id: string
@@ -66,6 +67,7 @@ export function VelocityMirrorPage() {
         {/* Left: chart + capacity */}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
           <BurndownChart sprintLength={sprint?.sprintLength} />
+          <VelocityStatsChart />
           <DeveloperCapacityRow />
         </div>
 

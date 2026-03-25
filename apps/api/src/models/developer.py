@@ -6,6 +6,20 @@ from sqlalchemy.dialects.postgresql import UUID
 from src.database import Base
 
 
+class TeamMember(Base):
+    """Jira-sourced team member, distinct from Clerk-registered Developer users."""
+    __tablename__ = "team_members"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id"), index=True)
+    jira_account_id: Mapped[str] = mapped_column(String(255), index=True)
+    display_name: Mapped[str] = mapped_column(String(255))
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    team: Mapped["Team"] = relationship(back_populates="team_members")
+    tickets: Mapped[list["Ticket"]] = relationship(back_populates="assignee")
+
+
 class Developer(Base):
     __tablename__ = "developers"
 

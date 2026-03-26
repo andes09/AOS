@@ -15,24 +15,30 @@ class JiraClient:
         return {"Authorization": f"Bearer {self.access_token}", "Accept": "application/json"}
 
     async def search_issues(self, jql: str, fields: list[str]) -> list[dict]:
-        """Execute a JQL search with full pagination. Works with read:jira-work scope only."""
+        """Execute a JQL search with full pagination using the /search/jql endpoint.
+
+        Uses cursor-based pagination (nextPageToken) required by the new API.
+        Works with read:jira-work scope only.
+        """
         issues = []
-        start_at = 0
-        fields_param = ",".join(fields)
+        next_page_token: str | None = None
         while True:
+            body: dict = {"jql": jql, "maxResults": 100, "fields": fields}
+            if next_page_token:
+                body["nextPageToken"] = next_page_token
             async with httpx.AsyncClient() as c:
-                r = await c.get(
-                    f"{self.base_url}/search",
+                r = await c.post(
+                    f"{self.base_url}/search/jql",
                     headers=self._headers(),
-                    params={"jql": jql, "startAt": start_at, "maxResults": 100, "fields": fields_param},
+                    json=body,
                 )
                 r.raise_for_status()
                 data = r.json()
                 batch = data.get("issues", [])
                 issues.extend(batch)
-                if start_at + len(batch) >= data.get("total", 0):
+                next_page_token = data.get("nextPageToken")
+                if not next_page_token or not batch:
                     break
-                start_at += len(batch)
         return issues
 
     async def get_projects(self) -> list[dict]:

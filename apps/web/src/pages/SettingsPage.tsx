@@ -54,7 +54,7 @@ export function SettingsPage() {
     setSyncing(true)
     setSyncMessage(null)
     try {
-      const org = await post<{ teamId: string }>('/api/organizations', {})
+      const org = await post<{ teamId: string }>('/api/organizations', { name: 'My Org' })
       await post(`/api/integrations/jira/sync?team_id=${org.teamId}`, {})
       setSyncMessage('Sync queued — data will update shortly.')
       setTimeout(() => {
@@ -62,7 +62,7 @@ export function SettingsPage() {
         setSyncMessage(null)
       }, 3000)
     } catch (err) {
-      setSyncMessage(err instanceof Error ? err.message : 'Sync failed')
+      setSyncMessage(err instanceof Error ? err.message : String(err) || 'Sync failed')
     } finally {
       setSyncing(false)
     }

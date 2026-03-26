@@ -14,7 +14,9 @@ export function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
-  const { get, del } = useApi()
+  const [syncing, setSyncing] = useState(false)
+  const [syncMessage, setSyncMessage] = useState<string | null>(null)
+  const { get, del, post } = useApi()
 
   async function fetchStatus() {
     try {
@@ -45,6 +47,24 @@ export function SettingsPage() {
       setActionError(err instanceof Error ? err.message : 'Failed to disconnect')
     } finally {
       setActionLoading(false)
+    }
+  }
+
+  async function handleSync() {
+    setSyncing(true)
+    setSyncMessage(null)
+    try {
+      const org = await post<{ teamId: string }>('/api/organizations', {})
+      await post(`/api/integrations/jira/sync?team_id=${org.teamId}`, {})
+      setSyncMessage('Sync queued — data will update shortly.')
+      setTimeout(() => {
+        fetchStatus()
+        setSyncMessage(null)
+      }, 3000)
+    } catch (err) {
+      setSyncMessage(err instanceof Error ? err.message : 'Sync failed')
+    } finally {
+      setSyncing(false)
     }
   }
 
@@ -105,9 +125,29 @@ export function SettingsPage() {
                 ? new Date(status.last_synced_at).toLocaleString()
                 : 'Never'}
             </div>
+            {syncMessage && (
+              <div style={{ color: syncMessage.includes('failed') ? '#ef4444' : '#4ade80', fontSize: 13, marginBottom: 8 }}>{syncMessage}</div>
+            )}
             {actionError && (
               <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 8 }}>{actionError}</div>
             )}
+            <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={handleSync}
+              disabled={syncing}
+              style={{
+                background: syncing ? '#374151' : '#1e3a5f',
+                color: syncing ? '#64748b' : '#60a5fa',
+                border: '1px solid #1d4ed8',
+                borderRadius: 6,
+                padding: '0.5rem 1rem',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: syncing ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {syncing ? 'Syncing...' : 'Sync Now'}
+            </button>
             <button
               onClick={handleDisconnect}
               disabled={actionLoading}
@@ -125,6 +165,7 @@ export function SettingsPage() {
             >
               {actionLoading ? 'Disconnecting...' : 'Disconnect'}
             </button>
+            </div>
           </div>
         ) : (
           <div>

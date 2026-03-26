@@ -5,6 +5,9 @@ WORKDIR /app
 # Force Python stdout/stderr to be unbuffered so logs appear in Railway
 ENV PYTHONUNBUFFERED=1
 
+# Cache bust: 2026-03-26
+ARG BUILD_DATE=2026-03-26
+
 # Install uv
 RUN pip install uv
 

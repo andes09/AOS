@@ -179,6 +179,16 @@
 
 ---
 
+## Vite env vars in Docker builds require ARG/ENV declarations — check the Dockerfile first
+
+**Pattern:** `VITE_CLERK_PUBLISHABLE_KEY` was set in Railway dashboard but the built app still had no value for it. Sent user through a redeploy cycle before identifying the root cause.
+
+**Root cause:** Docker `RUN` commands do not inherit environment variables from the host or CI system. Railway injects env vars into the runtime container, but Vite runs at build time (`RUN npm run build`). Without an explicit `ARG` + `ENV` declaration in the Dockerfile, the variable is invisible to Vite.
+
+**Rule:** When debugging a missing `VITE_*` variable in a Dockerized app, check the Dockerfile *first* before asking the user to redeploy. If `ARG VITE_FOO` and `ENV VITE_FOO=$VITE_FOO` are not present before `RUN npm run build`, the fix is in the Dockerfile — not the Railway dashboard.
+
+---
+
 ## Decouple alembic migrations from the server start command
 
 **Pattern:** Running `alembic upgrade head && uvicorn ...` in `startCommand` caused healthcheck failures whenever the migration hung or was slow. The `&&` meant uvicorn never started if alembic failed, and the healthcheck timer ran against both operations combined.

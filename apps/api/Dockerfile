@@ -15,7 +15,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
 # Copy source (ARG here busts only the COPY layer, not the uv install layer)
-ARG BUILD_DATE=unknown
+ARG BUILD_DATE=2026-03-26-T15-force-rebuild
 COPY . .
 
 # Ensure the venv binaries are on PATH at runtime

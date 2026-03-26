@@ -6,7 +6,6 @@ Create Date: 2026-03-25
 """
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 revision = 'init004'
 down_revision = 'init003'
@@ -15,38 +14,53 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        'team_members',
-        sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column('team_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('teams.id'), nullable=False, index=True),
-        sa.Column('jira_account_id', sa.String(255), nullable=False, index=True),
-        sa.Column('display_name', sa.String(255), nullable=False),
-        sa.Column('email', sa.String(255), nullable=True),
-    )
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS team_members (
+            id UUID PRIMARY KEY,
+            team_id UUID NOT NULL REFERENCES teams(id),
+            jira_account_id VARCHAR(255) NOT NULL,
+            display_name VARCHAR(255) NOT NULL,
+            email VARCHAR(255)
+        )
+    """)
+    op.execute("CREATE INDEX IF NOT EXISTS ix_team_members_team_id ON team_members(team_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_team_members_jira_account_id ON team_members(jira_account_id)")
 
-    op.create_table(
-        'tickets',
-        sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column('sprint_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('sprints.id'), nullable=False, index=True),
-        sa.Column('team_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('teams.id'), nullable=False, index=True),
-        sa.Column('assignee_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('team_members.id'), nullable=True, index=True),
-        sa.Column('jira_issue_id', sa.String(100), nullable=False, unique=True, index=True),
-        sa.Column('jira_issue_key', sa.String(50), nullable=True),
-        sa.Column('title', sa.Text, nullable=False),
-        sa.Column('status', sa.Enum('TODO', 'IN_PROGRESS', 'IN_REVIEW', 'DONE', 'CANCELLED', name='ticketstatus'), nullable=False, server_default='TODO'),
-        sa.Column('ticket_type', sa.String(100), nullable=True),
-        sa.Column('story_points_estimated', sa.Float, nullable=True),
-        sa.Column('time_estimate_hours', sa.Float, nullable=True),
-        sa.Column('time_actual_hours', sa.Float, nullable=True),
-        sa.Column('labels', postgresql.JSON, nullable=True),
-        sa.Column('components', postgresql.JSON, nullable=True),
-        sa.Column('created_at', sa.DateTime, nullable=False, server_default=sa.func.now()),
-        sa.Column('completed_at', sa.DateTime, nullable=True),
-        sa.Column('jira_updated_at', sa.DateTime, nullable=True),
-    )
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ticketstatus') THEN
+                CREATE TYPE ticketstatus AS ENUM ('TODO','IN_PROGRESS','IN_REVIEW','DONE','CANCELLED');
+            END IF;
+        END $$
+    """)
+
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS tickets (
+            id UUID PRIMARY KEY,
+            sprint_id UUID NOT NULL REFERENCES sprints(id),
+            team_id UUID NOT NULL REFERENCES teams(id),
+            assignee_id UUID REFERENCES team_members(id),
+            jira_issue_id VARCHAR(100) NOT NULL UNIQUE,
+            jira_issue_key VARCHAR(50),
+            title TEXT NOT NULL,
+            status ticketstatus NOT NULL DEFAULT 'TODO',
+            ticket_type VARCHAR(100),
+            story_points_estimated FLOAT,
+            time_estimate_hours FLOAT,
+            time_actual_hours FLOAT,
+            labels JSON,
+            completed_at TIMESTAMP,
+            jira_updated_at TIMESTAMP,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """)
+    op.execute("CREATE INDEX IF NOT EXISTS ix_tickets_sprint_id ON tickets(sprint_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_tickets_team_id ON tickets(team_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_tickets_assignee_id ON tickets(assignee_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_tickets_jira_issue_id ON tickets(jira_issue_id)")
 
 
 def downgrade() -> None:
-    op.drop_table('tickets')
+    op.execute("DROP TABLE IF EXISTS tickets")
     op.execute("DROP TYPE IF EXISTS ticketstatus")
-    op.drop_table('team_members')
+    op.execute("DROP TABLE IF EXISTS team_members")

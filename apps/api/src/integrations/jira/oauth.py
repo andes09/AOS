@@ -4,7 +4,7 @@ from src.config import settings
 
 JIRA_AUTH_URL = "https://auth.atlassian.com/authorize"
 JIRA_TOKEN_URL = "https://auth.atlassian.com/oauth/token"
-JIRA_SCOPES = "read:jira-work read:jira-user write:jira-work offline_access"
+JIRA_SCOPES = "read:jira-work read:jira-user write:jira-work offline_access read:board-scope:jira-software read:sprint:jira-software read:issue-details:jira"
 JIRA_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
 
 

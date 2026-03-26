@@ -21,7 +21,7 @@ class JiraClient:
         while True:
             async with httpx.AsyncClient() as c:
                 r = await c.post(
-                    f"{self.base_url}/search",
+                    f"{self.base_url}/search/jql",
                     headers=self._headers(),
                     json={"jql": jql, "startAt": start_at, "maxResults": 100, "fields": fields},
                 )

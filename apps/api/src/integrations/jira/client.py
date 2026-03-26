@@ -18,12 +18,13 @@ class JiraClient:
         """Execute a JQL search with full pagination. Works with read:jira-work scope only."""
         issues = []
         start_at = 0
+        fields_param = ",".join(fields)
         while True:
             async with httpx.AsyncClient() as c:
-                r = await c.post(
-                    f"{self.base_url}/search/jql",
+                r = await c.get(
+                    f"{self.base_url}/search",
                     headers=self._headers(),
-                    json={"jql": jql, "startAt": start_at, "maxResults": 100, "fields": fields},
+                    params={"jql": jql, "startAt": start_at, "maxResults": 100, "fields": fields_param},
                 )
                 r.raise_for_status()
                 data = r.json()

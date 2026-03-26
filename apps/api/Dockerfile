@@ -20,6 +20,9 @@ RUN uv sync --frozen --no-dev
 # Copy source
 COPY . .
 
+# Explicitly copy alembic migrations to ensure no layer cache omits them
+COPY alembic/ alembic/
+
 # Ensure the venv binaries are on PATH at runtime
 ENV PATH="/app/.venv/bin:$PATH"
 

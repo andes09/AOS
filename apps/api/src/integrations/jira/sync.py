@@ -94,8 +94,8 @@ def sync_jira_team(self, team_id: str):
     db = _get_sync_session()
     try:
         team = db.get(Team, uuid.UUID(team_id))
-        if not team or not team.jira_board_id:
-            logger.warning("Team %s not found or has no Jira board configured", team_id)
+        if not team:
+            logger.warning("Team %s not found", team_id)
             return
 
         connection = db.execute(
@@ -116,9 +116,9 @@ def sync_jira_team(self, team_id: str):
         users = asyncio.get_event_loop().run_until_complete(client.get_users())
         _upsert_team_members(db, team, users)
 
-        # Sync sprints
+        # Sync sprints (uses JQL — no Jira Software scope required)
         sprints = asyncio.get_event_loop().run_until_complete(
-            client.get_sprints(team.jira_board_id)
+            client.get_sprints()
         )
         from src.models.sprint import Sprint as SprintModel
 

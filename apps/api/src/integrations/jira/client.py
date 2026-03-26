@@ -1,5 +1,9 @@
+import logging
+
 import httpx
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -32,6 +36,12 @@ class JiraClient:
                     headers=self._headers(),
                     json=body,
                 )
+                if not r.is_success:
+                    logger.error(
+                        "Jira search/jql %s — body: %s",
+                        r.status_code,
+                        r.text[:500],
+                    )
                 r.raise_for_status()
                 data = r.json()
                 batch = data.get("issues", [])

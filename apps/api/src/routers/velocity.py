@@ -468,6 +468,12 @@ def _compute_health_score(
 # ---------------------------------------------------------------------------
 
 
+@dashboard_router.get("/ping")
+async def velocity_ping():
+    """Debug endpoint to verify Railway has latest deployment."""
+    return {"status": "ok", "version": "2026-03-26-stats"}
+
+
 @dashboard_router.get("/burndown", response_model=BurndownResponse)
 async def get_burndown(
     team: Team = Depends(resolve_team_query),

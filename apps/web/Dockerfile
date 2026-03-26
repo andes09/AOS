@@ -7,6 +7,12 @@ COPY package.json .npmrc ./
 RUN npm install
 
 COPY . .
+
+ARG VITE_CLERK_PUBLISHABLE_KEY
+ARG VITE_API_URL
+ENV VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY
+ENV VITE_API_URL=$VITE_API_URL
+
 RUN npm run build
 
 # Production stage — nginx for static serving

@@ -1,6 +1,5 @@
 [deploy]
-preDeployCommand = "alembic upgrade head"
-startCommand = "sh -c 'uvicorn src.main:app --host 0.0.0.0 --port $PORT'"
+startCommand = "sh -c 'alembic upgrade head && uvicorn src.main:app --host 0.0.0.0 --port $PORT'"
 healthcheckPath = "/health"
 healthcheckTimeout = 120
 restartPolicyType = "on_failure"

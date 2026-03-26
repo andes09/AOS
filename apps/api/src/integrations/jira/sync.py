@@ -28,8 +28,14 @@ def _get_sync_session() -> Session:
     return sessionmaker(bind=engine)()
 
 
-def _get_fresh_client(connection) -> JiraClient:
-    """Return a JiraClient, refreshing the access token if needed."""
+def _get_fresh_client(connection, db: Session) -> JiraClient:
+    """Return a JiraClient, refreshing the access token if needed.
+
+    Token updates are committed immediately so a subsequent rollback on the
+    sync transaction cannot discard the new (rotated) refresh token.
+    Atlassian uses one-time refresh token rotation: if the new refresh_token
+    is rolled back, the next retry sends the already-consumed token → 403.
+    """
     import asyncio
 
     access_token = decrypt(connection.encrypted_access_token)
@@ -40,14 +46,15 @@ def _get_fresh_client(connection) -> JiraClient:
             refresh_access_token(refresh_tok)
         )
         access_token = tokens["access_token"]
-        # Persist refreshed tokens
         from src.services.encryption import encrypt
+        from datetime import timedelta
         connection.encrypted_access_token = encrypt(access_token)
         if "refresh_token" in tokens:
             connection.encrypted_refresh_token = encrypt(tokens["refresh_token"])
         if "expires_in" in tokens:
-            from datetime import timedelta
             connection.token_expires_at = datetime.utcnow() + timedelta(seconds=tokens["expires_in"])
+        # Commit immediately — token rotation must survive a sync failure/rollback
+        db.commit()
 
     return JiraClient(cloud_id=connection.jira_cloud_id, access_token=access_token)
 
@@ -110,7 +117,7 @@ def sync_jira_team(self, team_id: str):
             logger.warning("No active Jira connection for org of team %s", team_id)
             return
 
-        client = _get_fresh_client(connection)
+        client = _get_fresh_client(connection, db)
 
         # Sync users first so we can match assignees when syncing issues
         users = asyncio.get_event_loop().run_until_complete(client.get_users())
@@ -167,7 +174,7 @@ def sync_jira_sprint(self, team_id: str, jira_sprint_id: str):
         if not connection:
             return
 
-        client = _get_fresh_client(connection)
+        client = _get_fresh_client(connection, db)
 
         sprint_obj = db.execute(
             select(Sprint).where(

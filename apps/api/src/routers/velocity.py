@@ -385,7 +385,7 @@ class VelocityStatsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Dashboard helpers
+# Dashboard helpers  (touch: force rebuild 2026-03-26)
 # ---------------------------------------------------------------------------
 
 

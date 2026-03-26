@@ -47,7 +47,7 @@ app.include_router(jira_router.router)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "environment": settings.environment}
+    return {"status": "ok", "environment": settings.environment, "deploy": "66aa273"}
 
 
 @app.get("/api/me")

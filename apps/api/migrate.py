@@ -5,6 +5,8 @@ the case where alembic_version records a revision the container can't find.
 Runs the actual SQL for each migration idempotently (IF NOT EXISTS / ADD COLUMN
 with existence check), then stamps alembic_version to the correct head.
 """
+print("=== MIGRATE.PY RUNNING (commit cde9e53) ===", flush=True)
+
 import asyncio
 import sys
 from sqlalchemy.ext.asyncio import create_async_engine

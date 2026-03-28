@@ -5,7 +5,7 @@ the case where alembic_version records a revision the container can't find.
 Runs the actual SQL for each migration idempotently (IF NOT EXISTS / ADD COLUMN
 with existence check), then stamps alembic_version to the correct head.
 """
-print("=== MIGRATE.PY RUNNING (commit cde9e53) ===", flush=True)
+print("=== MIGRATE.PY RUNNING (commit 2026-03-28) ===", flush=True)
 
 import asyncio
 import sys
@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
 
 
-HEAD = "init004"
+HEAD = "init005"
 
 MIGRATIONS = [
     # (revision_id, sql_statements)
@@ -68,6 +68,9 @@ MIGRATIONS = [
         """CREATE INDEX IF NOT EXISTS ix_tickets_team_id ON tickets(team_id)""",
         """CREATE INDEX IF NOT EXISTS ix_tickets_assignee_id ON tickets(assignee_id)""",
         """CREATE INDEX IF NOT EXISTS ix_tickets_jira_issue_id ON tickets(jira_issue_id)""",
+    ]),
+    ("init005", [
+        """ALTER TABLE tickets ALTER COLUMN sprint_id DROP NOT NULL""",
     ]),
 ]
 

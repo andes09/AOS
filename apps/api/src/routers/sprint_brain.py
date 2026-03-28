@@ -31,6 +31,7 @@ from sqlalchemy import select
 from src.auth import get_current_user_id, get_current_org_id
 from src.database import get_db
 from src.models.organization import Organization
+from src.models.ticket import Ticket, TicketStatus
 from src.services.encryption import decrypt
 from src.services.sprint_brain import (
     SprintBrainInput,
@@ -115,35 +116,27 @@ async def _get_developer_profiles(team_id: str, db: AsyncSession) -> list[dict]:
 
 
 async def _get_candidate_tickets(team_id: str, db: AsyncSession) -> list[dict]:
-    """
-    STUB — fetch unstarted backlog tickets synced from Jira.
-
-    TODO (coordinator): implement once these are available:
-      - src.models.ticket.Ticket  (Track C)
-      - Jira sync data            (Track D)
-
-    Expected implementation sketch:
-        tickets = await db.scalars(
-            select(Ticket)
-            .where(
-                Ticket.team_id == team_id,
-                Ticket.status.notin_(["In Progress", "Done"]),
-            )
-            .order_by(Ticket.priority_rank)
-            .limit(50)
+    """Fetch unassigned/backlog tickets for sprint planning."""
+    tickets = (await db.scalars(
+        select(Ticket)
+        .where(
+            Ticket.team_id == team_id,
+            Ticket.sprint_id.is_(None),
+            Ticket.status.notin_([TicketStatus.DONE, TicketStatus.CANCELLED]),
         )
-        return [
-            {
-                "id": t.jira_key,
-                "summary": t.summary,
-                "story_points": t.story_points,
-                "priority": t.priority,
-                "labels": t.labels or [],
-            }
-            for t in tickets
-        ]
-    """
-    return []  # stub: no tickets yet
+        .order_by(Ticket.story_points_estimated.desc().nulls_last())
+        .limit(50)
+    )).all()
+    return [
+        {
+            "id": t.jira_issue_key or str(t.id),
+            "summary": t.title,
+            "story_points": t.story_points_estimated or 0,
+            "priority": "medium",
+            "labels": t.labels or [],
+        }
+        for t in tickets
+    ]
 
 
 # ---------------------------------------------------------------------------

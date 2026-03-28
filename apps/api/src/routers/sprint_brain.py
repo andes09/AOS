@@ -31,6 +31,7 @@ from sqlalchemy import select
 from src.auth import get_current_user_id, get_current_org_id
 from src.database import get_db
 from src.models.organization import Organization
+from src.models.team import Team
 from src.models.ticket import Ticket, TicketStatus
 from src.services.encryption import decrypt
 from src.services.sprint_brain import (
@@ -157,6 +158,23 @@ def _sprint_plan_response(team_id: str, sprint_start: str, plan: SprintBrainOutp
     }
 
 
+async def _resolve_team_id(team_id: str, clerk_org_id: str, db: AsyncSession) -> str:
+    """Resolve 'default' (or any non-UUID) to the org's first team id."""
+    try:
+        import uuid as _uuid
+        _uuid.UUID(team_id)
+        return team_id
+    except ValueError:
+        pass
+    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+    if not org:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+    team = await db.scalar(select(Team).where(Team.organization_id == org.id))
+    if not team:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+    return str(team.id)
+
+
 async def _build_brain_input(
     team_id: str,
     sprint_length_days: int,
@@ -210,9 +228,10 @@ async def create_sprint_plan(
     plain-English summary, risk warnings, and what-if analysis for each ticket.
     """
     api_key = await _get_anthropic_key(clerk_org_id, db)
+    team_id = await _resolve_team_id(request.team_id, clerk_org_id, db)
 
     brain_input, sprint_start = await _build_brain_input(
-        team_id=request.team_id,
+        team_id=team_id,
         sprint_length_days=request.sprint_length_days,
         sprint_start_date=request.sprint_start_date,
         pto_overrides=request.pto_overrides,
@@ -228,7 +247,7 @@ async def create_sprint_plan(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         )
 
-    return _sprint_plan_response(request.team_id, sprint_start, plan)
+    return _sprint_plan_response(team_id, sprint_start, plan)
 
 
 @router.post("/what-if")
@@ -245,9 +264,10 @@ async def what_if_scenario(
     after to quantify the benefit of descoping.
     """
     api_key = await _get_anthropic_key(clerk_org_id, db)
+    team_id = await _resolve_team_id(request.team_id, clerk_org_id, db)
 
     brain_input, sprint_start = await _build_brain_input(
-        team_id=request.team_id,
+        team_id=team_id,
         sprint_length_days=request.sprint_length_days,
         sprint_start_date=request.sprint_start_date,
         pto_overrides=request.pto_overrides,

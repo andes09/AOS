@@ -420,7 +420,9 @@ async def generate_sprint_plan(
     """
     eligible_profiles, insufficient_data_devs = _apply_sprint_gate(inp.developer_profiles)
 
-    if not eligible_profiles:
+    # Only block if there ARE profiles but none pass the gate.
+    # If profiles is empty (stub / new team), proceed — Claude assigns by complexity alone.
+    if inp.developer_profiles and not eligible_profiles:
         raise RuntimeError(
             "Sprint plan cannot be generated: no eligible developers. "
             "All team members have fewer than 3 sprints of recorded data."

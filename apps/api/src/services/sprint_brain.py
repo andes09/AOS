@@ -208,7 +208,7 @@ class SprintBrainOutput:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-_MIN_SPRINTS = 3
+_MIN_SPRINTS = 0  # TODO: restore to 3 once cold-start fallback is implemented (tasks/todo.md)
 
 
 def _apply_sprint_gate(

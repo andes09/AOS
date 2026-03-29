@@ -65,7 +65,7 @@ export function PlanReasoningPanel({ assignments }: PlanReasoningPanelProps) {
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                 }}>
-                  → {a.developer_id}
+                  → {a.developer_name || a.developer_id}
                 </span>
                 <span style={{ color: '#64748b', fontSize: 11, whiteSpace: 'nowrap' }}>
                   {a.story_points}pts

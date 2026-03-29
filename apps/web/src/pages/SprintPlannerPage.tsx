@@ -1,6 +1,6 @@
 // apps/web/src/pages/SprintPlannerPage.tsx
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useApi } from '../lib/api'
 import { VelocityCard } from '../components/sprint/VelocityCard'
@@ -8,6 +8,8 @@ import { ConfidenceGauge } from '../components/sprint/ConfidenceGauge'
 import { TicketList } from '../components/sprint/TicketList'
 import { PlanReasoningPanel } from '../components/sprint/PlanReasoningPanel'
 import type { SprintPlanResponse, WhatIfResponse, Ticket } from '../types/sprint'
+
+const SESSION_KEY = 'sprint_plan_cache'
 
 function deriveCommitted(assignments: SprintPlanResponse['assignments']): Map<string, number> {
   const map = new Map<string, number>()
@@ -21,10 +23,38 @@ const DEFAULT_CAPACITY = 40
 
 export function SprintPlannerPage() {
   const { post } = useApi()
-  const [plan, setPlan] = useState<SprintPlanResponse | null>(null)
-  const [confidence, setConfidence] = useState(0)
+
+  const [plan, setPlan] = useState<SprintPlanResponse | null>(() => {
+    try {
+      const cached = sessionStorage.getItem(SESSION_KEY)
+      return cached ? JSON.parse(cached) : null
+    } catch {
+      return null
+    }
+  })
+  const [confidence, setConfidence] = useState<number>(() => {
+    try {
+      const cached = sessionStorage.getItem(SESSION_KEY)
+      return cached ? JSON.parse(cached).confidence_score ?? 0 : 0
+    } catch {
+      return 0
+    }
+  })
   const [droppedIds, setDroppedIds] = useState<Set<string>>(new Set())
-  const [warnings, setWarnings] = useState<string[]>([])
+  const [warnings, setWarnings] = useState<string[]>(() => {
+    try {
+      const cached = sessionStorage.getItem(SESSION_KEY)
+      return cached ? JSON.parse(cached).warnings ?? [] : []
+    } catch {
+      return []
+    }
+  })
+
+  useEffect(() => {
+    if (plan) {
+      try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(plan)) } catch { /* quota */ }
+    }
+  }, [plan])
 
   const generatePlan = useMutation({
     mutationFn: () =>
@@ -69,11 +99,13 @@ export function SprintPlannerPage() {
 
   const committed = plan ? deriveCommitted(plan.assignments) : new Map<string, number>()
   const developers = Array.from(committed.keys())
+  const devNameMap = plan?.developers ?? {}
 
   const tickets: Ticket[] = (plan?.assignments ?? []).map(a => ({
     ticket_id: a.ticket_id,
-    title: a.ticket_id,
+    title: a.title || a.ticket_id,
     developer_id: a.developer_id,
+    developer_name: a.developer_name || devNameMap[a.developer_id] || a.developer_id,
     story_points: a.story_points,
     confidence: a.confidence,
   }))
@@ -102,7 +134,7 @@ export function SprintPlannerPage() {
         {developers.map(dev => (
           <VelocityCard
             key={dev}
-            developer={dev}
+            developer={devNameMap[dev] || dev}
             meanVelocity={committed.get(dev) ?? 0}
             committed={committed.get(dev) ?? 0}
             capacity={DEFAULT_CAPACITY}

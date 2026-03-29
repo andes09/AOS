@@ -52,7 +52,7 @@ function TicketRow({ ticket }: { ticket: Ticket }) {
       }}>
         {ticket.title}
       </span>
-      <span style={{ color: '#94a3b8', fontSize: 11, whiteSpace: 'nowrap' }}>{ticket.developer_id}</span>
+      <span style={{ color: '#94a3b8', fontSize: 11, whiteSpace: 'nowrap' }}>{ticket.developer_name || ticket.developer_id}</span>
       <span style={{ color: '#64748b', fontSize: 11, whiteSpace: 'nowrap' }}>{ticket.story_points}pts</span>
       <span style={{ width: 8, height: 8, borderRadius: '50%', background: dotColour, flexShrink: 0 }} />
     </div>

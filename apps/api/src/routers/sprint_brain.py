@@ -155,16 +155,33 @@ async def _get_candidate_tickets(team_id: str, db: AsyncSession) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def _sprint_plan_response(team_id: str, sprint_start: str, plan: SprintBrainOutput) -> dict:
+def _sprint_plan_response(
+    team_id: str,
+    sprint_start: str,
+    plan: SprintBrainOutput,
+    developer_profiles: list[dict],
+    candidate_tickets: list[dict],
+) -> dict:
+    dev_name_map = {p["developer_id"]: p["display_name"] for p in developer_profiles}
+    ticket_title_map = {t["id"]: t["summary"] for t in candidate_tickets}
+    enriched_assignments = [
+        {
+            **a,
+            "developer_name": dev_name_map.get(a.get("developer_id", ""), a.get("developer_id", "")),
+            "title": ticket_title_map.get(a.get("ticket_id", ""), a.get("ticket_id", "")),
+        }
+        for a in plan.assignments
+    ]
     return {
         "team_id": team_id,
         "sprint_start": sprint_start,
-        "assignments": plan.assignments,
+        "assignments": enriched_assignments,
         "confidence_score": plan.confidence_score,
         "summary": plan.summary,
         "warnings": plan.warnings,
         "what_if_dropped": plan.what_if_dropped,
         "insufficient_data_devs": plan.insufficient_data_devs,
+        "developers": {p["developer_id"]: p["display_name"] for p in developer_profiles},
     }
 
 
@@ -191,8 +208,8 @@ async def _build_brain_input(
     sprint_start_date: str,
     pto_overrides: dict[str, float],
     db: AsyncSession,
-) -> tuple[SprintBrainInput, str]:
-    """Return (SprintBrainInput, resolved_sprint_start_date)."""
+) -> tuple[SprintBrainInput, str, list[dict], list[dict]]:
+    """Return (SprintBrainInput, sprint_start, developer_profiles, candidate_tickets)."""
     candidate_tickets = await _get_candidate_tickets(team_id, db)
     if not candidate_tickets:
         raise HTTPException(
@@ -216,6 +233,8 @@ async def _build_brain_input(
             pto_overrides=pto_overrides,
         ),
         sprint_start,
+        developer_profiles,
+        candidate_tickets,
     )
 
 
@@ -240,7 +259,7 @@ async def create_sprint_plan(
     api_key = await _get_anthropic_key(clerk_org_id, db)
     team_id = await _resolve_team_id(request.team_id, clerk_org_id, db)
 
-    brain_input, sprint_start = await _build_brain_input(
+    brain_input, sprint_start, dev_profiles, tickets = await _build_brain_input(
         team_id=team_id,
         sprint_length_days=request.sprint_length_days,
         sprint_start_date=request.sprint_start_date,
@@ -257,7 +276,7 @@ async def create_sprint_plan(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         )
 
-    return _sprint_plan_response(team_id, sprint_start, plan)
+    return _sprint_plan_response(team_id, sprint_start, plan, dev_profiles, tickets)
 
 
 @router.post("/what-if")
@@ -276,7 +295,7 @@ async def what_if_scenario(
     api_key = await _get_anthropic_key(clerk_org_id, db)
     team_id = await _resolve_team_id(request.team_id, clerk_org_id, db)
 
-    brain_input, sprint_start = await _build_brain_input(
+    brain_input, sprint_start, dev_profiles, tickets = await _build_brain_input(
         team_id=team_id,
         sprint_length_days=request.sprint_length_days,
         sprint_start_date=request.sprint_start_date,

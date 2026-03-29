@@ -2,7 +2,9 @@
 
 export interface Assignment {
   ticket_id: string
+  title: string
   developer_id: string
+  developer_name: string
   reasoning: string
   confidence: number
   story_points: number
@@ -16,6 +18,7 @@ export interface SprintPlanResponse {
   summary: string
   warnings: string[]
   what_if_dropped: Record<string, number>
+  developers: Record<string, string>
 }
 
 export interface WhatIfResponse {
@@ -27,6 +30,7 @@ export interface Ticket {
   ticket_id: string
   title: string
   developer_id: string
+  developer_name: string
   story_points: number
   confidence: number
 }

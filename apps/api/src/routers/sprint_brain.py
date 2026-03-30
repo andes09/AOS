@@ -162,12 +162,12 @@ def _sprint_plan_response(
     developer_profiles: list[dict],
     candidate_tickets: list[dict],
 ) -> dict:
-    dev_name_map = {p["developer_id"]: p["display_name"] for p in developer_profiles}
+    dev_name_map = {p["developer_id"].lower(): p["display_name"] for p in developer_profiles}
     ticket_title_map = {t["id"]: t["summary"] for t in candidate_tickets}
     enriched_assignments = [
         {
             **a,
-            "developer_name": dev_name_map.get(a.get("developer_id", ""), a.get("developer_id", "")),
+            "developer_name": dev_name_map.get(a.get("developer_id", "").lower(), a.get("developer_id", "")),
             "title": ticket_title_map.get(a.get("ticket_id", ""), a.get("ticket_id", "")),
         }
         for a in plan.assignments
@@ -181,7 +181,7 @@ def _sprint_plan_response(
         "warnings": plan.warnings,
         "what_if_dropped": plan.what_if_dropped,
         "insufficient_data_devs": plan.insufficient_data_devs,
-        "developers": {p["developer_id"]: p["display_name"] for p in developer_profiles},
+        "developers": {p["developer_id"].lower(): p["display_name"] for p in developer_profiles},
     }
 
 

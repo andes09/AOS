@@ -105,7 +105,7 @@ export function SprintPlannerPage() {
     ticket_id: a.ticket_id,
     title: a.title || a.ticket_id,
     developer_id: a.developer_id,
-    developer_name: a.developer_name || devNameMap[a.developer_id] || a.developer_id,
+    developer_name: a.developer_name || devNameMap[a.developer_id.toLowerCase()] || a.developer_id,
     story_points: a.story_points,
     confidence: a.confidence,
   }))

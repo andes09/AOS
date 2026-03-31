@@ -524,12 +524,28 @@ async def get_sprint_capacity(
     sprint_meta = SprintMeta(total_working_days=max(1, total_days), team_members=[str(d.id) for d in developers])
     capacity_rows = CapacityModel().model(sprint=sprint_meta, pto=[], meetings=[])
     dev_map = {str(d.id): d for d in developers}
+
+    sprint_tickets = (
+        await db.scalars(select(SprintTicket).where(SprintTicket.sprint_id == active_sprint.id))
+    ).all()
+    committed_by_dev: dict[str, float] = {}
+    completed_by_dev: dict[str, float] = {}
+    for t in sprint_tickets:
+        if t.assignee_id:
+            key = str(t.assignee_id)
+            committed_by_dev[key] = committed_by_dev.get(key, 0.0) + (t.estimated_points or 0.0)
+            if t.completed:
+                completed_by_dev[key] = completed_by_dev.get(key, 0.0) + (t.actual_points or t.estimated_points or 0.0)
+
     items = [
         DeveloperCapacityItem(
             developer_id=row.developer_id,
             name=dev_map[row.developer_id].name,
             available_days=row.available_days,
             availability_ratio=row.availability_ratio,
+            committed_points=committed_by_dev.get(row.developer_id, 0.0),
+            completed_points=completed_by_dev.get(row.developer_id, 0.0),
+            is_over_capacity=committed_by_dev.get(row.developer_id, 0.0) > row.available_days * 2,
         )
         for row in capacity_rows
         if row.developer_id in dev_map

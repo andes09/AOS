@@ -121,6 +121,15 @@ async def _get_developer_profiles(team_id: str, db: AsyncSession) -> list[dict]:
             "velocity": per_dev_velocity,
             "sprint_count": sprint_count,
             "avg_points_per_sprint": per_dev_velocity,
+            "safe_capacity_pts": round(per_dev_velocity * 0.8, 1),
+            "velocity_breakdown": [
+                {
+                    "ticket_type": "general",
+                    "domain": d.role or "Engineering",
+                    "avg_pts": per_dev_velocity,
+                    "sample_count": sprint_count,
+                }
+            ] if sprint_count > 0 else [],
         }
         for d in developers
     ]
@@ -167,6 +176,7 @@ def _sprint_plan_response(
     enriched_assignments = [
         {
             **a,
+            "developer_id": a.get("developer_id", "").lower(),
             "developer_name": dev_name_map.get(a.get("developer_id", "").lower(), a.get("developer_id", "")),
             "title": ticket_title_map.get(a.get("ticket_id", ""), a.get("ticket_id", "")),
         }

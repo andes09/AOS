@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
 
 
-HEAD = "init005"
+HEAD = "0008"
 
 MIGRATIONS = [
     # (revision_id, sql_statements)
@@ -71,6 +71,54 @@ MIGRATIONS = [
     ]),
     ("init005", [
         """ALTER TABLE tickets ALTER COLUMN sprint_id DROP NOT NULL""",
+    ]),
+    ("0005", [
+        """
+        DO $$ BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'uq_team_member_jira'
+                  AND conrelid = 'team_members'::regclass
+            ) THEN
+                ALTER TABLE team_members ADD CONSTRAINT uq_team_member_jira
+                    UNIQUE (team_id, jira_account_id);
+            END IF;
+        END $$
+        """,
+    ]),
+    ("0007", [
+        """
+        CREATE TABLE IF NOT EXISTS ticket_analyses (
+          id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          team_id         UUID NOT NULL REFERENCES teams(id),
+          ticket_key      VARCHAR(50) NOT NULL,
+          ticket_title    TEXT,
+          readiness_score INT,
+          status          VARCHAR(20) NOT NULL,
+          issues          JSONB,
+          suggestions     JSONB,
+          analyzed_at     TIMESTAMP NOT NULL DEFAULT now(),
+          CONSTRAINT uq_ticket_analysis UNIQUE (team_id, ticket_key)
+        )
+        """,
+    ]),
+    ("0008", [
+        """
+        CREATE TABLE IF NOT EXISTS dependencies (
+          id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          team_id         UUID NOT NULL REFERENCES teams(id),
+          ticket_key      VARCHAR(50) NOT NULL,
+          ticket_title    TEXT,
+          blocked_by_key  VARCHAR(50),
+          dependency_type VARCHAR(30) NOT NULL,
+          risk_level      VARCHAR(10) NOT NULL,
+          description     TEXT,
+          source          VARCHAR(10) NOT NULL DEFAULT 'manual',
+          resolved_at     TIMESTAMP,
+          created_at      TIMESTAMP NOT NULL DEFAULT now()
+        )
+        """,
+        """CREATE INDEX IF NOT EXISTS idx_dep_team_resolved ON dependencies(team_id, resolved_at)""",
     ]),
 ]
 

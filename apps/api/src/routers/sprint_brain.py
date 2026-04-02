@@ -14,7 +14,7 @@ Coordinator stubs
 Three internal helpers are currently stubbed and must be completed once the
 following upstream tracks land:
 
-  _get_anthropic_key()      → needs Organisation model (Track C) + encryption service
+  get_anthropic_key()      → needs Organisation model (Track C) + encryption service
   _get_developer_profiles() → needs TeamMember + VelocityRecord models (Track C)
                               and velocity service (Track E velocity engine)
   _get_candidate_tickets()  → needs Ticket model (Track C) + Jira sync (Track D)
@@ -35,7 +35,7 @@ from src.models.organization import Organization
 from src.models.sprint import Sprint, SprintStatus
 from src.models.team import Team
 from src.models.ticket import Ticket, TicketStatus
-from src.services.encryption import decrypt
+from src.services.ai_client import get_anthropic_key
 from src.services.sprint_brain import (
     SprintBrainInput,
     SprintBrainOutput,
@@ -69,16 +69,6 @@ class WhatIfRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Coordinator stubs — replace once upstream tracks are merged
 # ---------------------------------------------------------------------------
-
-
-async def _get_anthropic_key(clerk_org_id: str, db: AsyncSession) -> str:
-    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
-    if not org or not org.encrypted_anthropic_key:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="No Anthropic API key configured. Please add your key in Settings.",
-        )
-    return decrypt(org.encrypted_anthropic_key)
 
 
 async def _get_developer_profiles(team_id: str, db: AsyncSession) -> list[dict]:
@@ -266,7 +256,7 @@ async def create_sprint_plan(
     asks Claude to assign tickets to developers and return a confidence score,
     plain-English summary, risk warnings, and what-if analysis for each ticket.
     """
-    api_key = await _get_anthropic_key(clerk_org_id, db)
+    api_key = await get_anthropic_key(clerk_org_id, db)
     team_id = await _resolve_team_id(request.team_id, clerk_org_id, db)
 
     brain_input, sprint_start, dev_profiles, tickets = await _build_brain_input(
@@ -302,7 +292,7 @@ async def what_if_scenario(
     pool and returns the revised plan. Compare `confidence_score` before and
     after to quantify the benefit of descoping.
     """
-    api_key = await _get_anthropic_key(clerk_org_id, db)
+    api_key = await get_anthropic_key(clerk_org_id, db)
     team_id = await _resolve_team_id(request.team_id, clerk_org_id, db)
 
     brain_input, sprint_start, dev_profiles, tickets = await _build_brain_input(

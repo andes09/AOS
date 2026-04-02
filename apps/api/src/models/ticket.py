@@ -25,7 +25,7 @@ class Ticket(Base):
     jira_issue_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     jira_issue_key: Mapped[str | None] = mapped_column(String(50), nullable=True)
     title: Mapped[str] = mapped_column(Text)
-    status: Mapped[TicketStatus] = mapped_column(SAEnum(TicketStatus), default=TicketStatus.TODO)
+    status: Mapped[TicketStatus] = mapped_column(SAEnum(TicketStatus, values_callable=lambda obj: [e.name for e in obj]), default=TicketStatus.TODO)
     ticket_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     story_points_estimated: Mapped[float | None] = mapped_column(Float, nullable=True)
     time_estimate_hours: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
 
 
-HEAD = "init005"
+HEAD = "0005"
 
 MIGRATIONS = [
     # (revision_id, sql_statements)
@@ -71,6 +71,20 @@ MIGRATIONS = [
     ]),
     ("init005", [
         """ALTER TABLE tickets ALTER COLUMN sprint_id DROP NOT NULL""",
+    ]),
+    ("0005", [
+        """
+        DO $$ BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'uq_team_member_jira'
+                  AND conrelid = 'team_members'::regclass
+            ) THEN
+                ALTER TABLE team_members ADD CONSTRAINT uq_team_member_jira
+                    UNIQUE (team_id, jira_account_id);
+            END IF;
+        END $$
+        """,
     ]),
 ]
 

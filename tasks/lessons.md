@@ -189,9 +189,71 @@
 
 ---
 
+## Never mix two migration systems — commit to one and stamp the DB on every manual patch
+
+**Pattern:** The project used both `alembic upgrade head` (via `preDeployCommand`) and `migrate.py` (a custom idempotent runner). Railway cached/skipped alembic repeatedly, leaving `alembic_version` stuck at `init003`. Manual SQL patches applied directly in the Railway Data tab were never stamped in `alembic_version`, so the next deploy had no idea what was already applied. This caused cascading 422s and 500s that looked like application bugs but were really missing columns/tables.
+
+**Root causes:**
+1. Two competing migration systems — alembic and migrate.py — neither was authoritative
+2. Manual DB patches (CREATE TABLE, ALTER TABLE in Railway Data tab) without updating `alembic_version`
+3. Never verified `SELECT * FROM alembic_version` before debugging app-level errors
+
+**Rules:**
+1. Pick one migration system from day one and never switch mid-project without fully retiring the other
+2. `migrate.py` (idempotent, bypasses alembic file-discovery) is more reliable for Railway than `alembic upgrade head` — use it as `preDeployCommand` from the start
+3. Every time you manually patch the DB, immediately run: `INSERT INTO alembic_version (version_num) VALUES ('initXXX') ON CONFLICT DO NOTHING`
+4. Before debugging any 4xx/5xx, run `SELECT * FROM alembic_version` first — a missing migration explains most runtime failures faster than any other check
+5. Write all migrations idempotent (`IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) so re-running is always safe
+
+---
+
+## Exhaust all available tools before consulting the user
+
+**Pattern:** Repeatedly asked the user for information or to run commands that I could have handled myself using available tools (Railway CLI, psql, grep, file reads, etc.).
+
+**Rule:** Before asking the user anything, ask yourself: "Can I answer this with a tool call?" If yes, use the tool. Only consult the user when you are genuinely blocked — missing credentials, need a product decision, or require input that no tool can provide. The user should never be a workaround for tool laziness.
+
+---
+
+## Use Railway CLI for DB operations — never ask the user to run SQL manually
+
+**Pattern:** Had Railway CLI access the entire session but made the user run every SQL query manually. This caused unnecessary back-and-forth, introduced errors from partial execution, and made it impossible to verify results.
+
+**Rules:**
+1. Always use `railway variables --service Postgres --json` to get `DATABASE_PUBLIC_URL` at the start of any DB debugging session
+2. Run all diagnostic and fix queries via `psql "$DATABASE_PUBLIC_URL"` directly — never paste SQL for the user to run unless they explicitly ask to
+3. Wrap multi-step deletes in `BEGIN/COMMIT` to avoid partial commits when FK constraints fail mid-sequence
+4. After any destructive operation, immediately verify with a SELECT — never assume "all done" from the user means the query succeeded
+
+---
+
+## Diagnose fully before giving SQL fixes — never drip-feed queries
+
+**Pattern:** When debugging DB state issues, gave one diagnostic query at a time, waited for results, then gave the next query. This caused unnecessary back-and-forth and frustrated the user.
+
+**Root cause:** Did not think through all possible failure modes upfront before asking the user to run anything.
+
+**Rule:** Before giving any SQL fix, mentally trace ALL possible failure points: enum case, team_id mismatch, missing data, FK constraints. Run ALL diagnostic queries in one block, interpret the results, then give the complete fix SQL in one block. Never make the user run more than two rounds of queries (one diagnostic, one fix).
+
+---
+
 ## Decouple alembic migrations from the server start command
 
 **Pattern:** Running `alembic upgrade head && uvicorn ...` in `startCommand` caused healthcheck failures whenever the migration hung or was slow. The `&&` meant uvicorn never started if alembic failed, and the healthcheck timer ran against both operations combined.
 
 **Rule:** Use Railway's `preDeployCommand` for migrations and `startCommand` only for the server. Migrations and server availability are independent concerns — don't couple them.
+
+---
+
+## Shell state does not persist between separate Bash tool calls — always chain git operations
+
+**Pattern:** Shell state (working directory, active git branch) does not carry over between separate Bash tool calls. Running `git checkout <branch>` in one call and then `git commit` in a subsequent call can silently commit to a different branch.
+
+**Root cause:** Each Bash tool call starts a fresh shell. git HEAD is file-based and persists on disk, but the working directory and any shell variables are reset between calls.
+
+**Rules:**
+1. Always chain git operations with `&&` in a single Bash call: `git checkout <branch> && git add <files> && git commit -m "..."`
+2. Never assume the active branch or working directory from a previous tool call is still set — always verify explicitly
+3. When staging + committing, do it in one chained command to prevent branch drift between calls
+4. On Windows especially: shell state does not persist at all between calls — every git operation must re-establish context in the same command
 

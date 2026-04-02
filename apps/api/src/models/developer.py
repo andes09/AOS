@@ -1,9 +1,17 @@
+import enum
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, ForeignKey, Boolean
+from sqlalchemy import Enum as SAEnum, String, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from src.database import Base
+
+
+class AppRole(enum.Enum):
+    DEVELOPER = "developer"
+    LEAD      = "lead"
+    EXEC      = "exec"
+    ADMIN     = "admin"
 
 
 class TeamMember(Base):
@@ -29,6 +37,12 @@ class Developer(Base):
     name: Mapped[str] = mapped_column(String(255))
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    app_role: Mapped[str] = mapped_column(
+        SAEnum(AppRole, native_enum=False, values_callable=lambda obj: [e.value for e in obj]),
+        default="developer",
+        nullable=False,
+        server_default="developer",
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

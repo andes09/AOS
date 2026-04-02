@@ -25,7 +25,7 @@ class Sprint(Base):
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     committed_points: Mapped[float | None] = mapped_column(Float, nullable=True)
     delivered_points: Mapped[float | None] = mapped_column(Float, nullable=True)
-    status: Mapped[SprintStatus] = mapped_column(SAEnum(SprintStatus), default=SprintStatus.PLANNING)
+    status: Mapped[SprintStatus] = mapped_column(SAEnum(SprintStatus, values_callable=lambda obj: [e.name for e in obj]), default=SprintStatus.PLANNING)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     team: Mapped["Team"] = relationship(back_populates="sprints")

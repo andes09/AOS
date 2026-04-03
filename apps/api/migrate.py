@@ -86,6 +86,9 @@ MIGRATIONS = [
         END $$
         """,
     ]),
+    ("0006", [
+    "ALTER TABLE developers ADD COLUMN IF NOT EXISTS app_role VARCHAR(20) NOT NULL DEFAULT 'developer'"
+    ]),
     ("0007", [
         """
         CREATE TABLE IF NOT EXISTS ticket_analyses (

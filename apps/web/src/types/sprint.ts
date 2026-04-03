@@ -40,3 +40,10 @@ export interface JiraBoard {
   name: string
   project_key: string
 }
+
+export interface PushToJiraResponse {
+  jiraSprintId: number
+  sprintUrl: string
+  pushedTickets: number
+  unassignedWarnings: string[]
+}

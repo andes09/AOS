@@ -2,12 +2,12 @@
 
 import { useState, useEffect } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { useApi } from '../lib/api'
+import { useApi, ApiError } from '../lib/api'
 import { VelocityCard } from '../components/sprint/VelocityCard'
 import { ConfidenceGauge } from '../components/sprint/ConfidenceGauge'
 import { TicketList } from '../components/sprint/TicketList'
 import { PlanReasoningPanel } from '../components/sprint/PlanReasoningPanel'
-import type { SprintPlanResponse, WhatIfResponse, Ticket } from '../types/sprint'
+import type { SprintPlanResponse, WhatIfResponse, Ticket, PushToJiraResponse } from '../types/sprint'
 
 const SESSION_KEY = 'sprint_plan_cache'
 
@@ -40,6 +40,8 @@ export function SprintPlannerPage() {
       return 0
     }
   })
+  const [pushResult, setPushResult] = useState<PushToJiraResponse | null>(null)
+  const [pushError, setPushError] = useState<string | null>(null)
   const [droppedIds, setDroppedIds] = useState<Set<string>>(new Set())
   const [warnings, setWarnings] = useState<string[]>(() => {
     try {
@@ -68,6 +70,16 @@ export function SprintPlannerPage() {
       setConfidence(data.confidence_score)
       setWarnings(data.warnings)
       setDroppedIds(new Set())
+    },
+  })
+
+  const pushMutation = useMutation({
+    mutationFn: () => post<PushToJiraResponse>('/api/sprint-brain/push-to-jira', {}),
+    onSuccess: (data) => { setPushResult(data); setPushError(null) },
+    onError: (err: ApiError) => {
+      if (err.status === 409) setPushError('Active sprint in progress — end it in Jira first.')
+      else if (err.status === 402) setPushError('No Jira connection. Connect in Settings.')
+      else setPushError('Push failed. Try again.')
     },
   })
 
@@ -166,6 +178,27 @@ export function SprintPlannerPage() {
         >
           {generatePlan.isPending ? 'Generating...' : '✦ Generate Plan'}
         </button>
+
+        {plan && (
+          <button
+            onClick={() => pushMutation.mutate()}
+            disabled={pushMutation.isPending}
+            style={{
+              background: pushMutation.isPending ? '#374151' : '#059669',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 8,
+              padding: '0.875rem 1.5rem',
+              fontSize: 14,
+              fontWeight: 700,
+              cursor: pushMutation.isPending ? 'default' : 'pointer',
+              whiteSpace: 'nowrap',
+              alignSelf: 'center',
+            }}
+          >
+            {pushMutation.isPending ? 'Pushing...' : 'Push to Jira'}
+          </button>
+        )}
       </div>
 
       {generatePlan.isError && (
@@ -183,6 +216,30 @@ export function SprintPlannerPage() {
               <span>⚠</span><span>{w}</span>
             </div>
           ))}
+        </div>
+      )}
+
+      {pushError && (
+        <div style={{ background: '#78350f', border: '1px solid #d97706', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: 16, color: '#fbbf24', fontSize: 13 }}>
+          {pushError}
+        </div>
+      )}
+
+      {pushResult && (
+        <div style={{ background: '#064e3b', border: '1px solid #059669', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: 16, fontSize: 13 }}>
+          <div style={{ color: '#6ee7b7' }}>
+            Sprint pushed! {pushResult.pushedTickets} tickets assigned.{' '}
+            <a href={pushResult.sprintUrl} target="_blank" rel="noreferrer" style={{ color: '#34d399', textDecoration: 'underline' }}>
+              View in Jira
+            </a>
+          </div>
+          {pushResult.unassignedWarnings.length > 0 && (
+            <ul style={{ margin: '8px 0 0', paddingLeft: 20, color: '#fbbf24' }}>
+              {pushResult.unassignedWarnings.map((w, i) => (
+                <li key={i} style={{ fontSize: 12 }}>{w}</li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 

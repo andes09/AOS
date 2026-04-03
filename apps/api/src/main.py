@@ -15,6 +15,10 @@ from src.routers.organizations import settings_router
 from src.routers.exec import exec_router
 from src.integrations.jira import router as jira_router
 from src.routers import developers as developers_router
+from src.routers.users import users_router
+from src.routers.scope_cop import scope_cop_router
+from src.routers.dependency_radar import dependency_radar_router
+from src.routers.retro import retro_router
 
 app = FastAPI(
     title="AgileOS API",
@@ -45,8 +49,12 @@ app.include_router(alerts_router.router)
 app.include_router(organizations_router.router)
 app.include_router(settings_router)
 app.include_router(jira_router.router)
+app.include_router(users_router, prefix="/api/users")
 app.include_router(exec_router, prefix="/api/exec")
 app.include_router(developers_router.router)
+app.include_router(scope_cop_router, prefix="/api/scope-cop")
+app.include_router(dependency_radar_router, prefix="/api/dependency-radar")
+app.include_router(retro_router, prefix="/api/retro")
 
 
 @app.get("/health")

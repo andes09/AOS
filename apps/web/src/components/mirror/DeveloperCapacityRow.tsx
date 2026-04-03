@@ -1,8 +1,10 @@
 // apps/web/src/components/mirror/DeveloperCapacityRow.tsx
 
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@clerk/clerk-react'
 import { useApi, ApiError } from '../../lib/api'
+import { DeveloperProfileModal } from './DeveloperProfileModal'
 
 export interface DeveloperCapacity {
   developerId: string
@@ -24,13 +26,18 @@ interface DeveloperCapacityRowProps {
   developers?: DeveloperCapacity[]
 }
 
+interface DevCardProps {
+  dev: DeveloperCapacity
+  onClick: () => void
+}
+
 function utilisationColour(ratio: number): string {
   if (ratio <= 0.8) return '#4ade80'
   if (ratio <= 1.0) return '#fbbf24'
   return '#ef4444'
 }
 
-function DevCard({ dev }: { dev: DeveloperCapacity }) {
+function DevCard({ dev, onClick }: DevCardProps) {
   const ratio = dev.availableDays > 0 ? dev.committedPoints / (dev.availableDays * 2) : 0
   const completeRatio = dev.committedPoints > 0 ? dev.completedPoints / dev.committedPoints : 0
   const barColour = utilisationColour(ratio)
@@ -38,13 +45,14 @@ function DevCard({ dev }: { dev: DeveloperCapacity }) {
   const avatarInitial = dev.name.charAt(0).toUpperCase()
 
   return (
-    <div style={{
+    <div onClick={onClick} style={{
       background: '#1e2030',
       borderRadius: 8,
       padding: '0.875rem 1rem',
       minWidth: 160,
       flex: '0 0 auto',
       position: 'relative',
+      cursor: 'pointer',
     }}>
       {dev.isOverCapacity && (
         <div style={{
@@ -112,6 +120,7 @@ function DevCard({ dev }: { dev: DeveloperCapacity }) {
 export function DeveloperCapacityRow({ developers }: DeveloperCapacityRowProps) {
   const { get } = useApi()
   const { isLoaded, isSignedIn } = useAuth()
+  const [selectedDeveloperId, setSelectedDeveloperId] = useState<string | null>(null)
 
   const query = useQuery<SprintCapacityResponse, ApiError>({
     queryKey: ['velocity-capacity'],
@@ -152,9 +161,17 @@ export function DeveloperCapacityRow({ developers }: DeveloperCapacityRowProps) 
         {devs.length === 0 ? (
           <div style={{ color: '#475569', fontSize: 13 }}>No capacity data available</div>
         ) : (
-          devs.map(dev => <DevCard key={dev.developerId} dev={dev} />)
+          devs.map(dev => (
+            <DevCard key={dev.developerId} dev={dev} onClick={() => setSelectedDeveloperId(dev.developerId)} />
+          ))
         )}
       </div>
+      {selectedDeveloperId && (
+        <DeveloperProfileModal
+          developerId={selectedDeveloperId}
+          onClose={() => setSelectedDeveloperId(null)}
+        />
+      )}
     </div>
   )
 }

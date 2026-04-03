@@ -44,13 +44,23 @@ function TrendArrow({ trend }: { trend: number }) {
   )
 }
 
-export function VelocityStatsChart() {
+interface VelocityStatsChartProps {
+  window: number
+  fromDate: string | null
+  visibleMetrics: string[]
+}
+
+export function VelocityStatsChart({ window, fromDate, visibleMetrics }: VelocityStatsChartProps) {
   const { get } = useApi()
   const { isLoaded, isSignedIn } = useAuth()
 
+  const params = new URLSearchParams()
+  params.set('window', String(window))
+  if (fromDate) params.set('fromDate', fromDate)
+
   const { data, isLoading, isError, error } = useQuery<VelocityStatsData, ApiError>({
-    queryKey: ['velocity-stats'],
-    queryFn: () => get<VelocityStatsData>('/api/velocity/stats'),
+    queryKey: ['velocity-stats', window, fromDate],
+    queryFn: () => get<VelocityStatsData>(`/api/velocity/stats?${params.toString()}`),
     enabled: isLoaded && isSignedIn,
   })
 
@@ -179,27 +189,31 @@ export function VelocityStatsChart() {
           />
 
           {/* Rolling avg — solid indigo */}
-          <Line
-            type="monotone"
-            dataKey="rollingAvg"
-            name="Rolling Avg"
-            stroke="#6366f1"
-            strokeWidth={2}
-            dot={false}
-            connectNulls={false}
-          />
+          {visibleMetrics.includes('rolling') && (
+            <Line
+              type="monotone"
+              dataKey="rollingAvg"
+              name="Rolling Avg"
+              stroke="#6366f1"
+              strokeWidth={2}
+              dot={false}
+              connectNulls={false}
+            />
+          )}
 
           {/* Weighted avg — dashed violet */}
-          <Line
-            type="monotone"
-            dataKey="weightedAvg"
-            name="Weighted Avg"
-            stroke="#a78bfa"
-            strokeWidth={2}
-            strokeDasharray="4 2"
-            dot={false}
-            connectNulls={false}
-          />
+          {visibleMetrics.includes('weighted') && (
+            <Line
+              type="monotone"
+              dataKey="weightedAvg"
+              name="Weighted Avg"
+              stroke="#a78bfa"
+              strokeWidth={2}
+              strokeDasharray="4 2"
+              dot={false}
+              connectNulls={false}
+            />
+          )}
 
           {/* Forecast band */}
           <Area
@@ -230,16 +244,18 @@ export function VelocityStatsChart() {
       {/* Summary stats row */}
       <div style={{ display: 'flex', gap: 24, marginTop: 8, paddingTop: 8, borderTop: '1px solid #2d2f45' }}>
         {[
-          { label: 'Rolling Avg', value: `${data.rollingAvg} pts` },
-          { label: 'Weighted Avg', value: `${data.weightedAvg} pts` },
-          { label: 'Std Dev', value: `±${data.stdDev}` },
-          { label: 'Forecast', value: `${data.forecast.point} pts` },
-        ].map(({ label, value }) => (
-          <div key={label}>
-            <div style={{ color: '#475569', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
-            <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600 }}>{value}</div>
-          </div>
-        ))}
+          { label: 'Rolling Avg', value: `${data.rollingAvg} pts`, metric: 'rolling' },
+          { label: 'Weighted Avg', value: `${data.weightedAvg} pts`, metric: 'weighted' },
+          { label: 'Std Dev', value: `±${data.stdDev}`, metric: 'stddev' },
+          { label: 'Forecast', value: `${data.forecast.point} pts`, metric: null },
+        ]
+          .filter(({ metric }) => metric === null || visibleMetrics.includes(metric))
+          .map(({ label, value }) => (
+            <div key={label}>
+              <div style={{ color: '#475569', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+              <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600 }}>{value}</div>
+            </div>
+          ))}
       </div>
     </div>
   )

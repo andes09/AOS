@@ -1,5 +1,6 @@
 // apps/web/src/pages/VelocityMirrorPage.tsx
 
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@clerk/clerk-react'
 import { useApi, ApiError } from '../lib/api'
@@ -8,6 +9,7 @@ import { DeveloperCapacityRow } from '../components/mirror/DeveloperCapacityRow'
 import { AlertFeed } from '../components/mirror/AlertFeed'
 import { SprintHealthScore } from '../components/mirror/SprintHealthScore'
 import { VelocityStatsChart } from '../components/mirror/VelocityStatsChart'
+import { VelocityControls } from '../components/mirror/VelocityControls'
 
 interface CurrentSprint {
   id: string
@@ -19,6 +21,10 @@ interface CurrentSprint {
 }
 
 export function VelocityMirrorPage() {
+  const [window, setWindow] = useState(6)
+  const [fromDate, setFromDate] = useState<string | null>(null)
+  const [visibleMetrics, setVisibleMetrics] = useState(['rolling', 'weighted', 'stddev'])
+
   const { get } = useApi()
   const { isLoaded, isSignedIn } = useAuth()
 
@@ -67,7 +73,19 @@ export function VelocityMirrorPage() {
         {/* Left: chart + capacity */}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
           <BurndownChart sprintLength={sprint?.sprintLength} />
-          <VelocityStatsChart />
+          <VelocityControls
+            window={window}
+            setWindow={setWindow}
+            fromDate={fromDate}
+            setFromDate={setFromDate}
+            visibleMetrics={visibleMetrics}
+            setVisibleMetrics={setVisibleMetrics}
+          />
+          <VelocityStatsChart
+            window={window}
+            fromDate={fromDate}
+            visibleMetrics={visibleMetrics}
+          />
           <DeveloperCapacityRow />
         </div>
 

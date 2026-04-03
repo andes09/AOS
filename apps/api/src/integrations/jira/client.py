@@ -143,3 +143,32 @@ class JiraClient:
                 json={"accountId": jira_account_id},
             )
             r.raise_for_status()
+
+    async def get_issue_links(self, issue_key: str) -> list[dict]:
+        """
+        GET /rest/api/3/issue/{key}?fields=issuelinks,summary
+        Returns list of { "type": str, "inwardIssue": dict|None, "outwardIssue": dict|None }
+        Raises HTTPException(404) if issue not found.
+        """
+        from fastapi import HTTPException
+
+        async with httpx.AsyncClient() as c:
+            r = await c.get(
+                f"{self.base_url}/issue/{issue_key}",
+                headers=self._headers(),
+                params={"fields": "issuelinks,summary"},
+            )
+            if r.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"Issue {issue_key} not found in Jira")
+            r.raise_for_status()
+            data = r.json()
+
+        raw_links = data.get("fields", {}).get("issuelinks", [])
+        return [
+            {
+                "type": link.get("type", {}).get("name", ""),
+                "inwardIssue": link.get("inwardIssue"),
+                "outwardIssue": link.get("outwardIssue"),
+            }
+            for link in raw_links
+        ]

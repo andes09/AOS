@@ -538,18 +538,23 @@ async def get_health_score(
 @dashboard_router.get("/stats", response_model=VelocityStatsResponse)
 async def get_velocity_stats(
     window: int = Query(default=6, ge=3, le=12),
+    from_date: date | None = Query(default=None, alias="fromDate"),
     team: Team = Depends(resolve_team_query),
     db: AsyncSession = Depends(get_db),
 ):
     """Statistical velocity analysis for the team over the last N completed sprints."""
+    filters = [
+        Sprint.team_id == team.id,
+        Sprint.status == SprintStatus.COMPLETED,
+        Sprint.delivered_points.isnot(None),
+    ]
+    if from_date:
+        filters.append(Sprint.end_date >= from_date)
+
     sprints = (
         await db.scalars(
             select(Sprint)
-            .where(
-                Sprint.team_id == team.id,
-                Sprint.status == SprintStatus.COMPLETED,
-                Sprint.delivered_points.isnot(None),
-            )
+            .where(*filters)
             .order_by(Sprint.end_date.asc())
         )
     ).all()

@@ -23,14 +23,19 @@ following upstream tracks land:
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select, func
 
 from src.auth import get_current_user_id, get_current_org_id
+from src.auth_roles import require_role
 from src.database import get_db
+from src.integrations.jira.push import resolve_jira_account_id
+from src.integrations.jira.sync import _get_fresh_client
 from src.models.developer import Developer
+from src.models.jira_connection import JiraConnection
 from src.models.organization import Organization
 from src.models.sprint import Sprint, SprintStatus
 from src.models.team import Team
@@ -64,6 +69,26 @@ class WhatIfRequest(BaseModel):
     sprint_start_date: str = ""
     pto_overrides: dict[str, float] = {}
     dropped_ticket_ids: list[str]      # tickets to remove from the candidate pool
+
+
+class PushAssignment(BaseModel):
+    ticketId: str       # Jira issue key
+    developerId: str    # Developer UUID
+
+
+class PushToJiraRequest(BaseModel):
+    teamId: str
+    sprintName: str
+    sprintStartDate: str    # YYYY-MM-DD
+    sprintEndDate: str      # YYYY-MM-DD
+    assignments: list[PushAssignment]
+
+
+class PushToJiraResponse(BaseModel):
+    jiraSprintId: int
+    sprintUrl: str
+    pushedTickets: int
+    unassignedWarnings: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -324,3 +349,85 @@ async def what_if_scenario(
             "insufficient_data_devs": plan.insufficient_data_devs,
         },
     }
+
+
+@router.post("/push-to-jira", dependencies=[Depends(require_role("lead"))])
+async def push_to_jira(
+    request: PushToJiraRequest,
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+) -> PushToJiraResponse:
+    """
+    Create a Jira sprint, move issues into it, and assign developers.
+
+    Requires 'lead' role or higher.
+    """
+    # 1. Resolve team by teamId — 404 if not found
+    team = await db.scalar(select(Team).where(Team.id == request.teamId))
+    if not team:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found.")
+
+    # 2. Check for active sprint — 409 if found
+    active_sprint = await db.scalar(
+        select(Sprint).where(
+            Sprint.team_id == team.id,
+            Sprint.status == SprintStatus.ACTIVE,
+        )
+    )
+    if active_sprint:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "detail": "An active sprint is in progress. Complete it before pushing a new plan.",
+                "currentSprintName": active_sprint.name or "",
+            },
+        )
+
+    # 3. Get JiraConnection for org — 402 if not found
+    connection = await db.scalar(
+        select(JiraConnection).where(
+            JiraConnection.organization_id == team.organization_id,
+            JiraConnection.is_active.is_(True),
+        )
+    )
+    if not connection:
+        raise HTTPException(
+            status_code=402,
+            detail="No active Jira connection. Connect Jira in Settings.",
+        )
+
+    # 4. Get board_id; 5. Build client
+    client = _get_fresh_client(connection, db)
+
+    # 6. Create sprint in Jira
+    sprint_data = await client.create_sprint(
+        team.jira_board_id,
+        request.sprintName,
+        request.sprintStartDate,
+        request.sprintEndDate,
+    )
+
+    # 7. Extract sprint id and URL
+    jira_sprint_id: int = sprint_data["id"]
+    sprint_url: str = sprint_data["self"]
+
+    # 8. Move issues into the new sprint
+    issue_keys = [a.ticketId for a in request.assignments]
+    await client.move_issues_to_sprint(jira_sprint_id, issue_keys)
+
+    # 9. Assign each ticket; collect warnings for unresolved developers
+    unassigned_warnings: list[str] = []
+    for assignment in request.assignments:
+        account_id = await resolve_jira_account_id(assignment.developerId, str(team.id), db)
+        if account_id:
+            await client.assign_issue(assignment.ticketId, account_id)
+        else:
+            unassigned_warnings.append(assignment.ticketId)
+
+    # 10. Return response
+    return PushToJiraResponse(
+        jiraSprintId=jira_sprint_id,
+        sprintUrl=sprint_url,
+        pushedTickets=len(issue_keys),
+        unassignedWarnings=unassigned_warnings,
+    )

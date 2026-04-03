@@ -108,3 +108,38 @@ class JiraClient:
             )
             r.raise_for_status()
             return r.json()
+
+    @property
+    def agile_base_url(self) -> str:
+        return f"https://api.atlassian.com/ex/jira/{self.cloud_id}/rest/agile/1.0"
+
+    async def create_sprint(self, board_id: str, name: str, start_date: str, end_date: str) -> dict:
+        """POST /agile/1.0/sprint — returns sprint dict with 'id' and 'self' URL."""
+        async with httpx.AsyncClient() as c:
+            r = await c.post(
+                f"{self.agile_base_url}/sprint",
+                headers={**self._headers(), "Content-Type": "application/json"},
+                json={"originBoardId": board_id, "name": name, "startDate": start_date, "endDate": end_date},
+            )
+            r.raise_for_status()
+            return r.json()
+
+    async def move_issues_to_sprint(self, sprint_id: int, issue_keys: list[str]) -> None:
+        """POST /agile/1.0/sprint/{id}/issue"""
+        async with httpx.AsyncClient() as c:
+            r = await c.post(
+                f"{self.agile_base_url}/sprint/{sprint_id}/issue",
+                headers={**self._headers(), "Content-Type": "application/json"},
+                json={"issues": issue_keys},
+            )
+            r.raise_for_status()
+
+    async def assign_issue(self, issue_key: str, jira_account_id: str) -> None:
+        """PUT /rest/api/3/issue/{key}/assignee"""
+        async with httpx.AsyncClient() as c:
+            r = await c.put(
+                f"{self.base_url}/issue/{issue_key}/assignee",
+                headers={**self._headers(), "Content-Type": "application/json"},
+                json={"accountId": jira_account_id},
+            )
+            r.raise_for_status()

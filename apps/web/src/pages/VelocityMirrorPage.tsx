@@ -24,6 +24,17 @@ interface CurrentSprint {
   totalPoints: number
 }
 
+interface CompletedSprint {
+  id: string
+  name: string
+  startDate: string | null
+  endDate: string | null
+}
+
+interface CompletedSprintsResponse {
+  sprints: CompletedSprint[]
+}
+
 export function VelocityMirrorPage() {
   const [window, setWindow] = useState(6)
   const [fromDate, setFromDate] = useState<string | null>(null)
@@ -36,6 +47,12 @@ export function VelocityMirrorPage() {
   const { data: sprint, isLoading, isError, error } = useQuery<CurrentSprint, ApiError>({
     queryKey: ['current-sprint'],
     queryFn: () => get<CurrentSprint>('/api/sprints/current'),
+    enabled: isLoaded && isSignedIn,
+  })
+
+  const { data: completedSprintsData } = useQuery<CompletedSprintsResponse>({
+    queryKey: ['completed-sprints'],
+    queryFn: () => get<CompletedSprintsResponse>('/api/sprints/completed'),
     enabled: isLoaded && isSignedIn,
   })
 
@@ -76,8 +93,33 @@ export function VelocityMirrorPage() {
           )}
         </div>
 
-        {/* Health score — top right */}
-        <SprintHealthScore sprintId={sprint?.id} />
+        {/* Health score + completed sprint retro links */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+          <SprintHealthScore sprintId={sprint?.id} />
+          {(completedSprintsData?.sprints ?? []).length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              {(completedSprintsData?.sprints ?? []).slice(0, 3).map(s => (
+                <button
+                  key={s.id}
+                  onClick={() => navigate(`/app/retrospective?sprintId=${s.id}`)}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid #334155',
+                    borderRadius: 5,
+                    color: '#94a3b8',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: '3px 10px',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {s.name} · View Retro
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Main content + sidebar */}
@@ -100,6 +142,49 @@ export function VelocityMirrorPage() {
             visibleMetrics={visibleMetrics}
           />
           <DeveloperCapacityRow />
+
+          {/* Completed sprints — View Retro links */}
+          {(completedSprintsData?.sprints ?? []).length > 0 && (
+            <div style={{
+              background: '#1e2330',
+              borderRadius: 8,
+              padding: '1rem 1.25rem',
+            }}>
+              <div style={{
+                color: '#94a3b8',
+                fontSize: 11,
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                letterSpacing: '0.06em',
+                marginBottom: 10,
+              }}>
+                Completed Sprints
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {(completedSprintsData?.sprints ?? []).map(s => (
+                  <div key={s.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                    <span style={{ color: '#cbd5e1', fontSize: 13 }}>{s.name}</span>
+                    <button
+                      onClick={() => navigate(`/app/retrospective?sprintId=${s.id}`)}
+                      style={{
+                        background: 'transparent',
+                        border: '1px solid #334155',
+                        borderRadius: 5,
+                        color: '#a5b4fc',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        padding: '3px 12px',
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                      }}
+                    >
+                      View Retro
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right: alerts + high-risk dep alerts */}
@@ -155,7 +240,7 @@ export function VelocityMirrorPage() {
                       </div>
                     )}
                     <button
-                      onClick={() => navigate('/dependency-radar')}
+                      onClick={() => navigate('/app/dependency-radar')}
                       style={{
                         background: 'transparent',
                         border: '1px solid #334155',

@@ -1,7 +1,11 @@
 import { Outlet, NavLink } from 'react-router-dom'
 import { UserButton } from '@clerk/clerk-react'
+import { useAppRole } from '../hooks/useAppRole'
 
 export function DashboardLayout() {
+  const { appRole } = useAppRole()
+  const canSeeExec = appRole === 'exec' || appRole === 'admin'
+
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
       <nav style={{ width: 220, padding: '1rem', borderRight: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column' }}>
@@ -9,6 +13,7 @@ export function DashboardLayout() {
         <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1 }}>
           <li><NavLink to="/app/sprint-planner">Sprint Planner</NavLink></li>
           <li><NavLink to="/app/velocity-mirror">Velocity Mirror</NavLink></li>
+          {canSeeExec && <li><NavLink to="/app/exec-dashboard">Exec Dashboard</NavLink></li>}
           <li><NavLink to="/app/settings">Settings</NavLink></li>
         </ul>
         <UserButton />

@@ -4,6 +4,7 @@ import { DashboardLayout } from './layouts/DashboardLayout'
 import { OrgProvider } from './components/OrgProvider'
 import { SprintPlannerPage } from './pages/SprintPlannerPage'
 import { VelocityMirrorPage } from './pages/VelocityMirrorPage'
+import { ExecDashboardPage } from './pages/ExecDashboardPage'
 import { OnboardingPage } from './pages/OnboardingPage'
 import { SettingsPage } from './pages/SettingsPage'
 
@@ -33,6 +34,7 @@ export default function App() {
         <Route index element={<Navigate to="sprint-planner" replace />} />
         <Route path="sprint-planner" element={<SprintPlannerPage />} />
         <Route path="velocity-mirror" element={<VelocityMirrorPage />} />
+        <Route path="exec-dashboard" element={<ExecDashboardPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/app" replace />} />

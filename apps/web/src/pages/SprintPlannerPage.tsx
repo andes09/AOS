@@ -7,7 +7,9 @@ import { VelocityCard } from '../components/sprint/VelocityCard'
 import { ConfidenceGauge } from '../components/sprint/ConfidenceGauge'
 import { TicketList } from '../components/sprint/TicketList'
 import { PlanReasoningPanel } from '../components/sprint/PlanReasoningPanel'
+import { ScopeCopPanel } from '../components/sprint/ScopeCopPanel'
 import type { SprintPlanResponse, WhatIfResponse, Ticket, PushToJiraResponse } from '../types/sprint'
+import type { AnalyzeResponse } from '../types/scopeCop'
 
 const SESSION_KEY = 'sprint_plan_cache'
 
@@ -81,6 +83,13 @@ export function SprintPlannerPage() {
       else if (err.status === 402) setPushError('No Jira connection. Connect in Settings.')
       else setPushError('Push failed. Try again.')
     },
+  })
+
+  const scopeAnalysisMutation = useMutation({
+    mutationFn: () => post<AnalyzeResponse>('/api/scope-cop/analyze', {
+      teamId: 'default',
+      ticketKeys: (plan?.assignments ?? []).map(a => a.ticket_id),
+    }),
   })
 
   const whatIf = useMutation({
@@ -158,6 +167,27 @@ export function SprintPlannerPage() {
           <div style={{ background: '#1e2030', borderRadius: 8, padding: '0.875rem 1rem', display: 'flex', alignItems: 'center' }}>
             <ConfidenceGauge score={confidence} sampleSize={plan.assignments.length} />
           </div>
+        )}
+
+        {plan && (
+          <button
+            onClick={() => scopeAnalysisMutation.mutate()}
+            disabled={scopeAnalysisMutation.isPending}
+            style={{
+              background: scopeAnalysisMutation.isPending ? '#374151' : '#0f172a',
+              color: scopeAnalysisMutation.isPending ? '#475569' : '#f59e0b',
+              border: '1px solid #f59e0b',
+              borderRadius: 8,
+              padding: '0.875rem 1.5rem',
+              fontSize: 14,
+              fontWeight: 700,
+              cursor: scopeAnalysisMutation.isPending ? 'default' : 'pointer',
+              whiteSpace: 'nowrap',
+              alignSelf: 'center',
+            }}
+          >
+            {scopeAnalysisMutation.isPending ? 'Analyzing...' : '⬡ Analyze Scope'}
+          </button>
         )}
 
         <button
@@ -241,6 +271,24 @@ export function SprintPlannerPage() {
             </ul>
           )}
         </div>
+      )}
+
+      {scopeAnalysisMutation.data?.summary.needsWorkCount != null &&
+        scopeAnalysisMutation.data.summary.needsWorkCount > 0 && (
+        <div style={{ background: '#1c1100', border: '1px solid #f59e0b', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ color: '#f59e0b', fontSize: 16 }}>⚠</span>
+          <span style={{ color: '#fbbf24', fontSize: 13, fontWeight: 600 }}>
+            {scopeAnalysisMutation.data.summary.needsWorkCount} ticket{scopeAnalysisMutation.data.summary.needsWorkCount !== 1 ? 's' : ''} need work before planning
+          </span>
+        </div>
+      )}
+
+      {scopeAnalysisMutation.data && (
+        <ScopeCopPanel
+          response={scopeAnalysisMutation.data}
+          onReanalyze={() => scopeAnalysisMutation.mutate()}
+          isPending={scopeAnalysisMutation.isPending}
+        />
       )}
 
       {plan && (

@@ -6,6 +6,7 @@ import { SprintPlannerPage } from './pages/SprintPlannerPage'
 import { VelocityMirrorPage } from './pages/VelocityMirrorPage'
 import { ExecDashboardPage } from './pages/ExecDashboardPage'
 import { DependencyRadarPage } from './pages/DependencyRadarPage'
+import { RetrospectivePage } from './pages/RetrospectivePage'
 import { OnboardingPage } from './pages/OnboardingPage'
 import { SettingsPage } from './pages/SettingsPage'
 
@@ -37,6 +38,7 @@ export default function App() {
         <Route path="velocity-mirror" element={<VelocityMirrorPage />} />
         <Route path="exec-dashboard" element={<ExecDashboardPage />} />
         <Route path="dependency-radar" element={<DependencyRadarPage />} />
+        <Route path="retrospective" element={<RetrospectivePage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/app" replace />} />

@@ -4,6 +4,7 @@ import { useAppRole } from '../hooks/useAppRole'
 
 export function DashboardLayout() {
   const { appRole } = useAppRole()
+  const canSeeLead = appRole === 'lead' || appRole === 'exec' || appRole === 'admin'
   const canSeeExec = appRole === 'exec' || appRole === 'admin'
 
   return (
@@ -13,6 +14,8 @@ export function DashboardLayout() {
         <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1 }}>
           <li><NavLink to="/app/sprint-planner">Sprint Planner</NavLink></li>
           <li><NavLink to="/app/velocity-mirror">Velocity Mirror</NavLink></li>
+          {canSeeLead && <li><NavLink to="/app/dependency-radar">Dependency Radar</NavLink></li>}
+          {canSeeLead && <li><NavLink to="/app/retrospective">Retrospective</NavLink></li>}
           {canSeeExec && <li><NavLink to="/app/exec-dashboard">Exec Dashboard</NavLink></li>}
           <li><NavLink to="/app/settings">Settings</NavLink></li>
         </ul>

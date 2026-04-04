@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@clerk/clerk-react'
+import { useNavigate } from 'react-router-dom'
 import { useApi, ApiError } from '../lib/api'
 import { BurndownChart } from '../components/mirror/BurndownChart'
 import { DeveloperCapacityRow } from '../components/mirror/DeveloperCapacityRow'
@@ -10,6 +11,9 @@ import { AlertFeed } from '../components/mirror/AlertFeed'
 import { SprintHealthScore } from '../components/mirror/SprintHealthScore'
 import { VelocityStatsChart } from '../components/mirror/VelocityStatsChart'
 import { VelocityControls } from '../components/mirror/VelocityControls'
+import type { RadarResponse } from '../types/dependencyRadar'
+
+const TEAM_ID = 'default'
 
 interface CurrentSprint {
   id: string
@@ -27,12 +31,21 @@ export function VelocityMirrorPage() {
 
   const { get } = useApi()
   const { isLoaded, isSignedIn } = useAuth()
+  const navigate = useNavigate()
 
   const { data: sprint, isLoading, isError, error } = useQuery<CurrentSprint, ApiError>({
     queryKey: ['current-sprint'],
     queryFn: () => get<CurrentSprint>('/api/sprints/current'),
     enabled: isLoaded && isSignedIn,
   })
+
+  const { data: radarData } = useQuery<RadarResponse>({
+    queryKey: ['dependency-radar', TEAM_ID],
+    queryFn: () => get<RadarResponse>(`/api/dependency-radar/team/${TEAM_ID}`),
+    enabled: isLoaded && isSignedIn,
+  })
+
+  const highRiskDeps = radarData?.dependencies.filter(d => d.riskLevel === 'high') ?? []
 
   return (
     <div style={{
@@ -89,9 +102,78 @@ export function VelocityMirrorPage() {
           <DeveloperCapacityRow />
         </div>
 
-        {/* Right: alerts */}
-        <div style={{ width: 300, flexShrink: 0 }}>
+        {/* Right: alerts + high-risk dep alerts */}
+        <div style={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
           <AlertFeed />
+
+          {highRiskDeps.length > 0 && (
+            <div>
+              <div style={{
+                color: '#94a3b8',
+                fontSize: 11,
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                letterSpacing: '0.06em',
+                marginBottom: 10,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}>
+                <span>High-Risk Dependencies</span>
+                <span style={{
+                  background: '#ef4444',
+                  color: '#fff',
+                  borderRadius: '50%',
+                  width: 18,
+                  height: 18,
+                  fontSize: 10,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontWeight: 700,
+                }}>
+                  {highRiskDeps.length}
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {highRiskDeps.map(dep => (
+                  <div
+                    key={dep.id}
+                    style={{
+                      background: '#1e2030',
+                      borderRadius: 8,
+                      padding: '0.75rem 1rem',
+                      borderLeft: '3px solid #ef4444',
+                    }}
+                  >
+                    <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600, marginBottom: 3 }}>
+                      {dep.ticketKey}
+                    </div>
+                    {dep.description && (
+                      <div style={{ color: '#94a3b8', fontSize: 12, marginBottom: 8, lineHeight: 1.4 }}>
+                        {dep.description}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => navigate('/dependency-radar')}
+                      style={{
+                        background: 'transparent',
+                        border: '1px solid #334155',
+                        color: '#94a3b8',
+                        borderRadius: 5,
+                        padding: '3px 10px',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      View Radar
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
       </div>

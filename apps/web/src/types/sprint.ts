@@ -10,6 +10,24 @@ export interface Assignment {
   story_points: number
 }
 
+export interface ScopeWarning {
+  ticketId: string
+  status: string
+  issues: string[]
+}
+
+export interface DependencyWarning {
+  ticketId: string
+  riskLevel: string
+  description: string | null
+}
+
+export interface EnrichmentStatus {
+  scopeCop: 'not_analyzed' | 'all_ready' | 'has_issues'
+  dependencyRadar: 'not_scanned' | 'no_risks' | 'has_risks'
+  retroPatterns: 'no_data' | 'no_active_patterns' | 'has_patterns'
+}
+
 export interface SprintPlanResponse {
   team_id: string
   sprint_start: string
@@ -19,6 +37,10 @@ export interface SprintPlanResponse {
   warnings: string[]
   what_if_dropped: Record<string, number>
   developers: Record<string, string>
+  scopeWarnings: ScopeWarning[]
+  dependencyWarnings: DependencyWarning[]
+  historicalWarnings: string[]
+  enrichmentStatus: EnrichmentStatus
 }
 
 export interface WhatIfResponse {

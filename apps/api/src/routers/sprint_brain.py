@@ -20,11 +20,14 @@ following upstream tracks land:
   _get_candidate_tickets()  → needs Ticket model (Track C) + Jira sync (Track D)
 """
 
+import logging
 from datetime import date
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select, func
@@ -37,6 +40,9 @@ from src.integrations.jira.sync import _get_fresh_client
 from src.models.developer import Developer
 from src.models.jira_connection import JiraConnection
 from src.models.organization import Organization
+from src.models.scope_cop import TicketAnalysis
+from src.models.dependency_radar import Dependency, RiskLevel
+from src.models.retro import RetroPattern
 from src.models.sprint import Sprint, SprintStatus
 from src.models.team import Team
 from src.models.ticket import Ticket, TicketStatus
@@ -47,6 +53,8 @@ from src.services.sprint_brain import (
     generate_sprint_plan,
     simulate_what_if,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sprint-brain", tags=["sprint-brain"])
 
@@ -89,6 +97,27 @@ class PushToJiraResponse(BaseModel):
     sprintUrl: str
     pushedTickets: int
     unassignedWarnings: list[str]
+
+
+class ScopeWarning(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    ticket_id: str
+    status: str
+    issues: list[str]
+
+
+class DependencyWarning(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    ticket_id: str
+    risk_level: str
+    description: str | None
+
+
+class EnrichmentStatus(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    scope_cop: Literal["not_analyzed", "all_ready", "has_issues"]
+    dependency_radar: Literal["not_scanned", "no_risks", "has_risks"]
+    retro_patterns: Literal["no_data", "no_active_patterns", "has_patterns"]
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +204,139 @@ async def _get_candidate_tickets(team_id: str, db: AsyncSession) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Enrichment
+# ---------------------------------------------------------------------------
+
+
+async def _build_enrichment(
+    team_id: str,
+    assigned_keys: list[str],
+    db: AsyncSession,
+) -> tuple[list[ScopeWarning], list[DependencyWarning], EnrichmentStatus, list[str], list[str]]:
+    """
+    Query ticket_analyses, dependencies, and retro_patterns to build enrichment data.
+    Returns (scope_warnings, dep_warnings, enrichment_status, historical_warnings, pattern_descriptions).
+    """
+    import uuid as _uuid
+    try:
+        team_uuid = _uuid.UUID(team_id)
+    except ValueError:
+        # Can't enrich without a valid team UUID
+        return (
+            [],
+            [],
+            EnrichmentStatus(
+                scope_cop="not_analyzed",
+                dependency_radar="not_scanned",
+                retro_patterns="no_data",
+            ),
+            [],
+            [],
+        )
+
+    # --- Scope Cop enrichment ---
+    scope_rows = (await db.scalars(
+        select(TicketAnalysis).where(
+            TicketAnalysis.team_id == team_uuid,
+            TicketAnalysis.ticket_key.in_(assigned_keys),
+        )
+    )).all()
+
+    scope_warnings: list[ScopeWarning] = []
+    if not scope_rows:
+        scope_cop_status: Literal["not_analyzed", "all_ready", "has_issues"] = "not_analyzed"
+    else:
+        flagged = [r for r in scope_rows if r.status in ("needs_work", "blocked")]
+        if flagged:
+            scope_cop_status = "has_issues"
+            scope_warnings = [
+                ScopeWarning(
+                    ticket_id=r.ticket_key,
+                    status=r.status,
+                    issues=r.issues or [],
+                )
+                for r in flagged
+            ]
+        else:
+            scope_cop_status = "all_ready"
+
+    logger.debug(
+        "[enrichment] scope_cop: %d checked, %d flagged",
+        len(scope_rows),
+        len(scope_warnings),
+    )
+
+    # --- Dependency Radar enrichment ---
+    dep_rows = (await db.scalars(
+        select(Dependency).where(
+            Dependency.team_id == team_uuid,
+            Dependency.ticket_key.in_(assigned_keys),
+            Dependency.resolved_at.is_(None),
+        )
+    )).all()
+
+    dep_warnings: list[DependencyWarning] = []
+    if not dep_rows:
+        dep_radar_status: Literal["not_scanned", "no_risks", "has_risks"] = "not_scanned"
+    else:
+        high_risk = [r for r in dep_rows if r.risk_level == RiskLevel.HIGH.value]
+        if high_risk:
+            dep_radar_status = "has_risks"
+            dep_warnings = [
+                DependencyWarning(
+                    ticket_id=r.ticket_key,
+                    risk_level=r.risk_level,
+                    description=r.description,
+                )
+                for r in high_risk
+            ]
+        else:
+            dep_radar_status = "no_risks"
+
+    logger.debug(
+        "[enrichment] dep_radar: %d checked, %d high-risk",
+        len(dep_rows),
+        len(dep_warnings),
+    )
+
+    # --- Retro Pattern enrichment ---
+    all_pattern_rows = (await db.scalars(
+        select(RetroPattern).where(RetroPattern.team_id == team_uuid)
+    )).all()
+
+    active_patterns = [
+        r for r in all_pattern_rows
+        if r.status == "active" and r.occurrence_count >= 2
+    ]
+
+    historical_warnings: list[str] = []
+    pattern_descriptions: list[str] = []
+
+    if not all_pattern_rows:
+        retro_status: Literal["no_data", "no_active_patterns", "has_patterns"] = "no_data"
+    elif not active_patterns:
+        retro_status = "no_active_patterns"
+    else:
+        retro_status = "has_patterns"
+        historical_warnings = [p.description for p in active_patterns if p.description]
+        pattern_descriptions = historical_warnings
+
+    logger.debug("[enrichment] patterns: %d active for team", len(active_patterns))
+
+    return (
+        scope_warnings,
+        dep_warnings,
+        EnrichmentStatus(
+            scope_cop=scope_cop_status,
+            dependency_radar=dep_radar_status,
+            retro_patterns=retro_status,
+        ),
+        historical_warnings,
+        pattern_descriptions,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Route helpers
 # ---------------------------------------------------------------------------
 
@@ -185,6 +347,10 @@ def _sprint_plan_response(
     plan: SprintBrainOutput,
     developer_profiles: list[dict],
     candidate_tickets: list[dict],
+    scope_warnings: list[ScopeWarning] | None = None,
+    dep_warnings: list[DependencyWarning] | None = None,
+    enrichment_status: EnrichmentStatus | None = None,
+    historical_warnings: list[str] | None = None,
 ) -> dict:
     dev_name_map = {p["developer_id"].lower(): p["display_name"] for p in developer_profiles}
     ticket_title_map = {t["id"]: t["summary"] for t in candidate_tickets}
@@ -197,6 +363,11 @@ def _sprint_plan_response(
         }
         for a in plan.assignments
     ]
+    default_status = EnrichmentStatus(
+        scope_cop="not_analyzed",
+        dependency_radar="not_scanned",
+        retro_patterns="no_data",
+    )
     return {
         "team_id": team_id,
         "sprint_start": sprint_start,
@@ -207,6 +378,10 @@ def _sprint_plan_response(
         "what_if_dropped": plan.what_if_dropped,
         "insufficient_data_devs": plan.insufficient_data_devs,
         "developers": {p["developer_id"].lower(): p["display_name"] for p in developer_profiles},
+        "scopeWarnings": [w.model_dump(by_alias=True) for w in (scope_warnings or [])],
+        "dependencyWarnings": [w.model_dump(by_alias=True) for w in (dep_warnings or [])],
+        "historicalWarnings": historical_warnings or [],
+        "enrichmentStatus": (enrichment_status or default_status).model_dump(by_alias=True),
     }
 
 
@@ -292,6 +467,21 @@ async def create_sprint_plan(
         db=db,
     )
 
+    # Pre-fetch active retro patterns to inject into Claude prompt (Track 23)
+    import uuid as _uuid
+    try:
+        _team_uuid = _uuid.UUID(team_id)
+        _pattern_rows = (await db.scalars(
+            select(RetroPattern).where(
+                RetroPattern.team_id == _team_uuid,
+                RetroPattern.status == "active",
+                RetroPattern.occurrence_count >= 2,
+            )
+        )).all()
+        brain_input.historical_patterns = [p.description for p in _pattern_rows if p.description]
+    except (ValueError, Exception):
+        pass  # non-UUID team_id or DB error — proceed without patterns
+
     try:
         plan = await generate_sprint_plan(brain_input, api_key)
     except ValueError as exc:
@@ -301,7 +491,19 @@ async def create_sprint_plan(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         )
 
-    return _sprint_plan_response(team_id, sprint_start, plan, dev_profiles, tickets)
+    # Post-plan enrichment queries (Tracks 22 + 23)
+    assigned_keys = [a.get("ticket_id", "") for a in plan.assignments]
+    scope_warnings, dep_warnings, enrichment_status, historical_warnings, _ = (
+        await _build_enrichment(team_id, assigned_keys, db)
+    )
+
+    return _sprint_plan_response(
+        team_id, sprint_start, plan, dev_profiles, tickets,
+        scope_warnings=scope_warnings,
+        dep_warnings=dep_warnings,
+        enrichment_status=enrichment_status,
+        historical_warnings=historical_warnings,
+    )
 
 
 @router.post("/what-if")

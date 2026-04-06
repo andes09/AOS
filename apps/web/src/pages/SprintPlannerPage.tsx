@@ -8,6 +8,7 @@ import { ConfidenceGauge } from '../components/sprint/ConfidenceGauge'
 import { TicketList } from '../components/sprint/TicketList'
 import { PlanReasoningPanel } from '../components/sprint/PlanReasoningPanel'
 import { ScopeCopPanel } from '../components/sprint/ScopeCopPanel'
+import { useNavigate } from 'react-router-dom'
 import type { SprintPlanResponse, WhatIfResponse, Ticket, PushToJiraResponse } from '../types/sprint'
 import type { AnalyzeResponse } from '../types/scopeCop'
 
@@ -23,8 +24,31 @@ function deriveCommitted(assignments: SprintPlanResponse['assignments']): Map<st
 
 const DEFAULT_CAPACITY = 40
 
+function RecurringIssuesPanel({ warnings }: { warnings: string[] }) {
+  const [open, setOpen] = useState(warnings.length <= 2)
+  return (
+    <div style={{ background: '#1e1b4b', border: '1px solid #4338ca', borderLeft: '4px solid #6366f1', borderRadius: 8, padding: '0.75rem 1rem' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, padding: 0, width: '100%', textAlign: 'left' }}
+      >
+        <span style={{ color: '#a5b4fc', fontSize: 13, fontWeight: 700 }}>↺ Recurring Issues ({warnings.length})</span>
+        <span style={{ color: '#6366f1', fontSize: 11, marginLeft: 'auto' }}>{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <ul style={{ margin: '8px 0 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {warnings.map((w, i) => (
+            <li key={i} style={{ color: '#c7d2fe', fontSize: 13, lineHeight: 1.5 }}>{w}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 export function SprintPlannerPage() {
   const { post } = useApi()
+  const navigate = useNavigate()
 
   const [plan, setPlan] = useState<SprintPlanResponse | null>(() => {
     try {
@@ -289,6 +313,60 @@ export function SprintPlannerPage() {
           onReanalyze={() => scopeAnalysisMutation.mutate()}
           isPending={scopeAnalysisMutation.isPending}
         />
+      )}
+
+      {/* Enrichment status panels (Tracks 22 + 23) */}
+      {plan?.enrichmentStatus && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+
+          {/* Scope Cop status */}
+          {plan.enrichmentStatus.scopeCop === 'not_analyzed' && !scopeAnalysisMutation.data && (
+            <div style={{ background: '#1c1100', border: '1px solid #78350f', borderRadius: 8, padding: '0.625rem 1rem', fontSize: 13, color: '#fbbf24', display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span>⬡</span><span>Scope not analyzed — run Analyze Scope before planning</span>
+            </div>
+          )}
+          {plan.enrichmentStatus.scopeCop === 'all_ready' && (
+            <div style={{ background: '#052e16', border: '1px solid #166534', borderRadius: 8, padding: '0.625rem 1rem', fontSize: 13, color: '#4ade80', display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span>✓</span><span>All tickets scope-ready</span>
+            </div>
+          )}
+          {plan.enrichmentStatus.scopeCop === 'has_issues' && (plan.scopeWarnings ?? []).map(w => (
+            <div key={w.ticketId} style={{ background: '#1c1100', border: '1px solid #f59e0b', borderRadius: 8, padding: '0.625rem 1rem', fontSize: 13 }}>
+              <span style={{ color: '#fbbf24', fontWeight: 600 }}>⚠ {w.ticketId}</span>
+              <span style={{ color: '#f59e0b', marginLeft: 8 }}>{w.status}</span>
+              {w.issues.length > 0 && (
+                <span style={{ color: '#94a3b8', marginLeft: 8 }}>{w.issues.join(' · ')}</span>
+              )}
+            </div>
+          ))}
+
+          {/* Dependency Radar status */}
+          {plan.enrichmentStatus.dependencyRadar === 'not_scanned' && (
+            <div style={{ background: '#1c1100', border: '1px solid #78350f', borderRadius: 8, padding: '0.625rem 1rem', fontSize: 13, color: '#fbbf24', display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span>⬡</span><span>Dependencies not scanned — </span>
+              <button onClick={() => navigate('/app/dependency-radar')} style={{ background: 'transparent', border: 'none', color: '#f59e0b', cursor: 'pointer', fontSize: 13, padding: 0, textDecoration: 'underline' }}>run Dependency Radar</button>
+            </div>
+          )}
+          {plan.enrichmentStatus.dependencyRadar === 'no_risks' && (
+            <div style={{ background: '#052e16', border: '1px solid #166534', borderRadius: 8, padding: '0.625rem 1rem', fontSize: 13, color: '#4ade80', display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span>✓</span><span>No dependency risks</span>
+            </div>
+          )}
+          {plan.enrichmentStatus.dependencyRadar === 'has_risks' && (plan.dependencyWarnings ?? []).map(w => (
+            <div key={w.ticketId} style={{ background: '#1f0606', border: '1px solid #ef4444', borderRadius: 8, padding: '0.625rem 1rem', fontSize: 13, display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ color: '#ef4444' }}>⛔</span>
+              <span style={{ color: '#fca5a5', fontWeight: 600 }}>{w.ticketId}</span>
+              <span style={{ color: '#f87171' }}>{w.riskLevel} risk</span>
+              {w.description && <span style={{ color: '#94a3b8' }}>{w.description}</span>}
+              <button onClick={() => navigate('/app/dependency-radar')} style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 12, padding: 0, marginLeft: 'auto', textDecoration: 'underline' }}>View Radar</button>
+            </div>
+          ))}
+
+          {/* Retro Patterns panel */}
+          {plan.enrichmentStatus.retroPatterns === 'has_patterns' && (plan.historicalWarnings ?? []).length > 0 && (
+            <RecurringIssuesPanel warnings={plan.historicalWarnings ?? []} />
+          )}
+        </div>
       )}
 
       {plan && (

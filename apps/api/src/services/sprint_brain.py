@@ -191,6 +191,7 @@ class SprintBrainInput:
     sprint_length_days: int
     sprint_start_date: str             # ISO-8601 date string
     pto_overrides: dict[str, float] = field(default_factory=dict)  # dev_id → pto_days
+    historical_patterns: list[str] = field(default_factory=list)  # recurring failure pattern descriptions
 
 
 @dataclass
@@ -381,6 +382,12 @@ def _build_assignment_message(
             lines.append(f"   Est. days : {analysis.get('estimated_days', '?')}")
             lines.append(f"   Skills    : {', '.join(analysis.get('required_skills', []))}")
             lines.append(f"   Notes     : {analysis.get('complexity_notes', '')}")
+        lines.append("")
+
+    if inp.historical_patterns:
+        lines += ["## Known Recurring Team Issues (factor into assignments)", ""]
+        for pattern in inp.historical_patterns:
+            lines.append(f"- {pattern}")
         lines.append("")
 
     lines += [

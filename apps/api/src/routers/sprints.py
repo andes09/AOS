@@ -5,6 +5,8 @@ Endpoints
 ---------
 GET /api/sprints/current
     Returns the active sprint for the authenticated team.
+GET /api/sprints/completed
+    Returns all completed sprints for the authenticated team, newest first.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
@@ -30,6 +32,40 @@ class CurrentSprintResponse(BaseModel):
     sprint_length: int
     total_points: float | None
     status: str
+
+
+class CompletedSprintsResponse(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    sprints: list[CurrentSprintResponse]
+
+
+@router.get("/completed", response_model=CompletedSprintsResponse)
+async def get_completed_sprints(
+    team: Team = Depends(resolve_team),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return all completed sprints for the authenticated team, newest first."""
+    rows = (
+        await db.scalars(
+            select(Sprint)
+            .where(Sprint.team_id == team.id, Sprint.status == SprintStatus.COMPLETED)
+            .order_by(Sprint.end_date.desc())
+        )
+    ).all()
+    return CompletedSprintsResponse(
+        sprints=[
+            CurrentSprintResponse(
+                id=str(s.id),
+                name=s.name,
+                start_date=s.start_date,
+                end_date=s.end_date,
+                sprint_length=team.sprint_length_days,
+                total_points=s.committed_points,
+                status=s.status.value,
+            )
+            for s in rows
+        ]
+    )
 
 
 @router.get("/current", response_model=CurrentSprintResponse)

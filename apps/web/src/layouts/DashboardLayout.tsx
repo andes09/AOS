@@ -14,9 +14,19 @@ export function DashboardLayout() {
         <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1 }}>
           <li><NavLink to="/app/sprint-planner">Sprint Planner</NavLink></li>
           <li><NavLink to="/app/velocity-mirror">Velocity Mirror</NavLink></li>
-          {canSeeLead && <li><NavLink to="/app/dependency-radar">Dependency Radar</NavLink></li>}
-          {canSeeLead && <li><NavLink to="/app/retrospective">Retrospective</NavLink></li>}
-          {canSeeExec && <li><NavLink to="/app/exec-dashboard">Exec Dashboard</NavLink></li>}
+          {canSeeLead && (
+            <>
+              <li style={{ marginTop: '1rem', fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6b7280' }}>Intelligence</li>
+              <li><NavLink to="/app/dependency-radar">Dependency Radar</NavLink></li>
+              <li><NavLink to="/app/retrospective">Retrospective</NavLink></li>
+            </>
+          )}
+          {canSeeExec && (
+            <>
+              <li style={{ marginTop: '1rem', fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6b7280' }}>Executive</li>
+              <li><NavLink to="/app/exec-dashboard">Exec Dashboard</NavLink></li>
+            </>
+          )}
           <li><NavLink to="/app/settings">Settings</NavLink></li>
         </ul>
         <UserButton />

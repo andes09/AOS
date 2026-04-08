@@ -53,6 +53,7 @@ async def run_async_migrations() -> None:
     async with connectable.connect() as connection:
         await connection.execute(text("SET lock_timeout = '15s'"))
         await connection.run_sync(do_run_migrations)
+        await connection.commit()
     await connectable.dispose()
 
 

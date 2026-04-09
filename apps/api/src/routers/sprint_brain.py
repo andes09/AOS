@@ -565,7 +565,9 @@ async def push_to_jira(
     Requires 'lead' role or higher.
     """
     # 1. Resolve team by teamId — 404 if not found
-    team = await db.scalar(select(Team).where(Team.id == request.teamId))
+    resolved_team_id = await _resolve_team_id(request.teamId, clerk_org_id, db)
+    import uuid as _uuid
+    team = await db.scalar(select(Team).where(Team.id == _uuid.UUID(resolved_team_id)))
     if not team:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found.")
 

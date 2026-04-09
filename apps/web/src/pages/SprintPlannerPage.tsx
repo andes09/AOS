@@ -100,7 +100,22 @@ export function SprintPlannerPage() {
   })
 
   const pushMutation = useMutation({
-    mutationFn: () => post<PushToJiraResponse>('/api/sprint-brain/push-to-jira', {}),
+    mutationFn: () => {
+      const today = new Date()
+      const end = new Date(today)
+      end.setDate(end.getDate() + 14)
+      const fmt = (d: Date) => d.toISOString().slice(0, 10)
+      return post<PushToJiraResponse>('/api/sprint-brain/push-to-jira', {
+        teamId: 'default',
+        sprintName: `Sprint ${fmt(today)}`,
+        sprintStartDate: fmt(today),
+        sprintEndDate: fmt(end),
+        assignments: (plan?.assignments ?? []).map(a => ({
+          ticketId: a.ticket_id,
+          developerId: a.developer_id,
+        })),
+      })
+    },
     onSuccess: (data) => { setPushResult(data); setPushError(null) },
     onError: (err: ApiError) => {
       if (err.status === 409) setPushError('Active sprint in progress — end it in Jira first.')

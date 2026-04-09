@@ -302,9 +302,9 @@ async def analyze_tickets(
                     (id, team_id, ticket_key, ticket_title,
                      readiness_score, status, issues, suggestions, analyzed_at)
                 VALUES
-                    (:id, :team_id::uuid, :ticket_key, :ticket_title,
+                    (:id, :team_id, :ticket_key, :ticket_title,
                      :readiness_score, :status,
-                     :issues::jsonb, :suggestions::jsonb, :analyzed_at)
+                     CAST(:issues AS jsonb), CAST(:suggestions AS jsonb), :analyzed_at)
                 ON CONFLICT (team_id, ticket_key)
                 DO UPDATE SET
                     ticket_title    = EXCLUDED.ticket_title,

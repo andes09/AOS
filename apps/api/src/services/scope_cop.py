@@ -287,7 +287,7 @@ async def analyze_tickets(
     raw_results: list[dict] = tool_block.input["results"]
 
     # 4. Upsert each result to ticket_analyses
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()
     results: list[TicketAnalysisResult] = []
 
     for item in raw_results:

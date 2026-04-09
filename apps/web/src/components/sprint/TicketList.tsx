@@ -123,9 +123,13 @@ export function TicketList({ tickets, droppedIds, onDropTicket, onRestoreTicket 
     setActiveId(null)
     if (!over) return
     const ticketId = String(active.id)
-    if (over.id === 'removed-zone' && !droppedIds.has(ticketId)) {
+    const overId = String(over.id)
+    // over.id may be the zone id OR a ticket id inside the zone
+    const overIsRemovedZone = overId === 'removed-zone' || removed.some(t => t.ticket_id === overId)
+    const overIsSprintZone = overId === 'sprint-zone' || inSprint.some(t => t.ticket_id === overId)
+    if (overIsRemovedZone && !droppedIds.has(ticketId)) {
       onDropTicket(ticketId)
-    } else if (over.id === 'sprint-zone' && droppedIds.has(ticketId)) {
+    } else if (overIsSprintZone && droppedIds.has(ticketId)) {
       onRestoreTicket(ticketId)
     }
   }

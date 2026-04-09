@@ -1,6 +1,7 @@
 import { Outlet, NavLink } from 'react-router-dom'
 import { UserButton } from '@clerk/clerk-react'
 import { useAppRole } from '../hooks/useAppRole'
+import { RoleSwitcher } from '../components/RoleSwitcher'
 
 export function DashboardLayout() {
   const { appRole } = useAppRole()
@@ -34,6 +35,7 @@ export function DashboardLayout() {
       <main style={{ flex: 1, padding: '1.5rem', overflowY: 'auto' }}>
         <Outlet />
       </main>
+      <RoleSwitcher />
     </div>
   )
 }

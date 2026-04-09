@@ -287,7 +287,7 @@ async def analyze_tickets(
     raw_results: list[dict] = tool_block.input["results"]
 
     # 4. Upsert each result to ticket_analyses
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()
     results: list[TicketAnalysisResult] = []
 
     for item in raw_results:
@@ -302,9 +302,9 @@ async def analyze_tickets(
                     (id, team_id, ticket_key, ticket_title,
                      readiness_score, status, issues, suggestions, analyzed_at)
                 VALUES
-                    (:id, :team_id::uuid, :ticket_key, :ticket_title,
+                    (:id, :team_id, :ticket_key, :ticket_title,
                      :readiness_score, :status,
-                     :issues::jsonb, :suggestions::jsonb, :analyzed_at)
+                     CAST(:issues AS jsonb), CAST(:suggestions AS jsonb), :analyzed_at)
                 ON CONFLICT (team_id, ticket_key)
                 DO UPDATE SET
                     ticket_title    = EXCLUDED.ticket_title,

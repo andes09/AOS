@@ -10,22 +10,26 @@ export interface Assignment {
   story_points: number
 }
 
+export type ScopeCopStatus = 'not_analyzed' | 'all_ready' | 'has_issues'
+export type DepRadarStatus = 'not_scanned' | 'no_risks' | 'has_risks'
+export type RetroPatternStatus = 'no_data' | 'no_active_patterns' | 'has_patterns'
+
 export interface ScopeWarning {
   ticketId: string
-  status: string
+  status: 'needs_work' | 'blocked'
   issues: string[]
 }
 
 export interface DependencyWarning {
   ticketId: string
-  riskLevel: string
+  riskLevel: 'high'
   description: string | null
 }
 
 export interface EnrichmentStatus {
-  scopeCop: 'not_analyzed' | 'all_ready' | 'has_issues'
-  dependencyRadar: 'not_scanned' | 'no_risks' | 'has_risks'
-  retroPatterns: 'no_data' | 'no_active_patterns' | 'has_patterns'
+  scopeCop: ScopeCopStatus
+  dependencyRadar: DepRadarStatus
+  retroPatterns: RetroPatternStatus
 }
 
 export interface SprintPlanResponse {

@@ -78,6 +78,35 @@ async def get_my_role(
     return RoleResponse(user_id=user_id, app_role=app_role)
 
 
+class PatchMyRoleRequest(BaseModel):
+    app_role: str
+
+
+@users_router.patch("/me/role", response_model=RoleResponse)
+async def patch_my_role(
+    body: PatchMyRoleRequest,
+    user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Dev tool: set your own role without admin privileges."""
+    developer = await db.scalar(
+        select(Developer)
+        .join(Team, Developer.team_id == Team.id)
+        .join(Organization, Team.organization_id == Organization.id)
+        .where(
+            Organization.clerk_org_id == clerk_org_id,
+            Developer.clerk_user_id == user_id,
+        )
+    )
+    if developer is None:
+        raise HTTPException(status_code=404, detail="Developer not found.")
+    developer.app_role = body.app_role
+    await db.commit()
+    await db.refresh(developer)
+    return RoleResponse(user_id=user_id, app_role=developer.app_role)
+
+
 @users_router.post("/role", response_model=RoleResponse)
 async def set_user_role(
     body: SetRoleRequest,

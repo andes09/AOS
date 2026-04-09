@@ -100,7 +100,22 @@ export function SprintPlannerPage() {
   })
 
   const pushMutation = useMutation({
-    mutationFn: () => post<PushToJiraResponse>('/api/sprint-brain/push-to-jira', {}),
+    mutationFn: () => {
+      const today = new Date()
+      const end = new Date(today)
+      end.setDate(end.getDate() + 14)
+      const fmt = (d: Date) => d.toISOString().slice(0, 10)
+      return post<PushToJiraResponse>('/api/sprint-brain/push-to-jira', {
+        teamId: 'default',
+        sprintName: `Sprint ${fmt(today)}`,
+        sprintStartDate: fmt(today),
+        sprintEndDate: fmt(end),
+        assignments: (plan?.assignments ?? []).map(a => ({
+          ticketId: a.ticket_id,
+          developerId: a.developer_id,
+        })),
+      })
+    },
     onSuccess: (data) => { setPushResult(data); setPushError(null) },
     onError: (err: ApiError) => {
       if (err.status === 409) setPushError('Active sprint in progress — end it in Jira first.')
@@ -142,7 +157,7 @@ export function SprintPlannerPage() {
     whatIf.mutate(Array.from(next))
   }
 
-  const committed = plan ? deriveCommitted(plan.assignments) : new Map<string, number>()
+  const committed = plan ? deriveCommitted(plan.assignments.filter(a => !droppedIds.has(a.ticket_id))) : new Map<string, number>()
   const developers = Array.from(committed.keys())
   const devNameMap = plan?.developers ?? {}
 
@@ -193,26 +208,24 @@ export function SprintPlannerPage() {
           </div>
         )}
 
-        {plan && (
-          <button
-            onClick={() => scopeAnalysisMutation.mutate()}
-            disabled={scopeAnalysisMutation.isPending}
-            style={{
-              background: scopeAnalysisMutation.isPending ? '#374151' : '#0f172a',
-              color: scopeAnalysisMutation.isPending ? '#475569' : '#f59e0b',
-              border: '1px solid #f59e0b',
-              borderRadius: 8,
-              padding: '0.875rem 1.5rem',
-              fontSize: 14,
-              fontWeight: 700,
-              cursor: scopeAnalysisMutation.isPending ? 'default' : 'pointer',
-              whiteSpace: 'nowrap',
-              alignSelf: 'center',
-            }}
-          >
-            {scopeAnalysisMutation.isPending ? 'Analyzing...' : '⬡ Analyze Scope'}
-          </button>
-        )}
+        <button
+          onClick={() => scopeAnalysisMutation.mutate()}
+          disabled={scopeAnalysisMutation.isPending}
+          style={{
+            background: scopeAnalysisMutation.isPending ? '#374151' : '#0f172a',
+            color: scopeAnalysisMutation.isPending ? '#475569' : '#f59e0b',
+            border: '1px solid #f59e0b',
+            borderRadius: 8,
+            padding: '0.875rem 1.5rem',
+            fontSize: 14,
+            fontWeight: 700,
+            cursor: scopeAnalysisMutation.isPending ? 'default' : 'pointer',
+            whiteSpace: 'nowrap',
+            alignSelf: 'center',
+          }}
+        >
+          {scopeAnalysisMutation.isPending ? 'Analyzing...' : '⬡ Analyze Scope'}
+        </button>
 
         <button
           onClick={() => generatePlan.mutate()}

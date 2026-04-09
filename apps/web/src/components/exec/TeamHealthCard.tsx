@@ -32,7 +32,7 @@ export function TeamHealthCard({ team }: Props) {
 
   return (
     <div
-      onClick={() => navigate(`/velocity-mirror?teamId=${team.teamId}`)}
+      onClick={() => navigate(`/app/velocity-mirror?teamId=${team.teamId}`)}
       style={{
         background: '#1e2130',
         border: '1px solid #334155',

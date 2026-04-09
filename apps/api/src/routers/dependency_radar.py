@@ -166,14 +166,23 @@ def _dep_to_item(dep: Dependency) -> DependencyItem:
 async def scan(
     request: ScanRequest,
     _: str = Depends(require_role("lead")),
+    clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger a Jira dependency scan for a team."""
-    team = await _resolve_team(request.team_id, db)
+    if request.team_id == "default":
+        org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+        if not org:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found.")
+        team = await db.scalar(select(Team).where(Team.organization_id == org.id))
+        if not team:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found.")
+    else:
+        team = await _resolve_team(request.team_id, db)
     jira_client = await _get_jira_client(team, db)
 
     result = await scan_jira_dependencies(
-        team_id=request.team_id,
+        team_id=str(team.id),
         jira_client=jira_client,
         db=db,
     )
@@ -229,10 +238,19 @@ async def get_team_dependencies(
 async def create_dependency(
     request: CreateDependencyRequest,
     _: str = Depends(require_role("lead")),
+    clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Manually create a dependency with source='manual'."""
-    team = await _resolve_team(request.team_id, db)
+    if request.team_id == "default":
+        org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+        if not org:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found.")
+        team = await db.scalar(select(Team).where(Team.organization_id == org.id))
+        if not team:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found.")
+    else:
+        team = await _resolve_team(request.team_id, db)
 
     dep = Dependency(
         team_id=team.id,

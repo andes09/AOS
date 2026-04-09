@@ -21,11 +21,13 @@ from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.auth import get_current_org_id
 from src.auth_roles import require_role
 from src.database import get_db
 from src.integrations.jira.client import JiraClient
 from src.integrations.jira.oauth import refresh_access_token
 from src.models.jira_connection import JiraConnection
+from src.models.organization import Organization
 from src.models.scope_cop import TicketAnalysis
 from src.models.team import Team
 from src.services.encryption import decrypt, encrypt
@@ -141,6 +143,7 @@ def _build_summary(results: list[TicketAnalysisResult]) -> ScopeCopSummary:
 async def analyze(
     request: AnalyzeRequest,
     _: str = Depends(require_role("lead")),
+    clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -150,12 +153,21 @@ async def analyze(
     (acceptance criteria, estimate, bounded scope, unambiguous ownership),
     upserts results to ticket_analyses, and returns a per-ticket assessment.
     """
-    team = await _resolve_team(request.team_id, db)
+    if request.team_id == "default":
+        org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+        if not org:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found.")
+        team = await db.scalar(select(Team).where(Team.organization_id == org.id))
+        if not team:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found.")
+    else:
+        team = await _resolve_team(request.team_id, db)
+    resolved_team_id = str(team.id)
     jira_client = await _get_jira_client(team, db)
 
     try:
         raw_results = await analyze_tickets(
-            team_id=request.team_id,
+            team_id=resolved_team_id,
             ticket_keys=request.ticket_keys,
             jira_client=jira_client,
             db=db,

@@ -235,52 +235,68 @@ async def _build_enrichment(
         )
 
     # --- Scope Cop enrichment ---
-    scope_rows = (await db.scalars(
-        select(TicketAnalysis).where(
-            TicketAnalysis.team_id == team_uuid,
-            TicketAnalysis.ticket_key.in_(assigned_keys),
-        )
-    )).all()
-
     scope_warnings: list[ScopeWarning] = []
-    if not scope_rows:
-        scope_cop_status: Literal["not_analyzed", "all_ready", "has_issues"] = "not_analyzed"
-    else:
-        flagged = [r for r in scope_rows if r.status in ("needs_work", "blocked")]
-        if flagged:
-            scope_cop_status = "has_issues"
-            scope_warnings = [
-                ScopeWarning(
-                    ticket_id=r.ticket_key,
-                    status=r.status,
-                    issues=r.issues or [],
-                )
-                for r in flagged
-            ]
-        else:
-            scope_cop_status = "all_ready"
+    scope_cop_status: Literal["not_analyzed", "all_ready", "has_issues"] = "not_analyzed"
+    try:
+        scope_rows = (await db.scalars(
+            select(TicketAnalysis).where(
+                TicketAnalysis.team_id == team_uuid,
+                TicketAnalysis.ticket_key.in_(assigned_keys),
+            )
+        )).all()
 
-    logger.debug(
-        "[enrichment] scope_cop: %d checked, %d flagged",
-        len(scope_rows),
-        len(scope_warnings),
-    )
+        if not scope_rows:
+            scope_cop_status = "not_analyzed"
+        else:
+            flagged = [r for r in scope_rows if r.status != "ready"]
+            if flagged:
+                scope_cop_status = "has_issues"
+                scope_warnings = [
+                    ScopeWarning(
+                        ticket_id=r.ticket_key,
+                        status=r.status,
+                        issues=r.issues or [],
+                    )
+                    for r in flagged
+                ]
+            else:
+                scope_cop_status = "all_ready"
+
+        logger.debug(
+            "[enrichment] scope_cop: %d checked, %d flagged",
+            len(scope_rows),
+            len(scope_warnings),
+        )
+    except Exception:
+        logger.exception("[enrichment] scope_cop query failed — defaulting to not_analyzed")
+        scope_cop_status = "not_analyzed"
+        scope_warnings = []
 
     # --- Dependency Radar enrichment ---
-    dep_rows = (await db.scalars(
-        select(Dependency).where(
-            Dependency.team_id == team_uuid,
-            Dependency.ticket_key.in_(assigned_keys),
-            Dependency.resolved_at.is_(None),
-        )
-    )).all()
-
     dep_warnings: list[DependencyWarning] = []
-    if not dep_rows:
-        dep_radar_status: Literal["not_scanned", "no_risks", "has_risks"] = "not_scanned"
-    else:
-        high_risk = [r for r in dep_rows if r.risk_level == RiskLevel.HIGH.value]
-        if high_risk:
+    dep_radar_status: Literal["not_scanned", "no_risks", "has_risks"] = "not_scanned"
+    try:
+        # Check if ANY dep data exists for this team (determines not_scanned vs no_risks)
+        any_deps = await db.scalar(
+            select(func.count()).select_from(Dependency).where(
+                Dependency.team_id == team_uuid,
+                Dependency.resolved_at.is_(None),
+            )
+        )
+        high_risk_deps = (await db.scalars(
+            select(Dependency).where(
+                Dependency.team_id == team_uuid,
+                Dependency.ticket_key.in_(assigned_keys),
+                Dependency.resolved_at.is_(None),
+                Dependency.risk_level == RiskLevel.HIGH.value,
+            )
+        )).all()
+
+        if not any_deps:
+            dep_radar_status = "not_scanned"
+        elif not high_risk_deps:
+            dep_radar_status = "no_risks"
+        else:
             dep_radar_status = "has_risks"
             dep_warnings = [
                 DependencyWarning(
@@ -288,40 +304,47 @@ async def _build_enrichment(
                     risk_level=r.risk_level,
                     description=r.description,
                 )
-                for r in high_risk
+                for r in high_risk_deps
             ]
-        else:
-            dep_radar_status = "no_risks"
 
-    logger.debug(
-        "[enrichment] dep_radar: %d checked, %d high-risk",
-        len(dep_rows),
-        len(dep_warnings),
-    )
+        logger.debug(
+            "[enrichment] dep_radar: %d high-risk on assigned tickets",
+            len(dep_warnings),
+        )
+    except Exception:
+        logger.exception("[enrichment] dep_radar query failed — defaulting to not_scanned")
+        dep_radar_status = "not_scanned"
+        dep_warnings = []
 
     # --- Retro Pattern enrichment ---
-    all_pattern_rows = (await db.scalars(
-        select(RetroPattern).where(RetroPattern.team_id == team_uuid)
-    )).all()
-
-    active_patterns = [
-        r for r in all_pattern_rows
-        if r.status == "active" and r.occurrence_count >= 2
-    ]
-
     historical_warnings: list[str] = []
     pattern_descriptions: list[str] = []
+    retro_status: Literal["no_data", "no_active_patterns", "has_patterns"] = "no_data"
+    try:
+        all_pattern_rows = (await db.scalars(
+            select(RetroPattern).where(RetroPattern.team_id == team_uuid)
+        )).all()
 
-    if not all_pattern_rows:
-        retro_status: Literal["no_data", "no_active_patterns", "has_patterns"] = "no_data"
-    elif not active_patterns:
-        retro_status = "no_active_patterns"
-    else:
-        retro_status = "has_patterns"
-        historical_warnings = [p.description for p in active_patterns if p.description]
-        pattern_descriptions = historical_warnings
+        active_patterns = [
+            r for r in all_pattern_rows
+            if r.status == "active" and r.occurrence_count >= 2
+        ]
 
-    logger.debug("[enrichment] patterns: %d active for team", len(active_patterns))
+        if not all_pattern_rows:
+            retro_status = "no_data"
+        elif not active_patterns:
+            retro_status = "no_active_patterns"
+        else:
+            retro_status = "has_patterns"
+            historical_warnings = [p.description for p in active_patterns if p.description]
+            pattern_descriptions = historical_warnings
+
+        logger.debug("[enrichment] patterns: %d active for team", len(active_patterns))
+    except Exception:
+        logger.exception("[enrichment] retro_patterns query failed — defaulting to no_data")
+        retro_status = "no_data"
+        historical_warnings = []
+        pattern_descriptions = []
 
     return (
         scope_warnings,

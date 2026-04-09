@@ -157,7 +157,7 @@ export function SprintPlannerPage() {
     whatIf.mutate(Array.from(next))
   }
 
-  const committed = plan ? deriveCommitted(plan.assignments) : new Map<string, number>()
+  const committed = plan ? deriveCommitted(plan.assignments.filter(a => !droppedIds.has(a.ticket_id))) : new Map<string, number>()
   const developers = Array.from(committed.keys())
   const devNameMap = plan?.developers ?? {}
 

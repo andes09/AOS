@@ -3,7 +3,7 @@ import { useAuth } from '@clerk/clerk-react'
 import { useApi } from '../lib/api'
 
 interface RoleResponse {
-  role: string
+  appRole: string
 }
 
 export function useAppRole() {
@@ -17,5 +17,5 @@ export function useAppRole() {
     staleTime: 5 * 60 * 1000,
   })
 
-  return { appRole: data?.role ?? '' }
+  return { appRole: data?.appRole ?? '' }
 }

@@ -29,6 +29,15 @@ class AnthropicKeyRequest(BaseModel):
     key: str
 
 
+@settings_router.get("/anthropic-key/status")
+async def get_anthropic_key_status(
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+    return {"configured": bool(org and org.encrypted_anthropic_key)}
+
+
 @settings_router.post("/anthropic-key")
 async def save_anthropic_key(
     body: AnthropicKeyRequest,

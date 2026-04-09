@@ -245,6 +245,21 @@
 
 ---
 
+## Do a complete analysis before acting on pasted errors
+
+**Pattern:** User pastes an error and I jump to the first plausible fix without considering alternatives. This leads to incorrect or unnecessary changes (e.g. changing `data=` to `json=` in oauth.py when the real cause was something else entirely).
+
+**Root cause:** Treating error triage as a single-hypothesis problem instead of a multi-hypothesis one.
+
+**Rule:** When the user pastes an error:
+1. Read the full stack trace and identify the exact line and call that failed
+2. Generate at least 2–3 distinct root cause hypotheses (config, code bug, data state, expired token, etc.)
+3. Eliminate hypotheses using evidence already available (logs, DB queries, code reads) before touching anything
+4. Only make a code change if the root cause is confirmed to be in the code — never speculatively modify working code to "try something"
+5. If the cause is configuration or external state, say so and explain what to check — do not add code workarounds
+
+---
+
 ## Shell state does not persist between separate Bash tool calls — always chain git operations
 
 **Pattern:** Shell state (working directory, active git branch) does not carry over between separate Bash tool calls. Running `git checkout <branch>` in one call and then `git commit` in a subsequent call can silently commit to a different branch.

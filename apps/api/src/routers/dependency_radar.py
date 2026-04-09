@@ -24,7 +24,9 @@ from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.auth import get_current_org_id
 from src.auth_roles import require_role
+from src.models.organization import Organization
 from src.database import get_db
 from src.integrations.jira.client import JiraClient
 from src.integrations.jira.oauth import refresh_access_token
@@ -186,26 +188,36 @@ async def scan(
 
 @dependency_radar_router.get("/team/{team_id}", response_model=RadarResponse)
 async def get_team_dependencies(
-    team_id: uuid.UUID,
+    team_id: str,
     _: str = Depends(require_role("lead")),
+    clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return all active (unresolved) dependencies for a team plus aggregate risk score."""
-    team = await db.scalar(select(Team).where(Team.id == team_id))
+    """Return all active (unresolved) dependencies for a team plus aggregate risk score.
+    Accepts a UUID string or 'default' (resolves to the first team in the org).
+    """
+    if team_id == "default":
+        org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+        if not org:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found.")
+        team = await db.scalar(select(Team).where(Team.organization_id == org.id))
+    else:
+        team = await _resolve_team(team_id, db)
+
     if not team:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found.")
 
     rows = (
         await db.scalars(
             select(Dependency).where(
-                Dependency.team_id == team_id,
+                Dependency.team_id == team.id,
                 Dependency.resolved_at.is_(None),
             )
         )
     ).all()
 
     return RadarResponse(
-        team_id=str(team_id),
+        team_id=str(team.id),
         risk_score=compute_team_risk_score(list(rows)),
         dependencies=[_dep_to_item(d) for d in rows],
     )

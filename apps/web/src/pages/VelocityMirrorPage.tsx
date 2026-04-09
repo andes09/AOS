@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@clerk/clerk-react'
 import { useNavigate } from 'react-router-dom'
 import { useApi, ApiError } from '../lib/api'
+import { useAppRole } from '../hooks/useAppRole'
 import { BurndownChart } from '../components/mirror/BurndownChart'
 import { DeveloperCapacityRow } from '../components/mirror/DeveloperCapacityRow'
 import { AlertFeed } from '../components/mirror/AlertFeed'
@@ -42,6 +43,8 @@ export function VelocityMirrorPage() {
 
   const { get } = useApi()
   const { isLoaded, isSignedIn } = useAuth()
+  const { appRole } = useAppRole()
+  const isLead = appRole === 'lead' || appRole === 'exec' || appRole === 'admin'
   const navigate = useNavigate()
 
   const { data: sprint, isLoading, isError, error } = useQuery<CurrentSprint, ApiError>({
@@ -59,7 +62,7 @@ export function VelocityMirrorPage() {
   const { data: radarData } = useQuery<RadarResponse>({
     queryKey: ['dependency-radar', TEAM_ID],
     queryFn: () => get<RadarResponse>(`/api/dependency-radar/team/${TEAM_ID}`),
-    enabled: isLoaded && isSignedIn,
+    enabled: isLoaded && isSignedIn && isLead,
   })
 
   const highRiskDeps = radarData?.dependencies.filter(d => d.riskLevel === 'high') ?? []

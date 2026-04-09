@@ -5,20 +5,24 @@ Endpoints
 ---------
 GET /api/users/me/role
     Returns the current authenticated user's app role.
+    Auto-provisions a Developer row on first access.
 
 POST /api/users/role
     Admin-only: update another developer's app role by clerkUserId.
 """
+import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.auth import get_current_user_id
-from src.auth_roles import get_current_app_role, require_role
+from src.auth import get_current_user_id, get_current_org_id
+from src.auth_roles import require_role
 from src.database import get_db
 from src.models.developer import Developer
+from src.models.organization import Organization
+from src.models.team import Team
 
 users_router = APIRouter(tags=["users"])
 
@@ -40,9 +44,37 @@ class SetRoleRequest(BaseModel):
 @users_router.get("/me/role", response_model=RoleResponse)
 async def get_my_role(
     user_id: str = Depends(get_current_user_id),
-    app_role: str = Depends(get_current_app_role),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Return the current user's app role. Returns 'developer' if no record found."""
+    """Return the current user's app role. Auto-provisions a Developer row on first access."""
+    developer = await db.scalar(
+        select(Developer)
+        .join(Team, Developer.team_id == Team.id)
+        .join(Organization, Team.organization_id == Organization.id)
+        .where(
+            Organization.clerk_org_id == clerk_org_id,
+            Developer.clerk_user_id == user_id,
+        )
+    )
+
+    if developer is None:
+        org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+        if org:
+            team = await db.scalar(select(Team).where(Team.organization_id == org.id))
+            if team:
+                developer = Developer(
+                    id=uuid.uuid4(),
+                    team_id=team.id,
+                    clerk_user_id=user_id,
+                    name=user_id,
+                    app_role="developer",
+                )
+                db.add(developer)
+                await db.commit()
+                await db.refresh(developer)
+
+    app_role = developer.app_role if developer else "developer"
     return RoleResponse(user_id=user_id, app_role=app_role)
 
 

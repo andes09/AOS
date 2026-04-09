@@ -27,7 +27,10 @@ async def get_current_app_role(
         .limit(1)
     )
     row = result.scalar_one_or_none()
-    return row if row is not None else "developer"
+    if row is None:
+        return "developer"
+    # SQLAlchemy returns the AppRole enum member, not the string — extract its value.
+    return row.value if isinstance(row, AppRole) else str(row)
 
 
 def require_role(minimum: str):

@@ -405,7 +405,7 @@ async def generate_retrospective(
     retro_data: dict = tool_block.input
 
     # 4. Upsert Retrospective row (idempotent on sprint_id)
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()
     team_uuid = uuid.UUID(team_id)
 
     existing_retro = await db.scalar(

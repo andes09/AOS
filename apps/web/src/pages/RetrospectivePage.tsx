@@ -75,6 +75,7 @@ export function RetrospectivePage() {
 
   const retroExists = !!retro && !(retroError instanceof ApiError && retroError.status === 404)
   const retroNotFound = retroError instanceof ApiError && retroError.status === 404
+  const retro403 = retroError instanceof ApiError && retroError.status === 403
 
   // Generate retro mutation
   const {
@@ -88,6 +89,7 @@ export function RetrospectivePage() {
       queryClient.setQueryData(['retro', selectedSprintId], data)
     },
   })
+  const gen403 = genError instanceof ApiError && genError.status === 403
 
   return (
     <div style={{
@@ -147,8 +149,23 @@ export function RetrospectivePage() {
         </button>
       </div>
 
+      {/* Access denied */}
+      {(retro403 || gen403) && (
+        <div style={{
+          background: '#1e2130',
+          border: '1px solid #ef444433',
+          borderRadius: 10,
+          padding: '2rem',
+          textAlign: 'center',
+          color: '#ef4444',
+          fontSize: 15,
+        }}>
+          Access denied. Lead role required.
+        </div>
+      )}
+
       {/* Error banner */}
-      {genError && (
+      {genError && !gen403 && (
         <div style={{
           background: '#7f1d1d',
           border: '1px solid #ef4444',

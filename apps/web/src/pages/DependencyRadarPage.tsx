@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@clerk/clerk-react'
-import { useApi } from '../lib/api'
+import { useApi, ApiError } from '../lib/api'
 import { DependencyItem } from '../components/radar/DependencyItem'
 import type { RadarResponse, ScanResponse, DependencyType, RiskLevel } from '../types/dependencyRadar'
 
@@ -105,11 +105,12 @@ export function DependencyRadarPage() {
   const [formDescription, setFormDescription] = useState('')
   const [formSubmitting, setFormSubmitting] = useState(false)
 
-  const { data, isLoading, isError } = useQuery<RadarResponse>({
+  const { data, isLoading, isError, error } = useQuery<RadarResponse, ApiError>({
     queryKey: ['dependency-radar', TEAM_ID],
     queryFn: () => get<RadarResponse>(`/api/dependency-radar/team/${TEAM_ID}`),
     enabled: isLoaded && isSignedIn,
   })
+  const is403 = isError && error instanceof ApiError && error.status === 403
 
   function handleResolve(id: string) {
     queryClient.setQueryData<RadarResponse>(['dependency-radar', TEAM_ID], old => {
@@ -326,7 +327,20 @@ export function DependencyRadarPage() {
       {isLoading && (
         <div style={{ color: '#64748b', fontSize: 13 }}>Loading dependencies…</div>
       )}
-      {isError && (
+      {is403 && (
+        <div style={{
+          background: '#1e2130',
+          border: '1px solid #ef444433',
+          borderRadius: 10,
+          padding: '2rem',
+          textAlign: 'center',
+          color: '#ef4444',
+          fontSize: 15,
+        }}>
+          Access denied. Lead role required.
+        </div>
+      )}
+      {isError && !is403 && (
         <div style={{ color: '#ef4444', fontSize: 13 }}>Failed to load dependencies</div>
       )}
 

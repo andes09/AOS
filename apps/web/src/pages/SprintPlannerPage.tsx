@@ -193,26 +193,24 @@ export function SprintPlannerPage() {
           </div>
         )}
 
-        {plan && (
-          <button
-            onClick={() => scopeAnalysisMutation.mutate()}
-            disabled={scopeAnalysisMutation.isPending}
-            style={{
-              background: scopeAnalysisMutation.isPending ? '#374151' : '#0f172a',
-              color: scopeAnalysisMutation.isPending ? '#475569' : '#f59e0b',
-              border: '1px solid #f59e0b',
-              borderRadius: 8,
-              padding: '0.875rem 1.5rem',
-              fontSize: 14,
-              fontWeight: 700,
-              cursor: scopeAnalysisMutation.isPending ? 'default' : 'pointer',
-              whiteSpace: 'nowrap',
-              alignSelf: 'center',
-            }}
-          >
-            {scopeAnalysisMutation.isPending ? 'Analyzing...' : '⬡ Analyze Scope'}
-          </button>
-        )}
+        <button
+          onClick={() => scopeAnalysisMutation.mutate()}
+          disabled={scopeAnalysisMutation.isPending}
+          style={{
+            background: scopeAnalysisMutation.isPending ? '#374151' : '#0f172a',
+            color: scopeAnalysisMutation.isPending ? '#475569' : '#f59e0b',
+            border: '1px solid #f59e0b',
+            borderRadius: 8,
+            padding: '0.875rem 1.5rem',
+            fontSize: 14,
+            fontWeight: 700,
+            cursor: scopeAnalysisMutation.isPending ? 'default' : 'pointer',
+            whiteSpace: 'nowrap',
+            alignSelf: 'center',
+          }}
+        >
+          {scopeAnalysisMutation.isPending ? 'Analyzing...' : '⬡ Analyze Scope'}
+        </button>
 
         <button
           onClick={() => generatePlan.mutate()}

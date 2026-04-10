@@ -284,7 +284,10 @@ async def list_invitations(
     _role: str = Depends(require_role("lead")),
     db: AsyncSession = Depends(get_db),
 ):
-    org, _ = await _resolve_org_and_team(clerk_org_id, db)
+    try:
+        org, _ = await _resolve_org_and_team(clerk_org_id, db)
+    except HTTPException:
+        return InvitationsListResponse(invitations=[])
     result = await db.execute(
         select(Invitation).where(Invitation.organization_id == org.id)
         .order_by(Invitation.created_at.desc())

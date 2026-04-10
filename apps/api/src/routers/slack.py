@@ -89,7 +89,10 @@ async def get_slack_config(
     _role: str = Depends(require_role("lead")),
     db: AsyncSession = Depends(get_db),
 ):
-    team = await _resolve_team(team_id, clerk_org_id, db)
+    try:
+        team = await _resolve_team(team_id, clerk_org_id, db)
+    except HTTPException:
+        return SlackConfigResponse(configured=False, channel=None, alert_types=[], is_active=False)
     result = await db.execute(
         select(SlackConfig).where(SlackConfig.team_id == team.id, SlackConfig.is_active == True)
     )

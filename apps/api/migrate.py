@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
 
 
-HEAD = "0009"
+HEAD = "0014"
 
 MIGRATIONS = [
     # (revision_id, sql_statements)
@@ -150,6 +150,81 @@ MIGRATIONS = [
         )
         """,
         """CREATE INDEX IF NOT EXISTS idx_retro_patterns_team_status ON retro_patterns(team_id, status)""",
+    ]),
+    ("0010", [
+        """ALTER TABLE tickets ADD COLUMN IF NOT EXISTS components JSON""",
+    ]),
+    ("0011", [
+        """ALTER TABLE organizations ADD COLUMN IF NOT EXISTS onboarding_completed_at TIMESTAMP""",
+        """ALTER TABLE teams ADD COLUMN IF NOT EXISTS jira_import_status VARCHAR(20) NOT NULL DEFAULT 'pending'""",
+        """ALTER TABLE teams ADD COLUMN IF NOT EXISTS jira_import_sprints_imported INTEGER""",
+        """
+        CREATE TABLE IF NOT EXISTS invitations (
+            id              UUID PRIMARY KEY,
+            organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            team_id         UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+            inviter_id      VARCHAR(255) NOT NULL,
+            email           VARCHAR(255) NOT NULL,
+            role            VARCHAR(20)  NOT NULL DEFAULT 'developer',
+            token           VARCHAR(64)  NOT NULL,
+            status          VARCHAR(20)  NOT NULL DEFAULT 'pending',
+            accepted_at     TIMESTAMP,
+            expires_at      TIMESTAMP    NOT NULL,
+            created_at      TIMESTAMP    NOT NULL DEFAULT NOW()
+        )
+        """,
+        """CREATE UNIQUE INDEX IF NOT EXISTS uq_invitation_token ON invitations(token)""",
+        """CREATE INDEX IF NOT EXISTS ix_invitations_org_id ON invitations(organization_id)""",
+        """CREATE INDEX IF NOT EXISTS ix_invitations_email ON invitations(email)""",
+    ]),
+    ("0012", [
+        """ALTER TABLE teams ADD COLUMN IF NOT EXISTS meeting_overhead_pct FLOAT NOT NULL DEFAULT 0.0""",
+        """
+        CREATE TABLE IF NOT EXISTS developer_capacity_overrides (
+            id           UUID PRIMARY KEY,
+            developer_id UUID NOT NULL REFERENCES developers(id) ON DELETE CASCADE,
+            sprint_id    UUID REFERENCES sprints(id) ON DELETE CASCADE,
+            capacity_pct FLOAT,
+            pto_days     FLOAT,
+            notes        TEXT,
+            created_by   VARCHAR(255) NOT NULL,
+            created_at   TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_dev_capacity_sprint
+            ON developer_capacity_overrides(developer_id, sprint_id)
+            WHERE sprint_id IS NOT NULL
+        """,
+        """CREATE INDEX IF NOT EXISTS ix_dev_capacity_dev_id ON developer_capacity_overrides(developer_id)""",
+    ]),
+    ("0014", [
+        """
+        CREATE TABLE IF NOT EXISTS team_access_grants (
+            id           UUID PRIMARY KEY,
+            developer_id UUID NOT NULL REFERENCES developers(id) ON DELETE CASCADE,
+            team_id      UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+            granted_by   VARCHAR(255) NOT NULL,
+            granted_at   TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        """CREATE UNIQUE INDEX IF NOT EXISTS uq_team_access_grant ON team_access_grants(developer_id, team_id)""",
+        """CREATE INDEX IF NOT EXISTS ix_team_access_dev_id ON team_access_grants(developer_id)""",
+        """
+        CREATE TABLE IF NOT EXISTS slack_configs (
+            id          UUID PRIMARY KEY,
+            team_id     UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+            webhook_url TEXT NOT NULL,
+            channel     VARCHAR(100),
+            alert_types JSONB NOT NULL DEFAULT '["high_risk_dependency","sprint_at_risk","retro_action_overdue"]',
+            is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at  TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_slack_config_team
+            ON slack_configs(team_id) WHERE is_active = TRUE
+        """,
     ]),
 ]
 

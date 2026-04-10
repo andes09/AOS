@@ -62,7 +62,7 @@ export function SettingsPage() {
   const [slackMsg, setSlackMsg] = useState<string | null>(null)
   const [slackTesting, setSlackTesting] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
-  const [inviteRole, setInviteRole] = useState('developer')
+  const [inviteRole, setInviteRole] = useState('lead')
   const [inviteSending, setInviteSending] = useState(false)
   const [inviteMsg, setInviteMsg] = useState<string | null>(null)
   const [inviteLink, setInviteLink] = useState<string | null>(null)
@@ -474,8 +474,8 @@ export function SettingsPage() {
               onChange={e => setInviteRole(e.target.value)}
               style={{ background: '#0f1117', border: '1px solid #2d2f45', borderRadius: 6, color: '#e2e8f0', fontSize: 13, padding: '0.5rem 0.75rem', cursor: 'pointer', outline: 'none' }}
             >
-              <option value="developer">Developer</option>
               <option value="lead">Lead</option>
+              <option value="exec">Exec</option>
             </select>
             <button
               onClick={handleSendInvite}

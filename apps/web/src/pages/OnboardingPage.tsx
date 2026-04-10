@@ -30,7 +30,7 @@ export function OnboardingPage() {
 
   // Step 4 state
   const [inviteEmail, setInviteEmail] = useState('')
-  const [inviteRole, setInviteRole] = useState('developer')
+  const [inviteRole, setInviteRole] = useState('lead')
   const [inviting, setInviting] = useState(false)
   const [inviteLink, setInviteLink] = useState<string | null>(null)
   const [inviteError, setInviteError] = useState<string | null>(null)
@@ -217,8 +217,8 @@ export function OnboardingPage() {
               onChange={e => setInviteRole(e.target.value)}
               style={{ background: '#1e2030', border: '1px solid #2d2f45', borderRadius: 6, color: '#e2e8f0', fontSize: 13, padding: '0.5rem 0.75rem' }}
             >
-              <option value="developer">Developer</option>
               <option value="lead">Lead</option>
+              <option value="exec">Exec</option>
             </select>
             <button
               onClick={handleInvite}

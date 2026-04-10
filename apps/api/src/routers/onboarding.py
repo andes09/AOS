@@ -252,6 +252,10 @@ async def create_invite(
     _role: str = Depends(require_role("lead")),
     db: AsyncSession = Depends(get_db),
 ):
+    allowed_roles = {"lead", "exec", "admin"}
+    if body.role not in allowed_roles:
+        raise HTTPException(status_code=422, detail="Invitations can only be sent for lead, exec, or admin roles")
+
     org, team = await _resolve_org_and_team(clerk_org_id, db)
     invitation = await create_invitation(
         organization_id=org.id,

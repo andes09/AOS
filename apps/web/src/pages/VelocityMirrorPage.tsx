@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@clerk/clerk-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useApi, ApiError } from '../lib/api'
 import { useAppRole } from '../hooks/useAppRole'
 import { BurndownChart } from '../components/mirror/BurndownChart'
@@ -13,8 +13,7 @@ import { SprintHealthScore } from '../components/mirror/SprintHealthScore'
 import { VelocityStatsChart } from '../components/mirror/VelocityStatsChart'
 import { VelocityControls } from '../components/mirror/VelocityControls'
 import type { RadarResponse } from '../types/dependencyRadar'
-
-const TEAM_ID = 'default'
+import type { TeamListItem } from '../types/multiTeam'
 
 interface CurrentSprint {
   id: string
@@ -40,6 +39,7 @@ export function VelocityMirrorPage() {
   const [window, setWindow] = useState(6)
   const [fromDate, setFromDate] = useState<string | null>(null)
   const [visibleMetrics, setVisibleMetrics] = useState(['rolling', 'weighted', 'stddev'])
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const { get } = useApi()
   const { isLoaded, isSignedIn } = useAuth()
@@ -47,25 +47,44 @@ export function VelocityMirrorPage() {
   const isLead = appRole === 'lead' || appRole === 'exec' || appRole === 'admin'
   const navigate = useNavigate()
 
+  // Team switcher — reads ?teamId from URL, falls back to 'default'
+  const activeTeamId = searchParams.get('teamId') || 'default'
+  const teamParam = activeTeamId !== 'default' ? `?team_id=${activeTeamId}` : ''
+
+  const { data: teamsData } = useQuery<{ teams: TeamListItem[] }>({
+    queryKey: ['teams-list'],
+    queryFn: () => get<{ teams: TeamListItem[] }>('/api/teams'),
+    enabled: isLoaded && !!isSignedIn,
+  })
+  const teams = teamsData?.teams ?? []
+
   const { data: sprint, isLoading, isError, error } = useQuery<CurrentSprint, ApiError>({
-    queryKey: ['current-sprint'],
-    queryFn: () => get<CurrentSprint>('/api/sprints/current'),
+    queryKey: ['current-sprint', activeTeamId],
+    queryFn: () => get<CurrentSprint>(`/api/sprints/current${teamParam}`),
     enabled: isLoaded && isSignedIn,
   })
 
   const { data: completedSprintsData } = useQuery<CompletedSprintsResponse>({
-    queryKey: ['completed-sprints'],
-    queryFn: () => get<CompletedSprintsResponse>('/api/sprints/completed'),
+    queryKey: ['completed-sprints', activeTeamId],
+    queryFn: () => get<CompletedSprintsResponse>(`/api/sprints/completed${teamParam}`),
     enabled: isLoaded && isSignedIn,
   })
 
   const { data: radarData } = useQuery<RadarResponse>({
-    queryKey: ['dependency-radar', TEAM_ID],
-    queryFn: () => get<RadarResponse>(`/api/dependency-radar/team/${TEAM_ID}`),
+    queryKey: ['dependency-radar', activeTeamId],
+    queryFn: () => get<RadarResponse>(`/api/dependency-radar/team/${activeTeamId}`),
     enabled: isLoaded && isSignedIn && isLead,
   })
 
   const highRiskDeps = radarData?.dependencies.filter(d => d.riskLevel === 'high') ?? []
+
+  function handleTeamChange(teamId: string) {
+    if (teamId === 'default') {
+      setSearchParams({})
+    } else {
+      setSearchParams({ teamId })
+    }
+  }
 
   return (
     <div style={{
@@ -78,9 +97,32 @@ export function VelocityMirrorPage() {
       {/* Page header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
         <div>
-          <h1 style={{ color: '#e2e8f0', fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: '-0.01em' }}>
-            Velocity Mirror
-          </h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+            <h1 style={{ color: '#e2e8f0', fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: '-0.01em' }}>
+              Velocity Mirror
+            </h1>
+            {teams.length > 1 && (
+              <select
+                value={activeTeamId}
+                onChange={e => handleTeamChange(e.target.value)}
+                style={{
+                  background: '#1e2030',
+                  border: '1px solid #2d2f45',
+                  borderRadius: 6,
+                  color: '#e2e8f0',
+                  fontSize: 13,
+                  padding: '4px 10px',
+                  cursor: 'pointer',
+                  outline: 'none',
+                }}
+              >
+                <option value="default">Default team</option>
+                {teams.filter(t => !t.isPrimary).map(t => (
+                  <option key={t.teamId} value={t.teamId}>{t.teamName}</option>
+                ))}
+              </select>
+            )}
+          </div>
           {isLoading && (
             <div style={{ color: '#64748b', fontSize: 13, marginTop: 4 }}>Loading sprint…</div>
           )}
@@ -130,7 +172,7 @@ export function VelocityMirrorPage() {
 
         {/* Left: chart + capacity */}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <BurndownChart sprintLength={sprint?.sprintLength} />
+          <BurndownChart sprintLength={sprint?.sprintLength} teamId={activeTeamId} />
           <VelocityControls
             window={window}
             setWindow={setWindow}
@@ -143,8 +185,9 @@ export function VelocityMirrorPage() {
             window={window}
             fromDate={fromDate}
             visibleMetrics={visibleMetrics}
+            teamId={activeTeamId}
           />
-          <DeveloperCapacityRow />
+          <DeveloperCapacityRow teamId={activeTeamId} />
 
           {/* Completed sprints — View Retro links */}
           {(completedSprintsData?.sprints ?? []).length > 0 && (

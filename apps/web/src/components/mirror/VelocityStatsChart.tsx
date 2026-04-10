@@ -48,18 +48,20 @@ interface VelocityStatsChartProps {
   window: number
   fromDate: string | null
   visibleMetrics: string[]
+  teamId?: string
 }
 
-export function VelocityStatsChart({ window, fromDate, visibleMetrics }: VelocityStatsChartProps) {
+export function VelocityStatsChart({ window, fromDate, visibleMetrics, teamId }: VelocityStatsChartProps) {
   const { get } = useApi()
   const { isLoaded, isSignedIn } = useAuth()
 
   const params = new URLSearchParams()
   params.set('window', String(window))
   if (fromDate) params.set('fromDate', fromDate)
+  if (teamId && teamId !== 'default') params.set('team_id', teamId)
 
   const { data, isLoading, isError, error } = useQuery<VelocityStatsData, ApiError>({
-    queryKey: ['velocity-stats', window, fromDate],
+    queryKey: ['velocity-stats', window, fromDate, teamId],
     queryFn: () => get<VelocityStatsData>(`/api/velocity/stats?${params.toString()}`),
     enabled: isLoaded && isSignedIn,
   })

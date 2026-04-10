@@ -24,6 +24,7 @@ interface SprintCapacityResponse {
 
 interface DeveloperCapacityRowProps {
   developers?: DeveloperCapacity[]
+  teamId?: string
 }
 
 interface DevCardProps {
@@ -117,14 +118,15 @@ function DevCard({ dev, onClick }: DevCardProps) {
   )
 }
 
-export function DeveloperCapacityRow({ developers }: DeveloperCapacityRowProps) {
+export function DeveloperCapacityRow({ developers, teamId }: DeveloperCapacityRowProps) {
   const { get } = useApi()
   const { isLoaded, isSignedIn } = useAuth()
   const [selectedDeveloperId, setSelectedDeveloperId] = useState<string | null>(null)
 
+  const teamParam = teamId && teamId !== 'default' ? `?team_id=${teamId}` : ''
   const query = useQuery<SprintCapacityResponse, ApiError>({
-    queryKey: ['velocity-capacity'],
-    queryFn: () => get<SprintCapacityResponse>('/api/velocity/capacity'),
+    queryKey: ['velocity-capacity', teamId],
+    queryFn: () => get<SprintCapacityResponse>(`/api/velocity/capacity${teamParam}`),
     enabled: !developers && isLoaded && !!isSignedIn,
   })
 

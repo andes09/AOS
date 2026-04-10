@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../lib/api'
+import { useAppRole } from '../hooks/useAppRole'
 
 interface SlackConfig {
   configured: boolean
@@ -22,6 +23,25 @@ interface JiraStatus {
   last_synced_at?: string | null
 }
 
+interface InviteResponse {
+  id: string
+  email: string
+  role: string
+  inviteLink: string
+  expiresAt: string
+  status: string
+}
+
+interface InvitationItem {
+  id: string
+  email: string
+  role: string
+  status: string
+  inviteLink: string
+  expiresAt: string
+  createdAt: string
+}
+
 export function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [status, setStatus] = useState<JiraStatus | null>(null)
@@ -41,7 +61,16 @@ export function SettingsPage() {
   const [slackSaving, setSlackSaving] = useState(false)
   const [slackMsg, setSlackMsg] = useState<string | null>(null)
   const [slackTesting, setSlackTesting] = useState(false)
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteRole, setInviteRole] = useState('developer')
+  const [inviteSending, setInviteSending] = useState(false)
+  const [inviteMsg, setInviteMsg] = useState<string | null>(null)
+  const [inviteLink, setInviteLink] = useState<string | null>(null)
+  const [invitations, setInvitations] = useState<InvitationItem[]>([])
+  const [copiedId, setCopiedId] = useState<string | null>(null)
   const { get, del, post, put } = useApi()
+  const { appRole } = useAppRole()
+  const isLead = appRole === 'lead' || appRole === 'exec' || appRole === 'admin'
 
   async function fetchStatus() {
     try {
@@ -76,10 +105,54 @@ export function SettingsPage() {
     }
   }
 
+  async function fetchInvitations() {
+    try {
+      const data = await get<{ invitations: InvitationItem[] }>('/api/invitations')
+      setInvitations(data.invitations)
+    } catch {
+      // non-fatal
+    }
+  }
+
+  async function handleSendInvite() {
+    if (!inviteEmail.trim()) return
+    setInviteSending(true)
+    setInviteMsg(null)
+    setInviteLink(null)
+    try {
+      const data = await post<InviteResponse>('/api/invitations', { email: inviteEmail.trim(), role: inviteRole })
+      setInviteLink(data.inviteLink)
+      setInviteEmail('')
+      setInviteMsg(null)
+      await fetchInvitations()
+    } catch (err) {
+      setInviteMsg(err instanceof Error ? err.message : 'Failed to create invitation')
+    } finally {
+      setInviteSending(false)
+    }
+  }
+
+  async function handleRevokeInvite(id: string) {
+    try {
+      await del(`/api/invitations/${id}`)
+      setInvitations(prev => prev.filter(i => i.id !== id))
+    } catch {
+      // ignore
+    }
+  }
+
+  function handleCopyLink(link: string, id: string) {
+    navigator.clipboard.writeText(link).then(() => {
+      setCopiedId(id)
+      setTimeout(() => setCopiedId(null), 2000)
+    })
+  }
+
   useEffect(() => {
     fetchStatus()
     fetchAnthropicStatus()
     fetchSlackConfig()
+    fetchInvitations()
     // If we just returned from an OAuth flow, strip the connection_id param
     if (searchParams.get('connection_id')) {
       setSearchParams({}, { replace: true })
@@ -378,6 +451,84 @@ export function SettingsPage() {
           </div>
         )}
       </div>
+
+      {/* Invite Team Members Card — leads only */}
+      {isLead && (
+        <div style={{ background: '#1e2030', border: '1px solid #2d2f45', borderRadius: 8, padding: '1.25rem 1.5rem', marginTop: '1.25rem' }}>
+          <h2 style={{ color: '#e2e8f0', fontSize: '1rem', fontWeight: 600, margin: '0 0 0.75rem' }}>Invite Team Members</h2>
+          <p style={{ color: '#64748b', fontSize: 13, margin: '0 0 1rem' }}>
+            Send a signup link to a teammate. They'll be added to your AOS team when they accept.
+          </p>
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+            <input
+              type="email"
+              placeholder="teammate@company.com"
+              value={inviteEmail}
+              onChange={e => setInviteEmail(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSendInvite()}
+              style={{ flex: 1, minWidth: 200, background: '#0f1117', border: '1px solid #2d2f45', borderRadius: 6, color: '#e2e8f0', fontSize: 13, padding: '0.5rem 0.75rem', outline: 'none' }}
+            />
+            <select
+              value={inviteRole}
+              onChange={e => setInviteRole(e.target.value)}
+              style={{ background: '#0f1117', border: '1px solid #2d2f45', borderRadius: 6, color: '#e2e8f0', fontSize: 13, padding: '0.5rem 0.75rem', cursor: 'pointer', outline: 'none' }}
+            >
+              <option value="developer">Developer</option>
+              <option value="lead">Lead</option>
+            </select>
+            <button
+              onClick={handleSendInvite}
+              disabled={inviteSending || !inviteEmail.trim()}
+              style={{ background: inviteSending || !inviteEmail.trim() ? '#374151' : '#6366f1', color: inviteSending || !inviteEmail.trim() ? '#64748b' : '#fff', border: 'none', borderRadius: 6, padding: '0.5rem 1.25rem', fontSize: 13, fontWeight: 600, cursor: inviteSending || !inviteEmail.trim() ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}
+            >
+              {inviteSending ? 'Generating…' : 'Generate Link'}
+            </button>
+          </div>
+
+          {inviteMsg && (
+            <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 8 }}>{inviteMsg}</div>
+          )}
+
+          {inviteLink && (
+            <div style={{ background: '#0f1117', border: '1px solid #2d2f45', borderRadius: 6, padding: '0.625rem 0.875rem', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <span style={{ color: '#a5b4fc', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inviteLink}</span>
+              <button
+                onClick={() => handleCopyLink(inviteLink, 'new')}
+                style={{ background: 'transparent', border: '1px solid #334155', borderRadius: 5, color: '#94a3b8', fontSize: 11, fontWeight: 600, padding: '3px 10px', cursor: 'pointer', flexShrink: 0 }}
+              >
+                {copiedId === 'new' ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+          )}
+
+          {invitations.length > 0 && (
+            <div style={{ borderTop: '1px solid #2d2f45', paddingTop: 12, marginTop: 4 }}>
+              <div style={{ color: '#475569', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Pending Invites</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {invitations.filter(i => i.status === 'pending').map(inv => (
+                  <div key={inv.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ color: '#cbd5e1', fontSize: 13, flex: 1 }}>{inv.email}</span>
+                    <span style={{ color: '#64748b', fontSize: 11 }}>{inv.role}</span>
+                    <button
+                      onClick={() => handleCopyLink(inv.inviteLink, inv.id)}
+                      style={{ background: 'transparent', border: '1px solid #334155', borderRadius: 5, color: '#94a3b8', fontSize: 11, fontWeight: 600, padding: '2px 8px', cursor: 'pointer' }}
+                    >
+                      {copiedId === inv.id ? 'Copied!' : 'Copy'}
+                    </button>
+                    <button
+                      onClick={() => handleRevokeInvite(inv.id)}
+                      style={{ background: 'transparent', border: 'none', color: '#ef4444', fontSize: 11, cursor: 'pointer', padding: '2px 4px' }}
+                    >
+                      Revoke
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Slack Configuration Card */}
       <div style={{ background: '#1e2030', border: '1px solid #2d2f45', borderRadius: 8, padding: '1.25rem 1.5rem', marginTop: '1.25rem' }}>

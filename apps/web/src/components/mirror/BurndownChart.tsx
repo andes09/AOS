@@ -26,6 +26,7 @@ interface BurndownChartProps {
   data?: BurndownDataPoint[]
   sprintLength?: number
   predictedEndDay?: number
+  teamId?: string
 }
 
 interface BurndownApiResponse {
@@ -34,13 +35,14 @@ interface BurndownApiResponse {
   predictedEndDay: number
 }
 
-export function BurndownChart({ data, sprintLength, predictedEndDay }: BurndownChartProps) {
+export function BurndownChart({ data, sprintLength, predictedEndDay, teamId }: BurndownChartProps) {
   const { get } = useApi()
   const { isLoaded, isSignedIn } = useAuth()
 
+  const teamParam = teamId && teamId !== 'default' ? `?team_id=${teamId}` : ''
   const query = useQuery<BurndownApiResponse>({
-    queryKey: ['burndown'],
-    queryFn: () => get<BurndownApiResponse>('/api/velocity/burndown'),
+    queryKey: ['burndown', teamId],
+    queryFn: () => get<BurndownApiResponse>(`/api/velocity/burndown${teamParam}`),
     enabled: !data && isLoaded && isSignedIn,
   })
 

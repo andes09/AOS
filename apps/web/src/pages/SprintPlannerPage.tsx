@@ -1,6 +1,6 @@
 // apps/web/src/pages/SprintPlannerPage.tsx
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useApi, ApiError } from '../lib/api'
 import { VelocityCard } from '../components/sprint/VelocityCard'
@@ -8,9 +8,12 @@ import { ConfidenceGauge } from '../components/sprint/ConfidenceGauge'
 import { TicketList } from '../components/sprint/TicketList'
 import { PlanReasoningPanel } from '../components/sprint/PlanReasoningPanel'
 import { ScopeCopPanel } from '../components/sprint/ScopeCopPanel'
+import { CapacitySettingsPanel } from '../components/sprint/CapacitySettingsPanel'
+import { MeetingLoadWarning } from '../components/sprint/MeetingLoadWarning'
 import { useNavigate } from 'react-router-dom'
 import type { SprintPlanResponse, WhatIfResponse, Ticket, PushToJiraResponse } from '../types/sprint'
 import type { AnalyzeResponse } from '../types/scopeCop'
+import type { TeamCapacityResponse } from '../types/capacity'
 
 const SESSION_KEY = 'sprint_plan_cache'
 
@@ -69,6 +72,9 @@ export function SprintPlannerPage() {
   const [pushResult, setPushResult] = useState<PushToJiraResponse | null>(null)
   const [pushError, setPushError] = useState<string | null>(null)
   const [droppedIds, setDroppedIds] = useState<Set<string>>(new Set())
+  const [capacityData, setCapacityData] = useState<TeamCapacityResponse | null>(null)
+  const [capacityOpen, setCapacityOpen] = useState(false)
+  const capacityRef = useRef<HTMLDivElement>(null)
   const [warnings, setWarnings] = useState<string[]>(() => {
     try {
       const cached = sessionStorage.getItem(SESSION_KEY)
@@ -197,7 +203,10 @@ export function SprintPlannerPage() {
             developer={devNameMap[dev] || dev}
             meanVelocity={committed.get(dev) ?? 0}
             committed={committed.get(dev) ?? 0}
-            capacity={DEFAULT_CAPACITY}
+            capacity={
+              capacityData?.developers.find(d => d.displayName === (devNameMap[dev] || dev))?.effectiveCapacityPts
+              ?? DEFAULT_CAPACITY
+            }
             sprintCount={3}
           />
         ))}
@@ -267,6 +276,32 @@ export function SprintPlannerPage() {
           </button>
         )}
       </div>
+
+      {/* Capacity panel — collapsible */}
+      <div style={{ marginBottom: 12 }}>
+        <button
+          onClick={() => setCapacityOpen(o => !o)}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, padding: 0 }}
+        >
+          <span>{capacityOpen ? '▼' : '▶'}</span>
+          <span>Capacity Settings</span>
+        </button>
+        {capacityOpen && (
+          <div ref={capacityRef} style={{ marginTop: 8 }}>
+            <CapacitySettingsPanel onCapacityLoaded={setCapacityData} />
+          </div>
+        )}
+      </div>
+
+      {capacityData && capacityData.developers.some(d => d.isHighMeetingLoad) && (
+        <MeetingLoadWarning
+          developers={capacityData.developers}
+          onAdjustCapacity={() => {
+            setCapacityOpen(true)
+            capacityRef.current?.scrollIntoView({ behavior: 'smooth' })
+          }}
+        />
+      )}
 
       {generatePlan.isError && (
         <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 12 }}>

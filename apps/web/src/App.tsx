@@ -9,6 +9,8 @@ import { DependencyRadarPage } from './pages/DependencyRadarPage'
 import { RetrospectivePage } from './pages/RetrospectivePage'
 import { OnboardingPage } from './pages/OnboardingPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { MultiTeamDashboardPage } from './pages/MultiTeamDashboardPage'
+import { InviteAcceptPage } from './pages/InviteAcceptPage'
 
 function SignInPage() {
   return <SignIn routing="path" path="/sign-in" />
@@ -18,6 +20,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/sign-in/*" element={<SignInPage />} />
+      <Route path="/invite" element={<SignedIn><InviteAcceptPage /></SignedIn>} />
       <Route path="/onboarding/*" element={
         <SignedIn><OnboardingPage /></SignedIn>
       } />
@@ -39,6 +42,7 @@ export default function App() {
         <Route path="exec-dashboard" element={<ExecDashboardPage />} />
         <Route path="dependency-radar" element={<DependencyRadarPage />} />
         <Route path="retrospective" element={<RetrospectivePage />} />
+        <Route path="multi-team" element={<MultiTeamDashboardPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/app" replace />} />

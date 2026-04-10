@@ -19,6 +19,10 @@ from src.routers.users import users_router
 from src.routers.scope_cop import scope_cop_router
 from src.routers.dependency_radar import dependency_radar_router
 from src.routers.retro import retro_router
+from src.routers.onboarding import onboarding_router, invitations_router
+from src.routers.capacity import capacity_router
+from src.routers.teams import teams_router
+from src.routers.slack import slack_router
 
 app = FastAPI(
     title="AgileOS API",
@@ -55,6 +59,11 @@ app.include_router(developers_router.router)
 app.include_router(scope_cop_router, prefix="/api/scope-cop")
 app.include_router(dependency_radar_router, prefix="/api/dependency-radar")
 app.include_router(retro_router, prefix="/api/retro")
+app.include_router(onboarding_router, prefix="/api/onboarding")
+app.include_router(invitations_router, prefix="/api/invitations")
+app.include_router(capacity_router, prefix="/api/capacity")
+app.include_router(teams_router, prefix="/api/teams")
+app.include_router(slack_router, prefix="/api/teams")
 
 
 @app.get("/health")

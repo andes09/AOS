@@ -9,6 +9,10 @@ from src.models.ticket import Ticket, TicketStatus
 from src.models.scope_cop import ScopeCopStatus, TicketAnalysis
 from src.models.dependency_radar import DependencyType, RiskLevel, Dependency
 from src.models.retro import PatternType, PatternStatus, Retrospective, RetroPattern
+from src.models.invitation import Invitation, InvitationStatus
+from src.models.capacity import DeveloperCapacityOverride
+from src.models.team_access import TeamAccessGrant
+from src.models.slack_config import SlackConfig
 
 __all__ = [
     "Organization",
@@ -34,4 +38,9 @@ __all__ = [
     "PatternStatus",
     "Retrospective",
     "RetroPattern",
+    "Invitation",
+    "InvitationStatus",
+    "DeveloperCapacityOverride",
+    "TeamAccessGrant",
+    "SlackConfig",
 ]

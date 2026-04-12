@@ -257,7 +257,8 @@ async def accept_invitation(token: str, clerk_user_id: str, db: AsyncSession) ->
     """
 
 def build_invite_link(token: str, frontend_base_url: str) -> str:
-    """Returns f"{frontend_base_url}/invite?token={token}"."""
+    """Returns f"{frontend_base_url}/invite?token={token}".
+    Read frontend_base_url from settings.frontend_url (already defined in src/config.py)."""
 ```
 
 ### API Spec — Wave 3 (Track 28)
@@ -593,6 +594,7 @@ DeveloperCapacityItem:
   "isHighMeetingLoad":    boolean,
   "warningMessage":       string | null
 }
+Response 403: { "detail": "insufficient role" }
 ```
 
 #### `PATCH /api/capacity/team/{team_id}/overhead`
@@ -600,6 +602,7 @@ DeveloperCapacityItem:
 Auth: require_role("lead")
 Request: { "meetingOverheadPct": number }  (0.0–1.0; 422 if outside range)
 Response 200: { "teamId": string, "meetingOverheadPct": number }
+Response 403: { "detail": "insufficient role" }
 Side effect: updates team.meeting_overhead_pct
 ```
 
@@ -614,6 +617,7 @@ Request:
   "notes":      string | null
 }
 Response 200: DeveloperCapacityItem (re-computed after override applied)
+Response 403: { "detail": "insufficient role" }
 Response 404: developer or sprint not found
 Response 422: capacityPct outside 0.0–1.0
 ```
@@ -623,6 +627,7 @@ Response 422: capacityPct outside 0.0–1.0
 Auth: require_role("lead")
 Query param: sprint_id (optional; if omitted, deletes override with sprint_id IS NULL)
 Response 200: { "deleted": true }
+Response 403: { "detail": "insufficient role" }
 Response 404: no override found
 ```
 
@@ -929,6 +934,7 @@ TeamDashboardItem:
   "lastRetroDate":     string | null,
   "ragStatus":         "green" | "amber" | "red"
 }
+Response 403: { "detail": "insufficient role" }
 ```
 
 #### `POST /api/teams/{team_id}/access`
@@ -936,6 +942,7 @@ TeamDashboardItem:
 Auth: require_role("lead")
 Request: { "developerClerkUserId": string }
 Response 201: { "granted": true, "teamId": string, "developerId": string }
+Response 403: { "detail": "insufficient role" }
 Response 404: developer not found by clerkUserId
 Response 409: access already granted
 ```
@@ -944,6 +951,7 @@ Response 409: access already granted
 ```
 Auth: require_role("lead")
 Response 200: { "revoked": true }
+Response 403: { "detail": "insufficient role" }
 Response 404: grant not found
 ```
 
@@ -963,6 +971,7 @@ Response 200:
   "alertTypes": string[],
   "isActive":   boolean
 }
+Response 403: { "detail": "insufficient role" }
 ```
 
 #### `PUT /api/teams/{team_id}/slack`
@@ -975,6 +984,7 @@ Request:
   "alertTypes": string[]
 }
 Response 200: same shape as GET response
+Response 403: { "detail": "insufficient role" }
 Response 422: webhookUrl not a valid Slack webhook URL (must start with https://hooks.slack.com/)
 ```
 
@@ -982,6 +992,7 @@ Response 422: webhookUrl not a valid Slack webhook URL (must start with https://
 ```
 Auth: require_role("lead")
 Response 200: { "deleted": true }
+Response 403: { "detail": "insufficient role" }
 Response 404: no Slack config found
 ```
 
@@ -989,6 +1000,7 @@ Response 404: no Slack config found
 ```
 Auth: require_role("lead")
 Response 200: { "sent": true }
+Response 403: { "detail": "insufficient role" }
 Response 402: no Slack config or config inactive
 Response 502: Slack webhook returned non-200
 ```

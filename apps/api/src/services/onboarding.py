@@ -1,3 +1,10 @@
+"""
+Track 26 — Onboarding service.
+
+Provides:
+  get_onboarding_status()       — returns the five-field progress dict for the wizard UI
+  import_jira_sprint_history()  — bulk-imports completed sprints + tickets from Jira
+"""
 import uuid
 from datetime import datetime
 

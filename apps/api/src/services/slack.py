@@ -22,7 +22,7 @@ async def send_slack_alert(
     """
     Formats message from ALERT_TEMPLATES[alert_type] using payload.
     POSTs to webhook_url. Returns True on 200, False otherwise.
-    Never raises.
+    Never raises — caller should log failures.
     """
     template = ALERT_TEMPLATES.get(alert_type, "{team_name}: {alert_type}")
     try:
@@ -42,7 +42,7 @@ async def send_slack_alert(
 
 
 async def send_test_message(webhook_url: str, team_name: str) -> bool:
-    """Sends a simple verification message to the webhook."""
+    """Sends a simple "✅ AgileOS Slack connection verified for {team_name}" message."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.post(

@@ -8,9 +8,17 @@ BYOK model: the Anthropic API key is always supplied by the caller (fetched
 from the Organisation record), never from environment.
 """
 
+import uuid
 from dataclasses import dataclass, field
 
 import anthropic
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.models.developer import Developer
+from src.models.team import Team
+from src.models.sprint import Sprint, SprintStatus
+from src.models.capacity import DeveloperCapacityOverride
 
 _MODEL = "claude-opus-4-6"
 
@@ -398,6 +406,120 @@ def _build_assignment_message(
         "supporting your decision. Populate what_if_dropped for each assigned ticket.",
     ]
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Developer profile builder — capacity-aware
+# ---------------------------------------------------------------------------
+
+
+async def _get_developer_profiles(
+    team_id: str,
+    db: AsyncSession,
+    sprint_id: str | None = None,
+) -> list[dict]:
+    """
+    Build developer profiles for sprint planning, enriched with meeting overhead
+    and capacity overrides.
+
+    For each active developer on the team:
+    1. Compute per_dev_velocity from completed sprint history (avg delivered_points / active devs).
+    2. Load team.meeting_overhead_pct.
+    3. Load DeveloperCapacityOverride for (developer_id, sprint_id) if one exists.
+    4. Compute safe_capacity_pts = per_dev_velocity * capacity_pct * (1 - meeting_overhead_pct).
+    5. Attach meetingOverheadPct and capacityOverridePct to the profile dict.
+
+    Returns profiles sorted by display_name.
+    """
+    team_uuid = uuid.UUID(team_id) if isinstance(team_id, str) else team_id
+
+    # Load team for meeting overhead
+    team_result = await db.execute(select(Team).where(Team.id == team_uuid))
+    team = team_result.scalar_one_or_none()
+    meeting_overhead_pct = team.meeting_overhead_pct if team else 0.0
+
+    # Load active developers
+    devs_result = await db.execute(
+        select(Developer).where(
+            Developer.team_id == team_uuid,
+            Developer.is_active.is_(True),
+        )
+    )
+    developers = devs_result.scalars().all()
+    if not developers:
+        return []
+
+    # Compute base velocity from completed sprints (team avg / dev count)
+    sprints_result = await db.execute(
+        select(Sprint).where(
+            Sprint.team_id == team_uuid,
+            Sprint.status == SprintStatus.COMPLETED,
+            Sprint.delivered_points.isnot(None),
+        ).order_by(Sprint.end_date.desc()).limit(6)
+    )
+    completed_sprints = sprints_result.scalars().all()
+
+    if completed_sprints:
+        team_avg = sum(s.delivered_points for s in completed_sprints) / len(completed_sprints)
+        per_dev_velocity = round(team_avg / len(developers), 1)
+        sprint_count = len(completed_sprints)
+    else:
+        per_dev_velocity = 8.0  # cold-start default
+        sprint_count = 0
+
+    # Load capacity overrides (sprint-specific or "next sprint" if sprint_id is None)
+    sprint_uuid = uuid.UUID(sprint_id) if sprint_id else None
+    dev_ids = [d.id for d in developers]
+    overrides_query = select(DeveloperCapacityOverride).where(
+        DeveloperCapacityOverride.developer_id.in_(dev_ids),
+    )
+    if sprint_uuid:
+        overrides_query = overrides_query.where(
+            DeveloperCapacityOverride.sprint_id == sprint_uuid
+        )
+    else:
+        overrides_query = overrides_query.where(
+            DeveloperCapacityOverride.sprint_id.is_(None)
+        )
+    overrides_result = await db.execute(overrides_query)
+    overrides = {o.developer_id: o for o in overrides_result.scalars().all()}
+
+    profiles = []
+    for dev in sorted(developers, key=lambda d: d.name):
+        override = overrides.get(dev.id)
+        capacity_pct = (
+            override.capacity_pct
+            if override and override.capacity_pct is not None
+            else 1.0
+        )
+
+        # Apply both meeting overhead and capacity override
+        safe_capacity_pts = round(
+            per_dev_velocity * capacity_pct * (1 - meeting_overhead_pct), 1
+        )
+
+        profiles.append({
+            "developer_id": str(dev.id),
+            "display_name": dev.name,
+            "role": dev.role or "Engineer",
+            "email": dev.email or "",
+            "velocity": per_dev_velocity,
+            "sprint_count": sprint_count,
+            "avg_points_per_sprint": per_dev_velocity,
+            "safe_capacity_pts": safe_capacity_pts,
+            "meetingOverheadPct": meeting_overhead_pct,
+            "capacityOverridePct": capacity_pct,
+            "velocity_breakdown": [
+                {
+                    "ticket_type": "general",
+                    "domain": dev.role or "Engineering",
+                    "avg_pts": per_dev_velocity,
+                    "sample_count": sprint_count,
+                }
+            ] if sprint_count > 0 else [],
+        })
+
+    return profiles
 
 
 # ---------------------------------------------------------------------------

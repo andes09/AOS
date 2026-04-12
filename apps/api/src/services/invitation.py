@@ -1,3 +1,11 @@
+"""
+Track 26 — Invitation service.
+
+Provides:
+  create_invitation()   — idempotent invitation creation with 7-day token
+  accept_invitation()   — token validation, status update, Developer upsert
+  build_invite_link()   — formats the shareable invite URL
+"""
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone

@@ -252,11 +252,22 @@ async def create_invite(
     _role: str = Depends(require_role("lead")),
     db: AsyncSession = Depends(get_db),
 ):
-    allowed_roles = {"lead", "exec", "admin"}
+    allowed_roles = {"developer", "lead"}
     if body.role not in allowed_roles:
-        raise HTTPException(status_code=422, detail="Invitations can only be sent for lead, exec, or admin roles")
+        raise HTTPException(status_code=422, detail="role must be 'developer' or 'lead'")
 
     org, team = await _resolve_org_and_team(clerk_org_id, db)
+
+    # Check for existing pending invitation before creating (to detect 409 case)
+    existing_result = await db.execute(
+        select(Invitation).where(
+            Invitation.organization_id == org.id,
+            Invitation.email == body.email,
+            Invitation.status == "pending",
+        )
+    )
+    existing_inv = existing_result.scalar_one_or_none()
+
     invitation = await create_invitation(
         organization_id=org.id,
         team_id=team.id,
@@ -267,6 +278,20 @@ async def create_invite(
     )
     await db.commit()
     invite_link = build_invite_link(invitation.token, settings.frontend_url)
+
+    if existing_inv and existing_inv.id == invitation.id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "id": str(invitation.id),
+                "email": invitation.email,
+                "role": invitation.role,
+                "inviteLink": invite_link,
+                "expiresAt": invitation.expires_at.isoformat(),
+                "status": invitation.status,
+            },
+        )
+
     return CreateInvitationResponse(
         id=str(invitation.id),
         email=invitation.email,

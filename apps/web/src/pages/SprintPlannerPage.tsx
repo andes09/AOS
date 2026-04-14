@@ -1,7 +1,7 @@
 // apps/web/src/pages/SprintPlannerPage.tsx
 
 import { useState, useEffect, useRef } from 'react'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { useApi, ApiError } from '../lib/api'
 import { VelocityCard } from '../components/sprint/VelocityCard'
 import { ConfidenceGauge } from '../components/sprint/ConfidenceGauge'
@@ -50,7 +50,7 @@ function RecurringIssuesPanel({ warnings }: { warnings: string[] }) {
 }
 
 export function SprintPlannerPage() {
-  const { post } = useApi()
+  const { post, get } = useApi()
   const navigate = useNavigate()
 
   const [plan, setPlan] = useState<SprintPlanResponse | null>(() => {
@@ -72,8 +72,13 @@ export function SprintPlannerPage() {
   const [pushResult, setPushResult] = useState<PushToJiraResponse | null>(null)
   const [pushError, setPushError] = useState<string | null>(null)
   const [droppedIds, setDroppedIds] = useState<Set<string>>(new Set())
-  const [capacityData, setCapacityData] = useState<TeamCapacityResponse | null>(null)
   const [capacityOpen, setCapacityOpen] = useState(false)
+
+  const capacityQuery = useQuery({
+    queryKey: ['capacity', 'team', 'default'],
+    queryFn: () => get<TeamCapacityResponse>('/api/capacity/team/default'),
+  })
+  const capacityData = capacityQuery.data ?? null
   const capacityRef = useRef<HTMLDivElement>(null)
   const [warnings, setWarnings] = useState<string[]>(() => {
     try {
@@ -288,7 +293,7 @@ export function SprintPlannerPage() {
         </button>
         {capacityOpen && (
           <div ref={capacityRef} style={{ marginTop: 8 }}>
-            <CapacitySettingsPanel onCapacityLoaded={setCapacityData} />
+            <CapacitySettingsPanel />
           </div>
         )}
       </div>

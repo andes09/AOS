@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { useApi, ApiError } from '../lib/api'
 import type { TeamDashboardItem } from '../types/multiTeam'
 
+const RAG_ORDER: Record<string, number> = { red: 0, amber: 1, green: 2 }
+
 const RAG_COLORS: Record<string, { bg: string; border: string; badge: string; text: string }> = {
   red:   { bg: '#1c0a09', border: '#ef4444', badge: '#dc2626', text: '#fca5a5' },
   amber: { bg: '#1c1100', border: '#d97706', badge: '#b45309', text: '#fde68a' },
@@ -18,7 +20,9 @@ export function MultiTeamDashboardPage() {
 
   useEffect(() => {
     get<{ teams: TeamDashboardItem[] }>('/api/teams/multi-dashboard')
-      .then(data => setTeams(data.teams))
+      .then(data =>
+        setTeams([...data.teams].sort((a, b) => (RAG_ORDER[a.ragStatus] ?? 3) - (RAG_ORDER[b.ragStatus] ?? 3)))
+      )
       .catch(err => {
         if (err instanceof ApiError && err.status === 403) {
           setError('Multi-team view requires lead role or higher')

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useApi } from '../lib/api'
+import { useApi, ApiError } from '../lib/api'
 import { useAppRole } from '../hooks/useAppRole'
 
 interface SlackConfig {
@@ -60,6 +60,7 @@ export function SettingsPage() {
   const [slackAlertTypes, setSlackAlertTypes] = useState<string[]>(ALL_ALERT_TYPES)
   const [slackSaving, setSlackSaving] = useState(false)
   const [slackMsg, setSlackMsg] = useState<string | null>(null)
+  const [slackValidationError, setSlackValidationError] = useState<string | null>(null)
   const [slackTesting, setSlackTesting] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState('lead')
@@ -163,6 +164,7 @@ export function SettingsPage() {
     if (!slackWebhook.trim()) return
     setSlackSaving(true)
     setSlackMsg(null)
+    setSlackValidationError(null)
     try {
       await put('/api/teams/default/slack', {
         webhookUrl: slackWebhook.trim(),
@@ -172,7 +174,11 @@ export function SettingsPage() {
       setSlackMsg('Slack config saved.')
       await fetchSlackConfig()
     } catch (err) {
-      setSlackMsg(err instanceof Error ? err.message : 'Failed to save Slack config')
+      if (err instanceof ApiError && err.status === 422) {
+        setSlackValidationError(err.message)
+      } else {
+        setSlackMsg(err instanceof Error ? err.message : 'Failed to save Slack config')
+      }
     } finally {
       setSlackSaving(false)
     }
@@ -184,8 +190,8 @@ export function SettingsPage() {
     try {
       await post('/api/teams/default/slack/test', {})
       setSlackMsg('✅ Test message sent')
-    } catch (err) {
-      setSlackMsg(err instanceof Error ? err.message : '❌ Test failed')
+    } catch {
+      setSlackMsg('❌ Failed')
     } finally {
       setSlackTesting(false)
     }
@@ -553,9 +559,12 @@ export function SettingsPage() {
               type="text"
               placeholder="https://hooks.slack.com/services/..."
               value={slackWebhook}
-              onChange={e => setSlackWebhook(e.target.value)}
-              style={{ width: '100%', boxSizing: 'border-box', background: '#0f1117', border: '1px solid #2d2f45', borderRadius: 6, color: '#e2e8f0', fontSize: 13, padding: '0.5rem 0.75rem' }}
+              onChange={e => { setSlackWebhook(e.target.value); setSlackValidationError(null) }}
+              style={{ width: '100%', boxSizing: 'border-box', background: '#0f1117', border: `1px solid ${slackValidationError ? '#ef4444' : '#2d2f45'}`, borderRadius: 6, color: '#e2e8f0', fontSize: 13, padding: '0.5rem 0.75rem' }}
             />
+            {slackValidationError && (
+              <div style={{ color: '#ef4444', fontSize: 12, marginTop: 4 }}>{slackValidationError}</div>
+            )}
           </div>
           <div>
             <label style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 4 }}>Channel (optional)</label>

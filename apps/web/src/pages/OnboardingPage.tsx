@@ -238,9 +238,15 @@ export function OnboardingPage() {
 
           {inviteError && <div style={{ color: '#ef4444', fontSize: 13 }}>{inviteError}</div>}
 
-          <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+          <div style={{ display: 'flex', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
             <button onClick={back} style={{ background: 'transparent', color: '#64748b', border: '1px solid #2d2f45', borderRadius: 8, padding: '0.625rem 1.25rem', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
               Back
+            </button>
+            <button
+              onClick={handleDone}
+              style={{ background: 'transparent', color: '#94a3b8', border: '1px solid #2d2f45', borderRadius: 8, padding: '0.625rem 1.25rem', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+            >
+              Skip for now
             </button>
             <button
               onClick={handleDone}

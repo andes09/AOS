@@ -5,20 +5,33 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@clerk/clerk-react'
 import { useApi, ApiError } from '../lib/api'
 import { DependencyItem } from '../components/radar/DependencyItem'
+import { Alert } from '../components/ui/Alert'
+import { Button } from '../components/ui/Button'
+import { Card, CardHeader, CardBody } from '../components/ui/Card'
+import { Input } from '../components/ui/Input'
+import { Select } from '../components/ui/Select'
+import { Badge } from '../components/ui/Badge'
+import type { AlertVariant } from '../components/ui/Alert'
 import type { RadarResponse, ScanResponse, DependencyType, RiskLevel } from '../types/dependencyRadar'
 
 const TEAM_ID = 'default'
-
-const RISK_BANNER: Record<string, { bg: string; border: string; color: string; label: string }> = {
-  high:   { bg: '#450a0a', border: '#7f1d1d', color: '#fca5a5', label: 'High Risk' },
-  medium: { bg: '#451a03', border: '#78350f', color: '#fcd34d', label: 'Moderate Risk' },
-  low:    { bg: '#052e16', border: '#14532d', color: '#86efac', label: 'Low Risk' },
-}
 
 function riskBand(score: number): 'high' | 'medium' | 'low' {
   if (score < 40) return 'high'
   if (score < 70) return 'medium'
   return 'low'
+}
+
+const RISK_ALERT_VARIANT: Record<string, AlertVariant> = {
+  high: 'danger',
+  medium: 'warning',
+  low: 'success',
+}
+
+const RISK_LABEL: Record<string, string> = {
+  high: 'High Risk',
+  medium: 'Moderate Risk',
+  low: 'Low Risk',
 }
 
 function Section({
@@ -36,45 +49,41 @@ function Section({
   const filtered = deps.filter(d => d.riskLevel === level)
 
   return (
-    <div style={{ marginBottom: 16 }}>
-      <button
-        onClick={() => setOpen(o => !o)}
-        style={{
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '6px 0',
-          width: '100%',
-          textAlign: 'left',
-        }}
-      >
-        <span style={{ color: '#94a3b8', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-          {title}
-        </span>
-        <span style={{
-          background: '#2d3148',
-          color: '#64748b',
-          borderRadius: '50%',
-          width: 18,
-          height: 18,
-          fontSize: 10,
-          fontWeight: 700,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}>
-          {filtered.length}
-        </span>
-        <span style={{ color: '#475569', fontSize: 12, marginLeft: 'auto' }}>{open ? '▲' : '▼'}</span>
-      </button>
+    <Card style={{ marginBottom: 12 }}>
+      <CardHeader>
+        <button
+          onClick={() => setOpen(o => !o)}
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: 0,
+            width: '100%',
+            textAlign: 'left',
+          }}
+        >
+          <span style={{
+            color: 'var(--color-text-primary)',
+            fontFamily: 'var(--font-sans)',
+            fontSize: 'var(--text-sm)',
+            fontWeight: 600,
+          }}>
+            {title}
+          </span>
+          <Badge variant="default">{filtered.length}</Badge>
+          <span style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)', marginLeft: 'auto' }}>
+            {open ? '▲' : '▼'}
+          </span>
+        </button>
+      </CardHeader>
 
       {open && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <CardBody style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {filtered.length === 0 ? (
-            <div style={{ color: '#475569', fontSize: 13, padding: '4px 0 8px' }}>
+            <div style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)' }}>
               No {level} risk dependencies
             </div>
           ) : (
@@ -82,9 +91,9 @@ function Section({
               <DependencyItem key={dep.id} dep={dep} onResolve={onResolve} />
             ))
           )}
-        </div>
+        </CardBody>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -96,7 +105,6 @@ export function DependencyRadarPage() {
   const [scanning, setScanning] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
 
-  // Add dep form state
   const [formOpen, setFormOpen] = useState(false)
   const [formTicketKey, setFormTicketKey] = useState('')
   const [formTicketTitle, setFormTicketTitle] = useState('')
@@ -167,10 +175,9 @@ export function DependencyRadarPage() {
   }
 
   const band = data ? riskBand(data.riskScore) : null
-  const banner = band ? RISK_BANNER[band] : null
 
   return (
-    <div style={{ background: '#0f1117', minHeight: '100%', padding: '1.5rem', fontFamily: 'system-ui, sans-serif' }}>
+    <div style={{ fontFamily: 'var(--font-sans)', minHeight: '100%' }}>
 
       {/* Toast */}
       {toast && (
@@ -178,14 +185,15 @@ export function DependencyRadarPage() {
           position: 'fixed',
           bottom: 24,
           right: 24,
-          background: '#1e2030',
-          border: '1px solid #334155',
-          color: '#e2e8f0',
-          borderRadius: 8,
+          background: 'var(--color-bg-elevated)',
+          border: '1px solid var(--color-border)',
+          color: 'var(--color-text-primary)',
+          borderRadius: 'var(--radius-lg)',
           padding: '10px 16px',
-          fontSize: 13,
+          fontSize: 'var(--text-sm)',
           zIndex: 1000,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+          boxShadow: 'var(--shadow-md)',
+          fontFamily: 'var(--font-sans)',
         }}>
           {toast}
         </div>
@@ -193,155 +201,114 @@ export function DependencyRadarPage() {
 
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
-        <h1 style={{ color: '#e2e8f0', fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: '-0.01em' }}>
+        <h1 style={{ color: 'var(--color-text-primary)', fontSize: 'var(--text-xl)', fontWeight: 700, margin: 0 }}>
           Dependency Radar
         </h1>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => setFormOpen(o => !o)}
-            style={{
-              background: '#1e2030',
-              border: '1px solid #334155',
-              color: '#94a3b8',
-              borderRadius: 6,
-              padding: '6px 12px',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
           >
             {formOpen ? 'Cancel' : '+ Add Dependency'}
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
             onClick={handleScanJira}
             disabled={scanning}
-            style={{
-              background: scanning ? '#1e3a5f' : '#1e40af',
-              border: 'none',
-              color: scanning ? '#64748b' : '#bfdbfe',
-              borderRadius: 6,
-              padding: '6px 14px',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: scanning ? 'not-allowed' : 'pointer',
-            }}
           >
             {scanning ? 'Scanning…' : 'Scan Jira'}
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* Aggregate risk score banner */}
-      {banner && data && (
-        <div style={{
-          background: banner.bg,
-          border: `1px solid ${banner.border}`,
-          borderRadius: 8,
-          padding: '12px 16px',
-          marginBottom: 20,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-        }}>
-          <span style={{ color: banner.color, fontWeight: 700, fontSize: 15 }}>
-            Risk Score: {data.riskScore}
-          </span>
-          <span style={{ color: banner.color, fontSize: 13 }}>— {banner.label}</span>
-        </div>
+      {band && data && (
+        <Alert
+          variant={RISK_ALERT_VARIANT[band]}
+          title={`Risk Score: ${data.riskScore}`}
+          style={{ marginBottom: 20 }}
+        >
+          {RISK_LABEL[band]}
+        </Alert>
       )}
 
       {/* Inline Add Dependency form */}
       {formOpen && (
-        <form
-          onSubmit={handleAddDep}
-          style={{
-            background: '#1e2030',
-            borderRadius: 8,
-            padding: '1rem',
-            marginBottom: 20,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 10,
-          }}
-        >
-          <div style={{ color: '#94a3b8', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Add Dependency
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <input
-              required
-              placeholder="Ticket Key (e.g. PROJ-123)"
-              value={formTicketKey}
-              onChange={e => setFormTicketKey(e.target.value)}
-              style={inputStyle}
-            />
-            <input
-              required
-              placeholder="Ticket Title"
-              value={formTicketTitle}
-              onChange={e => setFormTicketTitle(e.target.value)}
-              style={{ ...inputStyle, flex: 2, minWidth: 200 }}
-            />
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <select value={formDepType} onChange={e => setFormDepType(e.target.value as DependencyType)} style={selectStyle}>
-              <option value="blocks">Blocks</option>
-              <option value="is_blocked_by">Blocked By</option>
-              <option value="external_service">External Service</option>
-              <option value="cross_team">Cross-Team</option>
-            </select>
-            <select value={formRiskLevel} onChange={e => setFormRiskLevel(e.target.value as RiskLevel)} style={selectStyle}>
-              <option value="high">High Risk</option>
-              <option value="medium">Medium Risk</option>
-              <option value="low">Low Risk</option>
-            </select>
-          </div>
-          <input
-            placeholder="Description (optional)"
-            value={formDescription}
-            onChange={e => setFormDescription(e.target.value)}
-            style={{ ...inputStyle, width: '100%' }}
-          />
-          <div>
-            <button
-              type="submit"
-              disabled={formSubmitting}
-              style={{
-                background: formSubmitting ? '#1e3a5f' : '#1e40af',
-                border: 'none',
-                color: formSubmitting ? '#64748b' : '#bfdbfe',
-                borderRadius: 6,
-                padding: '6px 16px',
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: formSubmitting ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {formSubmitting ? 'Adding…' : 'Add'}
-            </button>
-          </div>
-        </form>
+        <Card style={{ marginBottom: 20 }}>
+          <CardHeader>
+            <span style={{ color: 'var(--color-text-secondary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Add Dependency
+            </span>
+          </CardHeader>
+          <CardBody>
+            <form onSubmit={handleAddDep} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <Input
+                  required
+                  placeholder="Ticket Key (e.g. PROJ-123)"
+                  value={formTicketKey}
+                  onChange={e => setFormTicketKey(e.target.value)}
+                  containerStyle={{ flex: 1, minWidth: 140 }}
+                />
+                <Input
+                  required
+                  placeholder="Ticket Title"
+                  value={formTicketTitle}
+                  onChange={e => setFormTicketTitle(e.target.value)}
+                  containerStyle={{ flex: 2, minWidth: 200 }}
+                />
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <Select
+                  value={formDepType}
+                  onChange={e => setFormDepType(e.target.value as DependencyType)}
+                  containerStyle={{ flex: 1 }}
+                >
+                  <option value="blocks">Blocks</option>
+                  <option value="is_blocked_by">Blocked By</option>
+                  <option value="external_service">External Service</option>
+                  <option value="cross_team">Cross-Team</option>
+                </Select>
+                <Select
+                  value={formRiskLevel}
+                  onChange={e => setFormRiskLevel(e.target.value as RiskLevel)}
+                  containerStyle={{ flex: 1 }}
+                >
+                  <option value="high">High Risk</option>
+                  <option value="medium">Medium Risk</option>
+                  <option value="low">Low Risk</option>
+                </Select>
+              </div>
+              <Input
+                placeholder="Description (optional)"
+                value={formDescription}
+                onChange={e => setFormDescription(e.target.value)}
+              />
+              <div>
+                <Button type="submit" variant="primary" size="sm" disabled={formSubmitting}>
+                  {formSubmitting ? 'Adding…' : 'Add'}
+                </Button>
+              </div>
+            </form>
+          </CardBody>
+        </Card>
       )}
 
       {/* Loading / error states */}
       {isLoading && (
-        <div style={{ color: '#64748b', fontSize: 13 }}>Loading dependencies…</div>
-      )}
-      {is403 && (
-        <div style={{
-          background: '#1e2130',
-          border: '1px solid #ef444433',
-          borderRadius: 10,
-          padding: '2rem',
-          textAlign: 'center',
-          color: '#ef4444',
-          fontSize: 15,
-        }}>
-          Access denied. Lead role required.
+        <div style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)' }}>
+          Loading dependencies…
         </div>
       )}
+      {is403 && (
+        <Alert variant="danger">Access denied. Lead role required.</Alert>
+      )}
       {isError && !is403 && (
-        <div style={{ color: '#ef4444', fontSize: 13 }}>Failed to load dependencies</div>
+        <div style={{ color: 'var(--color-danger)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)' }}>
+          Failed to load dependencies
+        </div>
       )}
 
       {/* Grouped sections */}
@@ -354,27 +321,4 @@ export function DependencyRadarPage() {
       )}
     </div>
   )
-}
-
-const inputStyle: React.CSSProperties = {
-  background: '#0f1117',
-  border: '1px solid #334155',
-  color: '#e2e8f0',
-  borderRadius: 6,
-  padding: '6px 10px',
-  fontSize: 12,
-  outline: 'none',
-  flex: 1,
-  minWidth: 120,
-}
-
-const selectStyle: React.CSSProperties = {
-  background: '#0f1117',
-  border: '1px solid #334155',
-  color: '#e2e8f0',
-  borderRadius: 6,
-  padding: '6px 10px',
-  fontSize: 12,
-  outline: 'none',
-  cursor: 'pointer',
 }

@@ -10,6 +10,9 @@ import { PlanReasoningPanel } from '../components/sprint/PlanReasoningPanel'
 import { ScopeCopPanel } from '../components/sprint/ScopeCopPanel'
 import { CapacitySettingsPanel } from '../components/sprint/CapacitySettingsPanel'
 import { MeetingLoadWarning } from '../components/sprint/MeetingLoadWarning'
+import { Button } from '../components/ui/Button'
+import { Alert } from '../components/ui/Alert'
+import { Card, CardBody } from '../components/ui/Card'
 import { useNavigate } from 'react-router-dom'
 import type { SprintPlanResponse, WhatIfResponse, Ticket, PushToJiraResponse } from '../types/sprint'
 import type { AnalyzeResponse } from '../types/scopeCop'
@@ -30,22 +33,38 @@ const DEFAULT_CAPACITY = 40
 function RecurringIssuesPanel({ warnings }: { warnings: string[] }) {
   const [open, setOpen] = useState(warnings.length <= 2)
   return (
-    <div style={{ background: '#1e1b4b', border: '1px solid #4338ca', borderLeft: '4px solid #6366f1', borderRadius: 8, padding: '0.75rem 1rem' }}>
-      <button
-        onClick={() => setOpen(o => !o)}
-        style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, padding: 0, width: '100%', textAlign: 'left' }}
-      >
-        <span style={{ color: '#a5b4fc', fontSize: 13, fontWeight: 700 }}>↺ Recurring Issues ({warnings.length})</span>
-        <span style={{ color: '#6366f1', fontSize: 11, marginLeft: 'auto' }}>{open ? '▲' : '▼'}</span>
-      </button>
-      {open && (
-        <ul style={{ margin: '8px 0 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {warnings.map((w, i) => (
-            <li key={i} style={{ color: '#c7d2fe', fontSize: 13, lineHeight: 1.5 }}>{w}</li>
-          ))}
-        </ul>
-      )}
-    </div>
+    <Card>
+      <CardBody style={{ padding: '10px 14px' }}>
+        <button
+          onClick={() => setOpen(o => !o)}
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: 0,
+            width: '100%',
+            textAlign: 'left',
+          }}
+        >
+          <span style={{ color: 'var(--color-accent)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', fontWeight: 600 }}>
+            Recurring Issues ({warnings.length})
+          </span>
+          <span style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)', marginLeft: 'auto' }}>
+            {open ? '▲' : '▼'}
+          </span>
+        </button>
+        {open && (
+          <ul style={{ margin: '8px 0 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {warnings.map((w, i) => (
+              <li key={i} style={{ color: 'var(--color-text-secondary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', lineHeight: 1.5 }}>{w}</li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+    </Card>
   )
 }
 
@@ -182,24 +201,22 @@ export function SprintPlannerPage() {
   }))
 
   return (
-    <div style={{ background: '#0f1117', minHeight: '100%', padding: '1.5rem', fontFamily: 'system-ui, sans-serif' }}>
+    <div style={{ fontFamily: 'var(--font-sans)', minHeight: '100%' }}>
 
-      {/* Top row: velocity cards + gauge + generate button */}
+      {/* Top row: velocity cards + gauge + action buttons */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'stretch', marginBottom: 16, flexWrap: 'wrap' }}>
 
         {developers.length === 0 && !generatePlan.isPending && (
-          <div style={{
-            flex: 1,
-            background: '#1e2030',
-            borderRadius: 8,
-            padding: '0.875rem 1rem',
-            color: '#64748b',
-            fontSize: 13,
-            display: 'flex',
-            alignItems: 'center',
-          }}>
-            Velocity cards will appear here after generating a plan.
-          </div>
+          <Card style={{ flex: 1 }}>
+            <CardBody style={{
+              color: 'var(--color-text-muted)',
+              fontSize: 'var(--text-sm)',
+              display: 'flex',
+              alignItems: 'center',
+            }}>
+              Velocity cards will appear here after generating a plan.
+            </CardBody>
+          </Card>
         )}
 
         {developers.map(dev => (
@@ -217,76 +234,59 @@ export function SprintPlannerPage() {
         ))}
 
         {plan && (
-          <div style={{ background: '#1e2030', borderRadius: 8, padding: '0.875rem 1rem', display: 'flex', alignItems: 'center' }}>
-            <ConfidenceGauge score={confidence} sampleSize={plan.assignments.length} />
-          </div>
+          <Card>
+            <CardBody style={{ display: 'flex', alignItems: 'center' }}>
+              <ConfidenceGauge score={confidence} sampleSize={plan.assignments.length} />
+            </CardBody>
+          </Card>
         )}
 
-        <button
-          onClick={() => scopeAnalysisMutation.mutate()}
-          disabled={scopeAnalysisMutation.isPending}
-          style={{
-            background: scopeAnalysisMutation.isPending ? '#374151' : '#0f172a',
-            color: scopeAnalysisMutation.isPending ? '#475569' : '#f59e0b',
-            border: '1px solid #f59e0b',
-            borderRadius: 8,
-            padding: '0.875rem 1.5rem',
-            fontSize: 14,
-            fontWeight: 700,
-            cursor: scopeAnalysisMutation.isPending ? 'default' : 'pointer',
-            whiteSpace: 'nowrap',
-            alignSelf: 'center',
-          }}
-        >
-          {scopeAnalysisMutation.isPending ? 'Analyzing...' : '⬡ Analyze Scope'}
-        </button>
-
-        <button
-          onClick={() => generatePlan.mutate()}
-          disabled={generatePlan.isPending}
-          style={{
-            background: generatePlan.isPending ? '#374151' : '#6366f1',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 8,
-            padding: '0.875rem 1.5rem',
-            fontSize: 14,
-            fontWeight: 700,
-            cursor: generatePlan.isPending ? 'default' : 'pointer',
-            whiteSpace: 'nowrap',
-            alignSelf: 'center',
-          }}
-        >
-          {generatePlan.isPending ? 'Generating...' : '✦ Generate Plan'}
-        </button>
-
-        {plan && (
-          <button
-            onClick={() => pushMutation.mutate()}
-            disabled={pushMutation.isPending}
-            style={{
-              background: pushMutation.isPending ? '#374151' : '#059669',
-              color: '#fff',
-              border: 'none',
-              borderRadius: 8,
-              padding: '0.875rem 1.5rem',
-              fontSize: 14,
-              fontWeight: 700,
-              cursor: pushMutation.isPending ? 'default' : 'pointer',
-              whiteSpace: 'nowrap',
-              alignSelf: 'center',
-            }}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Button
+            variant="secondary"
+            onClick={() => scopeAnalysisMutation.mutate()}
+            disabled={scopeAnalysisMutation.isPending}
           >
-            {pushMutation.isPending ? 'Pushing...' : 'Push to Jira'}
-          </button>
-        )}
+            {scopeAnalysisMutation.isPending ? 'Analyzing...' : 'Analyze Scope'}
+          </Button>
+
+          <Button
+            variant="primary"
+            onClick={() => generatePlan.mutate()}
+            disabled={generatePlan.isPending}
+          >
+            {generatePlan.isPending ? 'Generating...' : 'Generate Plan'}
+          </Button>
+
+          {plan && (
+            <Button
+              variant="secondary"
+              onClick={() => pushMutation.mutate()}
+              disabled={pushMutation.isPending}
+              style={{ color: 'var(--color-success)', borderColor: 'var(--color-success)' }}
+            >
+              {pushMutation.isPending ? 'Pushing...' : 'Push to Jira'}
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Capacity panel — collapsible */}
       <div style={{ marginBottom: 12 }}>
         <button
           onClick={() => setCapacityOpen(o => !o)}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, padding: 0 }}
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            color: 'var(--color-text-muted)',
+            fontFamily: 'var(--font-sans)',
+            fontSize: 'var(--text-xs)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: 0,
+          }}
         >
           <span>{capacityOpen ? '▼' : '▶'}</span>
           <span>Capacity Settings</span>
@@ -309,55 +309,46 @@ export function SprintPlannerPage() {
       )}
 
       {generatePlan.isError && (
-        <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 12 }}>
+        <Alert variant="danger" style={{ marginBottom: 12 }}>
           {generatePlan.error instanceof Error
             ? generatePlan.error.message
             : 'Failed to generate plan. Check your Anthropic key and Jira connection.'}
-        </div>
+        </Alert>
       )}
 
       {warnings.length > 0 && (
-        <div style={{ background: '#1e2030', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 16 }}>
           {warnings.map((w, i) => (
-            <div key={i} style={{ color: '#fbbf24', fontSize: 13, display: 'flex', gap: 8 }}>
-              <span>⚠</span><span>{w}</span>
-            </div>
+            <Alert key={i} variant="warning">{w}</Alert>
           ))}
         </div>
       )}
 
       {pushError && (
-        <div style={{ background: '#78350f', border: '1px solid #d97706', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: 16, color: '#fbbf24', fontSize: 13 }}>
-          {pushError}
-        </div>
+        <Alert variant="danger" style={{ marginBottom: 16 }}>{pushError}</Alert>
       )}
 
       {pushResult && (
-        <div style={{ background: '#064e3b', border: '1px solid #059669', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: 16, fontSize: 13 }}>
-          <div style={{ color: '#6ee7b7' }}>
-            Sprint pushed! {pushResult.pushedTickets} tickets assigned.{' '}
-            <a href={pushResult.sprintUrl} target="_blank" rel="noreferrer" style={{ color: '#34d399', textDecoration: 'underline' }}>
-              View in Jira
-            </a>
-          </div>
+        <Alert variant="success" style={{ marginBottom: 16 }}>
+          Sprint pushed! {pushResult.pushedTickets} tickets assigned.{' '}
+          <a href={pushResult.sprintUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--color-accent)', textDecoration: 'underline' }}>
+            View in Jira
+          </a>
           {pushResult.unassignedWarnings.length > 0 && (
-            <ul style={{ margin: '8px 0 0', paddingLeft: 20, color: '#fbbf24' }}>
+            <ul style={{ margin: '8px 0 0', paddingLeft: 20, color: 'var(--color-warning)' }}>
               {pushResult.unassignedWarnings.map((w, i) => (
-                <li key={i} style={{ fontSize: 12 }}>{w}</li>
+                <li key={i} style={{ fontSize: 'var(--text-xs)' }}>{w}</li>
               ))}
             </ul>
           )}
-        </div>
+        </Alert>
       )}
 
       {scopeAnalysisMutation.data?.summary.needsWorkCount != null &&
         scopeAnalysisMutation.data.summary.needsWorkCount > 0 && (
-        <div style={{ background: '#1c1100', border: '1px solid #f59e0b', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ color: '#f59e0b', fontSize: 16 }}>⚠</span>
-          <span style={{ color: '#fbbf24', fontSize: 13, fontWeight: 600 }}>
-            {scopeAnalysisMutation.data.summary.needsWorkCount} ticket{scopeAnalysisMutation.data.summary.needsWorkCount !== 1 ? 's' : ''} need work before planning
-          </span>
-        </div>
+        <Alert variant="warning" style={{ marginBottom: 12 }}>
+          {scopeAnalysisMutation.data.summary.needsWorkCount} ticket{scopeAnalysisMutation.data.summary.needsWorkCount !== 1 ? 's' : ''} need work before planning
+        </Alert>
       )}
 
       {scopeAnalysisMutation.data && (
@@ -374,45 +365,47 @@ export function SprintPlannerPage() {
 
           {/* Scope Cop status */}
           {plan.enrichmentStatus.scopeCop === 'not_analyzed' && !scopeAnalysisMutation.data && (
-            <div style={{ background: '#1c1100', border: '1px solid #78350f', borderRadius: 8, padding: '0.625rem 1rem', fontSize: 13, color: '#fbbf24', display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span>⬡</span><span>Scope not analyzed — run Analyze Scope before planning</span>
-            </div>
+            <Alert variant="warning">
+              Scope not analyzed — run Analyze Scope before planning
+            </Alert>
           )}
           {plan.enrichmentStatus.scopeCop === 'all_ready' && (
-            <div style={{ background: '#052e16', border: '1px solid #166534', borderRadius: 8, padding: '0.625rem 1rem', fontSize: 13, color: '#4ade80', display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span>✓</span><span>All tickets scope-ready</span>
-            </div>
+            <Alert variant="success">All tickets scope-ready</Alert>
           )}
           {plan.enrichmentStatus.scopeCop === 'has_issues' && (plan.scopeWarnings ?? []).map(w => (
-            <div key={w.ticketId} style={{ background: '#1c1100', border: '1px solid #f59e0b', borderRadius: 8, padding: '0.625rem 1rem', fontSize: 13 }}>
-              <span style={{ color: '#fbbf24', fontWeight: 600 }}>⚠ {w.ticketId}</span>
-              <span style={{ color: '#f59e0b', marginLeft: 8 }}>{w.status}</span>
+            <Alert key={w.ticketId} variant="warning" title={w.ticketId}>
+              {w.status}
               {w.issues.length > 0 && (
-                <span style={{ color: '#94a3b8', marginLeft: 8 }}>{w.issues.join(' · ')}</span>
+                <span style={{ color: 'var(--color-text-secondary)', marginLeft: 8 }}>{w.issues.join(' · ')}</span>
               )}
-            </div>
+            </Alert>
           ))}
 
           {/* Dependency Radar status */}
           {plan.enrichmentStatus.dependencyRadar === 'not_scanned' && (
-            <div style={{ background: '#1c1100', border: '1px solid #78350f', borderRadius: 8, padding: '0.625rem 1rem', fontSize: 13, color: '#fbbf24', display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span>⬡</span><span>Dependencies not scanned — </span>
-              <button onClick={() => navigate('/app/dependency-radar')} style={{ background: 'transparent', border: 'none', color: '#f59e0b', cursor: 'pointer', fontSize: 13, padding: 0, textDecoration: 'underline' }}>run Dependency Radar</button>
-            </div>
+            <Alert variant="warning">
+              Dependencies not scanned —{' '}
+              <button
+                onClick={() => navigate('/app/dependency-radar')}
+                style={{ background: 'transparent', border: 'none', color: 'var(--color-warning)', cursor: 'pointer', fontSize: 'var(--text-sm)', padding: 0, textDecoration: 'underline', fontFamily: 'var(--font-sans)' }}
+              >
+                run Dependency Radar
+              </button>
+            </Alert>
           )}
           {plan.enrichmentStatus.dependencyRadar === 'no_risks' && (
-            <div style={{ background: '#052e16', border: '1px solid #166534', borderRadius: 8, padding: '0.625rem 1rem', fontSize: 13, color: '#4ade80', display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span>✓</span><span>No dependency risks</span>
-            </div>
+            <Alert variant="success">No dependency risks</Alert>
           )}
           {plan.enrichmentStatus.dependencyRadar === 'has_risks' && (plan.dependencyWarnings ?? []).map(w => (
-            <div key={w.ticketId} style={{ background: '#1f0606', border: '1px solid #ef4444', borderRadius: 8, padding: '0.625rem 1rem', fontSize: 13, display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span style={{ color: '#ef4444' }}>⛔</span>
-              <span style={{ color: '#fca5a5', fontWeight: 600 }}>{w.ticketId}</span>
-              <span style={{ color: '#f87171' }}>{w.riskLevel} risk</span>
-              {w.description && <span style={{ color: '#94a3b8' }}>{w.description}</span>}
-              <button onClick={() => navigate('/app/dependency-radar')} style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 12, padding: 0, marginLeft: 'auto', textDecoration: 'underline' }}>View Radar</button>
-            </div>
+            <Alert key={w.ticketId} variant="danger" title={`${w.ticketId} — ${w.riskLevel} risk`}>
+              {w.description && <span>{w.description}</span>}
+              <button
+                onClick={() => navigate('/app/dependency-radar')}
+                style={{ background: 'transparent', border: 'none', color: 'var(--color-danger)', cursor: 'pointer', fontSize: 'var(--text-xs)', padding: 0, marginLeft: 8, textDecoration: 'underline', fontFamily: 'var(--font-sans)' }}
+              >
+                View Radar
+              </button>
+            </Alert>
           ))}
 
           {/* Retro Patterns panel */}
@@ -432,22 +425,20 @@ export function SprintPlannerPage() {
               onRestoreTicket={handleRestoreTicket}
             />
           </div>
-          <div style={{
-            flex: 1,
-            background: '#1e2030',
-            borderRadius: 8,
-            padding: '1rem',
-            overflowY: 'auto',
-          }}>
-            <PlanReasoningPanel assignments={plan.assignments} />
-          </div>
+          <Card style={{ flex: 1, overflow: 'hidden' }}>
+            <CardBody style={{ height: '100%', overflowY: 'auto' }}>
+              <PlanReasoningPanel assignments={plan.assignments} />
+            </CardBody>
+          </Card>
         </div>
       )}
 
       {!plan && !generatePlan.isPending && (
-        <div style={{ textAlign: 'center', padding: '5rem 0', color: '#374151' }}>
-          <div style={{ fontSize: 48, marginBottom: 12 }}>✦</div>
-          <div style={{ fontSize: 14, color: '#64748b' }}>Click "Generate Plan" to start sprint planning</div>
+        <div style={{ textAlign: 'center', padding: '5rem 0', color: 'var(--color-text-muted)' }}>
+          <div style={{ fontSize: 32, marginBottom: 12, color: 'var(--color-text-muted)' }}>✦</div>
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }}>
+            Click "Generate Plan" to start sprint planning
+          </div>
         </div>
       )}
     </div>

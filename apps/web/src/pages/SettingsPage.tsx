@@ -2,6 +2,11 @@ import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useApi, ApiError } from '../lib/api'
 import { useAppRole } from '../hooks/useAppRole'
+import { Card, CardHeader, CardBody } from '../components/ui/Card'
+import { Button } from '../components/ui/Button'
+import { Input } from '../components/ui/Input'
+import { Select } from '../components/ui/Select'
+import { Badge } from '../components/ui/Badge'
 
 interface SlackConfig {
   configured: boolean
@@ -154,7 +159,6 @@ export function SettingsPage() {
     fetchAnthropicStatus()
     fetchSlackConfig()
     fetchInvitations()
-    // If we just returned from an OAuth flow, strip the connection_id param
     if (searchParams.get('connection_id')) {
       setSearchParams({}, { replace: true })
     }
@@ -189,9 +193,9 @@ export function SettingsPage() {
     setSlackMsg(null)
     try {
       await post('/api/teams/default/slack/test', {})
-      setSlackMsg('✅ Test message sent')
+      setSlackMsg('Test message sent')
     } catch {
-      setSlackMsg('❌ Failed')
+      setSlackMsg('Failed to send test')
     } finally {
       setSlackTesting(false)
     }
@@ -273,362 +277,309 @@ export function SettingsPage() {
     }
   }
 
+  const sectionGap = { marginTop: 16 }
+
   return (
-    <div style={{ maxWidth: 640, margin: '0 auto', padding: '2rem 1.5rem' }}>
-      <h1 style={{ color: '#e2e8f0', fontSize: '1.5rem', fontWeight: 700, marginBottom: '2rem' }}>
+    <div style={{ maxWidth: 640, margin: '0 auto', fontFamily: 'var(--font-sans)' }}>
+      <h1 style={{ color: 'var(--color-text-primary)', fontSize: 'var(--text-xl)', fontWeight: 700, marginBottom: 24, margin: '0 0 24px' }}>
         Settings
       </h1>
 
-      {/* Jira Connection Card */}
-      <div style={{
-        background: '#1e2030',
-        border: '1px solid #2d2f45',
-        borderRadius: 8,
-        padding: '1.25rem 1.5rem',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-          <h2 style={{ color: '#e2e8f0', fontSize: '1rem', fontWeight: 600, margin: 0 }}>
+      {/* Jira Connection */}
+      <Card>
+        <CardHeader>
+          <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
             Jira Connection
-          </h2>
+          </span>
           {!loading && status && (
-            <span style={{
-              fontSize: 12,
-              fontWeight: 600,
-              padding: '2px 10px',
-              borderRadius: 999,
-              background: status.connected ? '#14532d' : '#1e293b',
-              color: status.connected ? '#4ade80' : '#64748b',
-              border: `1px solid ${status.connected ? '#166534' : '#2d2f45'}`,
-            }}>
+            <Badge variant={status.connected ? 'success' : 'default'}>
               {status.connected ? 'Connected' : 'Not connected'}
-            </span>
+            </Badge>
           )}
-        </div>
-
-        {loading ? (
-          <div style={{ color: '#64748b', fontSize: 14 }}>Loading...</div>
-        ) : status?.connected ? (
-          <div>
-            <div style={{ color: '#94a3b8', fontSize: 13, marginBottom: 4 }}>
-              {status.cloud_url}
-            </div>
-            <div style={{ color: '#64748b', fontSize: 12, marginBottom: '1rem' }}>
-              Last synced:{' '}
-              {status.last_synced_at
-                ? new Date(status.last_synced_at).toLocaleString()
-                : 'Never'}
-            </div>
-            {syncMessage && (
-              <div style={{ color: syncMessage.includes('failed') ? '#ef4444' : '#4ade80', fontSize: 13, marginBottom: 8 }}>{syncMessage}</div>
-            )}
-            {actionError && (
-              <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 8 }}>{actionError}</div>
-            )}
-            <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              onClick={handleSync}
-              disabled={syncing}
-              style={{
-                background: syncing ? '#374151' : '#1e3a5f',
-                color: syncing ? '#64748b' : '#60a5fa',
-                border: '1px solid #1d4ed8',
-                borderRadius: 6,
-                padding: '0.5rem 1rem',
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: syncing ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {syncing ? 'Syncing...' : 'Sync Now'}
-            </button>
-            <button
-              onClick={handleDisconnect}
-              disabled={actionLoading}
-              style={{
-                background: 'transparent',
-                color: '#ef4444',
-                border: '1px solid #ef4444',
-                borderRadius: 6,
-                padding: '0.5rem 1rem',
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: actionLoading ? 'not-allowed' : 'pointer',
-                opacity: actionLoading ? 0.6 : 1,
-              }}
-            >
-              {actionLoading ? 'Disconnecting...' : 'Disconnect'}
-            </button>
-            </div>
-          </div>
-        ) : (
-          <div>
-            <p style={{ color: '#64748b', fontSize: 13, marginBottom: '1rem', margin: '0 0 1rem' }}>
-              Connect your Atlassian account to enable sprint syncing.
-            </p>
-            {actionError && (
-              <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 8 }}>{actionError}</div>
-            )}
-            <button
-              onClick={handleConnect}
-              disabled={actionLoading}
-              style={{
-                background: actionLoading ? '#374151' : '#6366f1',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 6,
-                padding: '0.5rem 1.25rem',
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: actionLoading ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {actionLoading ? 'Redirecting...' : 'Connect Jira'}
-            </button>
-          </div>
-        )}
-      </div>
-      {/* Anthropic API Key Card */}
-      <div style={{
-        background: '#1e2030',
-        border: '1px solid #2d2f45',
-        borderRadius: 8,
-        padding: '1.25rem 1.5rem',
-        marginTop: '1.25rem',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-          <h2 style={{ color: '#e2e8f0', fontSize: '1rem', fontWeight: 600, margin: 0 }}>
-            Anthropic API Key
-          </h2>
-          {anthropicConfigured !== null && (
-            <span style={{
-              fontSize: 12,
-              fontWeight: 600,
-              padding: '2px 10px',
-              borderRadius: 999,
-              background: anthropicConfigured ? '#14532d' : '#1e293b',
-              color: anthropicConfigured ? '#4ade80' : '#64748b',
-              border: `1px solid ${anthropicConfigured ? '#166534' : '#2d2f45'}`,
-            }}>
-              {anthropicConfigured ? 'Configured' : 'Not configured'}
-            </span>
-          )}
-        </div>
-        <p style={{ color: '#64748b', fontSize: 13, margin: '0 0 1rem' }}>
-          Required for Sprint Brain AI planning and Retrospective generation.
-        </p>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input
-            type="password"
-            placeholder="sk-ant-..."
-            value={anthropicKey}
-            onChange={e => setAnthropicKey(e.target.value)}
-            style={{
-              flex: 1,
-              background: '#0f1117',
-              border: '1px solid #2d2f45',
-              borderRadius: 6,
-              padding: '0.5rem 0.75rem',
-              color: '#e2e8f0',
-              fontSize: 13,
-              outline: 'none',
-            }}
-          />
-          <button
-            onClick={handleSaveAnthropicKey}
-            disabled={anthropicSaving || !anthropicKey.trim()}
-            style={{
-              background: anthropicSaving || !anthropicKey.trim() ? '#374151' : '#6366f1',
-              color: anthropicSaving || !anthropicKey.trim() ? '#64748b' : '#fff',
-              border: 'none',
-              borderRadius: 6,
-              padding: '0.5rem 1.25rem',
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: anthropicSaving || !anthropicKey.trim() ? 'not-allowed' : 'pointer',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {anthropicSaving ? 'Saving...' : 'Save Key'}
-          </button>
-        </div>
-        {anthropicMessage && (
-          <div style={{ color: anthropicMessage === 'API key saved.' ? '#4ade80' : '#ef4444', fontSize: 13, marginTop: 8 }}>
-            {anthropicMessage}
-          </div>
-        )}
-      </div>
-
-      {/* Invite Team Members Card — leads only */}
-      {isLead && (
-        <div style={{ background: '#1e2030', border: '1px solid #2d2f45', borderRadius: 8, padding: '1.25rem 1.5rem', marginTop: '1.25rem' }}>
-          <h2 style={{ color: '#e2e8f0', fontSize: '1rem', fontWeight: 600, margin: '0 0 0.75rem' }}>Invite Team Members</h2>
-          <p style={{ color: '#64748b', fontSize: 13, margin: '0 0 1rem' }}>
-            Send a signup link to a teammate. They'll be added to your AOS team when they accept.
-          </p>
-
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-            <input
-              type="email"
-              placeholder="teammate@company.com"
-              value={inviteEmail}
-              onChange={e => setInviteEmail(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleSendInvite()}
-              style={{ flex: 1, minWidth: 200, background: '#0f1117', border: '1px solid #2d2f45', borderRadius: 6, color: '#e2e8f0', fontSize: 13, padding: '0.5rem 0.75rem', outline: 'none' }}
-            />
-            <select
-              value={inviteRole}
-              onChange={e => setInviteRole(e.target.value)}
-              style={{ background: '#0f1117', border: '1px solid #2d2f45', borderRadius: 6, color: '#e2e8f0', fontSize: 13, padding: '0.5rem 0.75rem', cursor: 'pointer', outline: 'none' }}
-            >
-              <option value="lead">Lead</option>
-              <option value="exec">Exec</option>
-            </select>
-            <button
-              onClick={handleSendInvite}
-              disabled={inviteSending || !inviteEmail.trim()}
-              style={{ background: inviteSending || !inviteEmail.trim() ? '#374151' : '#6366f1', color: inviteSending || !inviteEmail.trim() ? '#64748b' : '#fff', border: 'none', borderRadius: 6, padding: '0.5rem 1.25rem', fontSize: 13, fontWeight: 600, cursor: inviteSending || !inviteEmail.trim() ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}
-            >
-              {inviteSending ? 'Generating…' : 'Generate Link'}
-            </button>
-          </div>
-
-          {inviteMsg && (
-            <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 8 }}>{inviteMsg}</div>
-          )}
-
-          {inviteLink && (
-            <div style={{ background: '#0f1117', border: '1px solid #2d2f45', borderRadius: 6, padding: '0.625rem 0.875rem', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <span style={{ color: '#a5b4fc', fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inviteLink}</span>
-              <button
-                onClick={() => handleCopyLink(inviteLink, 'new')}
-                style={{ background: 'transparent', border: '1px solid #334155', borderRadius: 5, color: '#94a3b8', fontSize: 11, fontWeight: 600, padding: '3px 10px', cursor: 'pointer', flexShrink: 0 }}
-              >
-                {copiedId === 'new' ? 'Copied!' : 'Copy'}
-              </button>
-            </div>
-          )}
-
-          {invitations.length > 0 && (
-            <div style={{ borderTop: '1px solid #2d2f45', paddingTop: 12, marginTop: 4 }}>
-              <div style={{ color: '#475569', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Pending Invites</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {invitations.filter(i => i.status === 'pending').map(inv => (
-                  <div key={inv.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ color: '#cbd5e1', fontSize: 13, flex: 1 }}>{inv.email}</span>
-                    <span style={{ color: '#64748b', fontSize: 11 }}>{inv.role}</span>
-                    <button
-                      onClick={() => handleCopyLink(inv.inviteLink, inv.id)}
-                      style={{ background: 'transparent', border: '1px solid #334155', borderRadius: 5, color: '#94a3b8', fontSize: 11, fontWeight: 600, padding: '2px 8px', cursor: 'pointer' }}
-                    >
-                      {copiedId === inv.id ? 'Copied!' : 'Copy'}
-                    </button>
-                    <button
-                      onClick={() => handleRevokeInvite(inv.id)}
-                      style={{ background: 'transparent', border: 'none', color: '#ef4444', fontSize: 11, cursor: 'pointer', padding: '2px 4px' }}
-                    >
-                      Revoke
-                    </button>
-                  </div>
-                ))}
+        </CardHeader>
+        <CardBody>
+          {loading ? (
+            <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>Loading...</div>
+          ) : status?.connected ? (
+            <div>
+              <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)', marginBottom: 2 }}>
+                {status.cloud_url}
+              </div>
+              <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)', marginBottom: 16 }}>
+                Last synced:{' '}
+                {status.last_synced_at
+                  ? new Date(status.last_synced_at).toLocaleString()
+                  : 'Never'}
+              </div>
+              {syncMessage && (
+                <div style={{
+                  color: syncMessage.includes('failed') ? 'var(--color-danger)' : 'var(--color-success)',
+                  fontSize: 'var(--text-sm)',
+                  marginBottom: 8,
+                }}>
+                  {syncMessage}
+                </div>
+              )}
+              {actionError && (
+                <div style={{ color: 'var(--color-danger)', fontSize: 'var(--text-sm)', marginBottom: 8 }}>
+                  {actionError}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button variant="secondary" size="sm" onClick={handleSync} disabled={syncing}>
+                  {syncing ? 'Syncing...' : 'Sync Now'}
+                </Button>
+                <Button variant="danger" size="sm" onClick={handleDisconnect} disabled={actionLoading}>
+                  {actionLoading ? 'Disconnecting...' : 'Disconnect'}
+                </Button>
               </div>
             </div>
+          ) : (
+            <div>
+              <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: '0 0 16px' }}>
+                Connect your Atlassian account to enable sprint syncing.
+              </p>
+              {actionError && (
+                <div style={{ color: 'var(--color-danger)', fontSize: 'var(--text-sm)', marginBottom: 8 }}>
+                  {actionError}
+                </div>
+              )}
+              <Button variant="primary" size="sm" onClick={handleConnect} disabled={actionLoading}>
+                {actionLoading ? 'Redirecting...' : 'Connect Jira'}
+              </Button>
+            </div>
           )}
-        </div>
+        </CardBody>
+      </Card>
+
+      {/* Anthropic API Key */}
+      <Card style={sectionGap}>
+        <CardHeader>
+          <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
+            Anthropic API Key
+          </span>
+          {anthropicConfigured !== null && (
+            <Badge variant={anthropicConfigured ? 'success' : 'default'}>
+              {anthropicConfigured ? 'Configured' : 'Not configured'}
+            </Badge>
+          )}
+        </CardHeader>
+        <CardBody>
+          <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: '0 0 12px' }}>
+            Required for Sprint Brain AI planning and Retrospective generation.
+          </p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Input
+              type="password"
+              placeholder="sk-ant-..."
+              value={anthropicKey}
+              onChange={e => setAnthropicKey(e.target.value)}
+              containerStyle={{ flex: 1 }}
+            />
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleSaveAnthropicKey}
+              disabled={anthropicSaving || !anthropicKey.trim()}
+            >
+              {anthropicSaving ? 'Saving...' : 'Save Key'}
+            </Button>
+          </div>
+          {anthropicMessage && (
+            <div style={{
+              color: anthropicMessage === 'API key saved.' ? 'var(--color-success)' : 'var(--color-danger)',
+              fontSize: 'var(--text-sm)',
+              marginTop: 8,
+            }}>
+              {anthropicMessage}
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
+      {/* Invite Team Members */}
+      {isLead && (
+        <Card style={sectionGap}>
+          <CardHeader>
+            <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
+              Invite Team Members
+            </span>
+          </CardHeader>
+          <CardBody>
+            <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: '0 0 16px' }}>
+              Send a signup link to a teammate. They'll be added to your AOS team when they accept.
+            </p>
+
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8, alignItems: 'flex-end' }}>
+              <Input
+                type="email"
+                placeholder="teammate@company.com"
+                value={inviteEmail}
+                onChange={e => setInviteEmail(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleSendInvite()}
+                containerStyle={{ flex: 1, minWidth: 200 }}
+              />
+              <Select
+                value={inviteRole}
+                onChange={e => setInviteRole(e.target.value)}
+                containerStyle={{ width: 100 }}
+              >
+                <option value="lead">Lead</option>
+                <option value="exec">Exec</option>
+              </Select>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleSendInvite}
+                disabled={inviteSending || !inviteEmail.trim()}
+              >
+                {inviteSending ? 'Generating…' : 'Generate Link'}
+              </Button>
+            </div>
+
+            {inviteMsg && (
+              <div style={{ color: 'var(--color-danger)', fontSize: 'var(--text-sm)', marginBottom: 8 }}>{inviteMsg}</div>
+            )}
+
+            {inviteLink && (
+              <div style={{
+                background: 'var(--color-bg-secondary)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-md)',
+                padding: '8px 12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                marginBottom: 12,
+              }}>
+                <span style={{ color: 'var(--color-accent)', fontSize: 'var(--text-xs)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {inviteLink}
+                </span>
+                <Button size="sm" variant="ghost" onClick={() => handleCopyLink(inviteLink, 'new')}>
+                  {copiedId === 'new' ? 'Copied!' : 'Copy'}
+                </Button>
+              </div>
+            )}
+
+            {invitations.length > 0 && (
+              <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 12, marginTop: 4 }}>
+                <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
+                  Pending Invites
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {invitations.filter(i => i.status === 'pending').map(inv => (
+                    <div key={inv.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ color: 'var(--color-text-primary)', fontSize: 'var(--text-sm)', flex: 1 }}>{inv.email}</span>
+                      <Badge variant="default">{inv.role}</Badge>
+                      <Button size="sm" variant="ghost" onClick={() => handleCopyLink(inv.inviteLink, inv.id)}>
+                        {copiedId === inv.id ? 'Copied!' : 'Copy'}
+                      </Button>
+                      <Button size="sm" variant="danger" onClick={() => handleRevokeInvite(inv.id)}>
+                        Revoke
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </CardBody>
+        </Card>
       )}
 
-      {/* Slack Configuration Card */}
-      <div style={{ background: '#1e2030', border: '1px solid #2d2f45', borderRadius: 8, padding: '1.25rem 1.5rem', marginTop: '1.25rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-          <h2 style={{ color: '#e2e8f0', fontSize: '1rem', fontWeight: 600, margin: 0 }}>Slack Alerts</h2>
+      {/* Slack Alerts */}
+      <Card style={sectionGap}>
+        <CardHeader>
+          <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
+            Slack Alerts
+          </span>
           {slackConfig !== null && (
-            <span style={{
-              fontSize: 12, fontWeight: 600, padding: '2px 10px', borderRadius: 999,
-              background: slackConfig.configured && slackConfig.isActive ? '#14532d' : '#1e293b',
-              color: slackConfig.configured && slackConfig.isActive ? '#4ade80' : '#64748b',
-              border: `1px solid ${slackConfig.configured && slackConfig.isActive ? '#166534' : '#2d2f45'}`,
-            }}>
+            <Badge variant={slackConfig.configured && slackConfig.isActive ? 'success' : 'default'}>
               {slackConfig.configured && slackConfig.isActive ? 'Active' : 'Not configured'}
-            </span>
+            </Badge>
           )}
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div>
-            <label style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 4 }}>Webhook URL</label>
-            <input
+        </CardHeader>
+        <CardBody>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Input
+              label="Webhook URL"
               type="text"
               placeholder="https://hooks.slack.com/services/..."
               value={slackWebhook}
               onChange={e => { setSlackWebhook(e.target.value); setSlackValidationError(null) }}
-              style={{ width: '100%', boxSizing: 'border-box', background: '#0f1117', border: `1px solid ${slackValidationError ? '#ef4444' : '#2d2f45'}`, borderRadius: 6, color: '#e2e8f0', fontSize: 13, padding: '0.5rem 0.75rem' }}
+              error={slackValidationError ?? undefined}
             />
-            {slackValidationError && (
-              <div style={{ color: '#ef4444', fontSize: 12, marginTop: 4 }}>{slackValidationError}</div>
-            )}
-          </div>
-          <div>
-            <label style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 4 }}>Channel (optional)</label>
-            <input
+            <Input
+              label="Channel (optional)"
               type="text"
               placeholder="#engineering-alerts"
               value={slackChannel}
               onChange={e => setSlackChannel(e.target.value)}
-              style={{ width: '100%', boxSizing: 'border-box', background: '#0f1117', border: '1px solid #2d2f45', borderRadius: 6, color: '#e2e8f0', fontSize: 13, padding: '0.5rem 0.75rem' }}
             />
-          </div>
-          <div>
-            <label style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 6 }}>Alert types</label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {ALL_ALERT_TYPES.map(type => (
-                <label key={type} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={slackAlertTypes.includes(type)}
-                    onChange={e => {
-                      if (e.target.checked) setSlackAlertTypes(a => [...a, type])
-                      else setSlackAlertTypes(a => a.filter(t => t !== type))
-                    }}
-                  />
-                  <span style={{ color: '#e2e8f0', fontSize: 13 }}>{ALERT_TYPE_LABELS[type]}</span>
-                </label>
-              ))}
-            </div>
-          </div>
 
-          <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
-            <button
-              onClick={handleSaveSlack}
-              disabled={slackSaving || !slackWebhook.trim()}
-              style={{ background: slackSaving || !slackWebhook.trim() ? '#374151' : '#6366f1', color: slackSaving || !slackWebhook.trim() ? '#64748b' : '#fff', border: 'none', borderRadius: 6, padding: '0.5rem 1.25rem', fontSize: 13, fontWeight: 600, cursor: slackSaving || !slackWebhook.trim() ? 'not-allowed' : 'pointer' }}
-            >
-              {slackSaving ? 'Saving...' : 'Save'}
-            </button>
-            {slackConfig?.configured && (
-              <>
-                <button
-                  onClick={handleTestSlack}
-                  disabled={slackTesting}
-                  style={{ background: 'transparent', color: '#60a5fa', border: '1px solid #1d4ed8', borderRadius: 6, padding: '0.5rem 1rem', fontSize: 13, fontWeight: 600, cursor: slackTesting ? 'not-allowed' : 'pointer' }}
-                >
-                  {slackTesting ? 'Sending...' : 'Test'}
-                </button>
-                <button
-                  onClick={handleDeleteSlack}
-                  disabled={slackSaving}
-                  style={{ background: 'transparent', color: '#ef4444', border: '1px solid #ef4444', borderRadius: 6, padding: '0.5rem 1rem', fontSize: 13, fontWeight: 600, cursor: slackSaving ? 'not-allowed' : 'pointer' }}
-                >
-                  Remove
-                </button>
-              </>
+            <div>
+              <div style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', fontWeight: 500, marginBottom: 6 }}>
+                Alert types
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {ALL_ALERT_TYPES.map(type => (
+                  <label key={type} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={slackAlertTypes.includes(type)}
+                      onChange={e => {
+                        if (e.target.checked) setSlackAlertTypes(a => [...a, type])
+                        else setSlackAlertTypes(a => a.filter(t => t !== type))
+                      }}
+                    />
+                    <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)' }}>
+                      {ALERT_TYPE_LABELS[type]}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleSaveSlack}
+                disabled={slackSaving || !slackWebhook.trim()}
+              >
+                {slackSaving ? 'Saving...' : 'Save'}
+              </Button>
+              {slackConfig?.configured && (
+                <>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleTestSlack}
+                    disabled={slackTesting}
+                  >
+                    {slackTesting ? 'Sending...' : 'Test'}
+                  </Button>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={handleDeleteSlack}
+                    disabled={slackSaving}
+                  >
+                    Remove
+                  </Button>
+                </>
+              )}
+            </div>
+            {slackMsg && (
+              <div style={{
+                fontSize: 'var(--text-sm)',
+                color: slackMsg.includes('saved') || slackMsg.includes('sent') ? 'var(--color-success)' : 'var(--color-danger)',
+              }}>
+                {slackMsg}
+              </div>
             )}
           </div>
-          {slackMsg && (
-            <div style={{ fontSize: 13, color: slackMsg.startsWith('✅') || slackMsg.includes('saved') ? '#4ade80' : '#ef4444' }}>
-              {slackMsg}
-            </div>
-          )}
-        </div>
-      </div>
+        </CardBody>
+      </Card>
     </div>
   )
 }

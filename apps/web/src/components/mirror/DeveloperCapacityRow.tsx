@@ -5,6 +5,8 @@ import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@clerk/clerk-react'
 import { useApi, ApiError } from '../../lib/api'
 import { DeveloperProfileModal } from './DeveloperProfileModal'
+import { Card, CardBody } from '../ui/Card'
+import { Badge } from '../ui/Badge'
 
 export interface DeveloperCapacity {
   developerId: string
@@ -33,9 +35,9 @@ interface DevCardProps {
 }
 
 function utilisationColour(ratio: number): string {
-  if (ratio <= 0.8) return '#4ade80'
-  if (ratio <= 1.0) return '#fbbf24'
-  return '#ef4444'
+  if (ratio <= 0.8) return 'var(--color-success)'
+  if (ratio <= 1.0) return 'var(--color-warning)'
+  return 'var(--color-danger)'
 }
 
 function DevCard({ dev, onClick }: DevCardProps) {
@@ -46,75 +48,70 @@ function DevCard({ dev, onClick }: DevCardProps) {
   const avatarInitial = dev.name.charAt(0).toUpperCase()
 
   return (
-    <div onClick={onClick} style={{
-      background: '#1e2030',
-      borderRadius: 8,
-      padding: '0.875rem 1rem',
-      minWidth: 160,
-      flex: '0 0 auto',
-      position: 'relative',
-      cursor: 'pointer',
-    }}>
-      {dev.isOverCapacity && (
-        <div style={{
-          position: 'absolute',
-          top: 6,
-          right: 8,
-          background: '#7f1d1d',
-          color: '#fca5a5',
-          fontSize: 10,
-          fontWeight: 700,
-          padding: '1px 6px',
-          borderRadius: 4,
-          letterSpacing: '0.04em',
-        }}>
-          OVER
-        </div>
-      )}
+    <Card
+      onClick={onClick}
+      style={{ minWidth: 160, flex: '0 0 auto', position: 'relative', cursor: 'pointer' }}
+    >
+      <CardBody>
+        {dev.isOverCapacity && (
+          <div style={{ position: 'absolute', top: 6, right: 8 }}>
+            <Badge variant="danger">OVER</Badge>
+          </div>
+        )}
 
-      {/* Avatar + name */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-        <div style={{
-          width: 28,
-          height: 28,
-          borderRadius: '50%',
-          background: '#6366f1',
-          color: '#fff',
-          fontSize: 12,
-          fontWeight: 700,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-        }}>
-          {avatarInitial}
+        {/* Avatar + name */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <div style={{
+            width: 28,
+            height: 28,
+            borderRadius: '50%',
+            background: 'var(--color-accent)',
+            color: '#ffffff',
+            fontFamily: 'var(--font-sans)',
+            fontSize: 'var(--text-xs)',
+            fontWeight: 700,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+          }}>
+            {avatarInitial}
+          </div>
+          <div style={{
+            color: 'var(--color-text-primary)',
+            fontFamily: 'var(--font-sans)',
+            fontSize: 'var(--text-sm)',
+            fontWeight: 600,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}>
+            {dev.name}
+          </div>
         </div>
-        <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {dev.name}
-        </div>
-      </div>
 
-      {/* Progress bar: completed / committed */}
-      <div style={{ background: '#2d2f45', height: 6, borderRadius: 3, marginBottom: 6 }}>
-        <div style={{
-          width: `${Math.min(completeRatio * 100, 100)}%`,
-          height: 6,
-          borderRadius: 3,
-          background: barColour,
-          transition: 'width 0.4s ease',
-        }} />
-      </div>
+        {/* Progress bar: completed / committed */}
+        <div style={{ background: 'var(--color-border)', height: 6, borderRadius: 3, marginBottom: 6 }}>
+          <div style={{
+            width: `${Math.min(completeRatio * 100, 100)}%`,
+            height: 6,
+            borderRadius: 3,
+            background: barColour,
+            transition: 'width 0.4s ease',
+          }} />
+        </div>
 
-      {/* Stats row */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <div style={{ color: '#64748b', fontSize: 11 }}>
-          {dev.completedPoints}/{dev.committedPoints} pts
+        {/* Stats row */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <div style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)' }}>
+            {dev.completedPoints}/{dev.committedPoints} pts
+          </div>
+          <div style={{ color: barColour, fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', fontWeight: 700 }}>
+            {utilPct}%
+          </div>
         </div>
-        <div style={{ color: barColour, fontSize: 12, fontWeight: 700 }}>
-          {utilPct}%
-        </div>
-      </div>
-    </div>
+      </CardBody>
+    </Card>
   )
 }
 
@@ -134,34 +131,43 @@ export function DeveloperCapacityRow({ developers, teamId }: DeveloperCapacityRo
 
   if (!developers && query.isLoading) {
     return (
-      <div style={{ background: '#1e2030', borderRadius: 8, padding: '0.875rem 1rem', color: '#64748b', fontSize: 13 }}>
-        Loading capacity data…
-      </div>
+      <Card>
+        <CardBody style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)' }}>
+          Loading capacity data…
+        </CardBody>
+      </Card>
     )
   }
 
   if (!developers && query.isError) {
     const is404 = query.error instanceof ApiError && query.error.status === 404
     return (
-      <div style={{ background: '#1e2030', borderRadius: 8, padding: '0.875rem 1rem', color: is404 ? '#475569' : '#ef4444', fontSize: 13 }}>
-        {is404 ? 'No active sprint — capacity data unavailable' : 'Failed to load capacity data'}
-      </div>
+      <Card>
+        <CardBody style={{ color: is404 ? 'var(--color-text-muted)' : 'var(--color-danger)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)' }}>
+          {is404 ? 'No active sprint — capacity data unavailable' : 'Failed to load capacity data'}
+        </CardBody>
+      </Card>
     )
   }
 
   return (
     <div>
-      <div style={{ color: '#94a3b8', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
+      <div style={{
+        color: 'var(--color-text-muted)',
+        fontFamily: 'var(--font-sans)',
+        fontSize: 'var(--text-xs)',
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: '0.06em',
+        marginBottom: 8,
+      }}>
         Developer Capacity
       </div>
-      <div style={{
-        display: 'flex',
-        gap: 10,
-        overflowX: 'auto',
-        paddingBottom: 4,
-      }}>
+      <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 4 }}>
         {devs.length === 0 ? (
-          <div style={{ color: '#475569', fontSize: 13 }}>No capacity data available</div>
+          <div style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)' }}>
+            No capacity data available
+          </div>
         ) : (
           devs.map(dev => (
             <DevCard key={dev.developerId} dev={dev} onClick={() => setSelectedDeveloperId(dev.developerId)} />

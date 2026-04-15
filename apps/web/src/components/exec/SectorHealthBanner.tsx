@@ -1,55 +1,43 @@
+import { Alert } from '../ui/Alert'
+import { Badge } from '../ui/Badge'
+import type { AlertVariant } from '../ui/Alert'
+import type { BadgeVariant } from '../ui/Badge'
+
 interface Props {
   sectorHealthScore: number
   teamCount: number
 }
 
-function getStatusLabel(score: number): { label: string; color: string } {
-  if (score >= 70) return { label: 'Healthy', color: '#22c55e' }
-  if (score >= 40) return { label: 'At Risk', color: '#f59e0b' }
-  return { label: 'Critical', color: '#ef4444' }
+function getStatus(score: number): { variant: AlertVariant; badgeVariant: BadgeVariant; label: string; scoreColor: string } {
+  if (score >= 70) return { variant: 'success', badgeVariant: 'success', label: 'Healthy', scoreColor: 'var(--color-success)' }
+  if (score >= 40) return { variant: 'warning', badgeVariant: 'warning', label: 'At Risk', scoreColor: 'var(--color-warning)' }
+  return { variant: 'danger', badgeVariant: 'danger', label: 'Critical', scoreColor: 'var(--color-danger)' }
 }
 
 export function SectorHealthBanner({ sectorHealthScore, teamCount }: Props) {
-  const { label, color } = getStatusLabel(sectorHealthScore)
+  const { variant, badgeVariant, label, scoreColor } = getStatus(sectorHealthScore)
 
   return (
-    <div style={{
-      background: '#1e2130',
-      border: `1px solid ${color}33`,
-      borderRadius: 12,
-      padding: '1.5rem 2rem',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '2rem',
-      marginBottom: '1.5rem',
-    }}>
-      <div style={{ textAlign: 'center' }}>
-        <div style={{ fontSize: 56, fontWeight: 800, color, lineHeight: 1 }}>
-          {sectorHealthScore}
+    <Alert
+      variant={variant}
+      style={{ marginBottom: 24, padding: '16px 20px' }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <span style={{ fontSize: 'var(--text-2xl)', fontWeight: 800, color: scoreColor, lineHeight: 1, fontFamily: 'var(--font-sans)' }}>
+            {sectorHealthScore}
+          </span>
+          <span style={{ color: 'var(--color-text-secondary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Sector Health
+          </span>
         </div>
-        <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 4 }}>Sector Health</div>
-      </div>
-
-      <div style={{ width: 1, height: 64, background: '#334155' }} />
-
-      <div>
-        <div style={{
-          display: 'inline-block',
-          background: `${color}22`,
-          color,
-          border: `1px solid ${color}66`,
-          borderRadius: 20,
-          padding: '4px 14px',
-          fontSize: 14,
-          fontWeight: 700,
-          marginBottom: 8,
-        }}>
-          {label}
-        </div>
-        <div style={{ color: '#94a3b8', fontSize: 13 }}>
-          {teamCount} team{teamCount !== 1 ? 's' : ''} tracked
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Badge variant={badgeVariant}>{label}</Badge>
+          <span style={{ color: 'var(--color-text-secondary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)' }}>
+            {teamCount} team{teamCount !== 1 ? 's' : ''} tracked
+          </span>
         </div>
       </div>
-    </div>
+    </Alert>
   )
 }

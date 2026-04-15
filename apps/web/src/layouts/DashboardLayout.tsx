@@ -10,19 +10,6 @@ export function DashboardLayout() {
   const canSeeLead = appRole === 'lead' || appRole === 'exec' || appRole === 'admin'
   const canSeeExec = appRole === 'exec' || appRole === 'admin'
 
-  // Role loaded (non-empty) but not a lead/exec/admin — show access denied
-  if (appRole && appRole === 'developer') {
-    return (
-      <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center', background: '#0f1117', flexDirection: 'column', gap: 12 }}>
-        <div style={{ fontSize: 32 }}>🔒</div>
-        <div style={{ color: '#e2e8f0', fontSize: '1.125rem', fontWeight: 700 }}>Access restricted</div>
-        <div style={{ color: '#64748b', fontSize: 13, textAlign: 'center', maxWidth: 320 }}>
-          AgileOS is a tool for team leads and scrum masters. Ask your lead to manage sprint planning here.
-        </div>
-      </div>
-    )
-  }
-
   return (
     <TeamProvider>
       <div style={{ display: 'flex', height: '100vh' }}>

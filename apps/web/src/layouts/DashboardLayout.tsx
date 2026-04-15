@@ -1,9 +1,42 @@
+import { CSSProperties } from 'react'
 import { Outlet, NavLink } from 'react-router-dom'
 import { UserButton } from '@clerk/clerk-react'
 import { useAppRole } from '../hooks/useAppRole'
 import { RoleSwitcher } from '../components/RoleSwitcher'
 import { TeamProvider } from '../contexts/TeamContext'
 import { TeamSwitcher } from '../components/TeamSwitcher'
+import { ThemeToggle } from '../components/ui/ThemeToggle'
+
+function navItemStyle(isActive: boolean): CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    height: 32,
+    padding: '0 10px',
+    borderRadius: 'var(--radius-md)',
+    fontSize: 'var(--text-sm)',
+    fontFamily: 'var(--font-sans)',
+    fontWeight: 'var(--font-weight-medium)' as CSSProperties['fontWeight'],
+    color: isActive ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+    background: isActive ? 'var(--color-accent-subtle)' : 'transparent',
+    textDecoration: 'none',
+    transition: 'background 0.1s, color 0.1s',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  }
+}
+
+const sectionLabel: CSSProperties = {
+  marginTop: 12,
+  padding: '0 10px 4px',
+  fontSize: 'var(--text-xs)',
+  fontFamily: 'var(--font-sans)',
+  fontWeight: 'var(--font-weight-semibold)' as CSSProperties['fontWeight'],
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+  color: 'var(--color-text-muted)',
+}
 
 export function DashboardLayout() {
   const { appRole } = useAppRole()
@@ -12,34 +45,116 @@ export function DashboardLayout() {
 
   return (
     <TeamProvider>
-      <div style={{ display: 'flex', height: '100vh' }}>
-        <nav style={{ width: 220, padding: '1rem', borderRight: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ fontWeight: 700, fontSize: '1.125rem', marginBottom: '0.75rem' }}>AgileOS</div>
-          <TeamSwitcher />
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1 }}>
-            <li><NavLink to="/app/sprint-planner">Sprint Planner</NavLink></li>
-            <li><NavLink to="/app/velocity-mirror">Velocity Mirror</NavLink></li>
+      <div style={{ display: 'flex', height: '100vh', background: 'var(--color-bg-primary)' }}>
+
+        {/* Sidebar */}
+        <nav style={{
+          width: 220,
+          flexShrink: 0,
+          padding: '0 8px 16px',
+          borderRight: '1px solid var(--color-border)',
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'var(--color-bg-secondary)',
+          overflowY: 'auto',
+        }}>
+          {/* Logo row */}
+          <div style={{
+            height: 48,
+            display: 'flex',
+            alignItems: 'center',
+            padding: '0 10px',
+            fontFamily: 'var(--font-sans)',
+            fontWeight: 'var(--font-weight-semibold)' as CSSProperties['fontWeight'],
+            fontSize: 'var(--text-base)',
+            color: 'var(--color-text-primary)',
+            borderBottom: '1px solid var(--color-border)',
+            marginBottom: 8,
+            flexShrink: 0,
+          }}>
+            AgileOS
+          </div>
+
+          <div style={{ marginBottom: 8 }}>
+            <TeamSwitcher />
+          </div>
+
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+            <li>
+              <NavLink to="/app/sprint-planner" style={({ isActive }) => navItemStyle(isActive)}>
+                Sprint Planner
+              </NavLink>
+            </li>
+            <li>
+              <NavLink to="/app/velocity-mirror" style={({ isActive }) => navItemStyle(isActive)}>
+                Velocity Mirror
+              </NavLink>
+            </li>
+
             {canSeeLead && (
               <>
-                <li style={{ marginTop: '1rem', fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6b7280' }}>Intelligence</li>
-                <li><NavLink to="/app/dependency-radar">Dependency Radar</NavLink></li>
-                <li><NavLink to="/app/retrospective">Retrospective</NavLink></li>
-                <li><NavLink to="/app/multi-team">Multi-Team</NavLink></li>
+                <li style={sectionLabel}>Intelligence</li>
+                <li>
+                  <NavLink to="/app/dependency-radar" style={({ isActive }) => navItemStyle(isActive)}>
+                    Dependency Radar
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink to="/app/retrospective" style={({ isActive }) => navItemStyle(isActive)}>
+                    Retrospective
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink to="/app/multi-team" style={({ isActive }) => navItemStyle(isActive)}>
+                    Multi-Team
+                  </NavLink>
+                </li>
               </>
             )}
+
             {canSeeExec && (
               <>
-                <li style={{ marginTop: '1rem', fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6b7280' }}>Executive</li>
-                <li><NavLink to="/app/exec-dashboard">Exec Dashboard</NavLink></li>
+                <li style={sectionLabel}>Executive</li>
+                <li>
+                  <NavLink to="/app/exec-dashboard" style={({ isActive }) => navItemStyle(isActive)}>
+                    Exec Dashboard
+                  </NavLink>
+                </li>
               </>
             )}
-            <li><NavLink to="/app/settings">Settings</NavLink></li>
+
+            <li>
+              <NavLink to="/app/settings" style={({ isActive }) => navItemStyle(isActive)}>
+                Settings
+              </NavLink>
+            </li>
           </ul>
-          <UserButton />
+
+          <div style={{ padding: '8px 10px 0' }}>
+            <UserButton />
+          </div>
         </nav>
-        <main style={{ flex: 1, padding: '1.5rem', overflowY: 'auto' }}>
-          <Outlet />
-        </main>
+
+        {/* Content area */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+          <header style={{
+            height: 48,
+            flexShrink: 0,
+            borderBottom: '1px solid var(--color-border)',
+            background: 'var(--color-bg-primary)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            padding: '0 16px',
+            gap: 8,
+          }}>
+            <ThemeToggle />
+          </header>
+          <main style={{ flex: 1, padding: 24, overflowY: 'auto', background: 'var(--color-bg-primary)' }}>
+            <Outlet />
+          </main>
+        </div>
+
         <RoleSwitcher />
       </div>
     </TeamProvider>

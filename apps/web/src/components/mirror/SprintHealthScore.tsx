@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@clerk/clerk-react'
 import { useApi, ApiError } from '../../lib/api'
+import { Card, CardBody } from '../ui/Card'
 
 interface HealthScoreResponse {
   score: number
@@ -14,10 +15,10 @@ interface SprintHealthScoreProps {
   sprintId?: string
 }
 
-function scoreColour(score: number): { fg: string; bg: string; ring: string } {
-  if (score >= 70) return { fg: '#4ade80', bg: '#052e16', ring: '#16a34a' }
-  if (score >= 40) return { fg: '#fbbf24', bg: '#1c1400', ring: '#d97706' }
-  return { fg: '#f87171', bg: '#1c0505', ring: '#dc2626' }
+function scoreColour(score: number): { fg: string; ring: string } {
+  if (score >= 70) return { fg: 'var(--color-success)', ring: 'var(--color-success)' }
+  if (score >= 40) return { fg: 'var(--color-warning)', ring: 'var(--color-warning)' }
+  return { fg: 'var(--color-danger)', ring: 'var(--color-danger)' }
 }
 
 function timeAgo(iso: string): string {
@@ -46,81 +47,83 @@ export function SprintHealthScore({ sprintId }: SprintHealthScoreProps) {
 
   if (isLoading) {
     return (
-      <div style={{ background: '#1e2030', borderRadius: 8, padding: '1rem', minWidth: 160, textAlign: 'center' }}>
-        <div style={{ color: '#64748b', fontSize: 13 }}>Loading…</div>
-      </div>
+      <Card style={{ minWidth: 160, textAlign: 'center' }}>
+        <CardBody>
+          <div style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)' }}>Loading…</div>
+        </CardBody>
+      </Card>
     )
   }
 
   if (isError || !data) {
     const is404 = error instanceof ApiError && error.status === 404
     return (
-      <div style={{ background: '#1e2030', borderRadius: 8, padding: '1rem', minWidth: 160, textAlign: 'center' }}>
-        <div style={{ color: is404 ? '#475569' : '#ef4444', fontSize: 13 }}>
-          {is404 ? 'No active sprint' : 'Health score unavailable'}
-        </div>
-      </div>
+      <Card style={{ minWidth: 160, textAlign: 'center' }}>
+        <CardBody>
+          <div style={{ color: is404 ? 'var(--color-text-muted)' : 'var(--color-danger)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)' }}>
+            {is404 ? 'No active sprint' : 'Health score unavailable'}
+          </div>
+        </CardBody>
+      </Card>
     )
   }
 
-  const { fg, bg, ring } = scoreColour(data.score)
+  const { fg, ring } = scoreColour(data.score)
 
   return (
-    <div style={{
-      background: '#1e2030',
-      borderRadius: 8,
-      padding: '1rem',
-      minWidth: 160,
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      gap: 10,
-    }}>
-      <div style={{ color: '#94a3b8', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', alignSelf: 'flex-start' }}>
-        Sprint Health
-      </div>
+    <Card style={{ minWidth: 160 }}>
+      <CardBody style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+        <div style={{
+          fontFamily: 'var(--font-sans)',
+          color: 'var(--color-text-muted)',
+          fontSize: 'var(--text-xs)',
+          fontWeight: 700,
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          alignSelf: 'flex-start',
+        }}>
+          Sprint Health
+        </div>
 
-      {/* Score badge */}
-      <div style={{
-        width: 72,
-        height: 72,
-        borderRadius: '50%',
-        background: bg,
-        border: `3px solid ${ring}`,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        position: 'relative',
-        // Pulse while refetching
-        animation: isFetching ? 'pulse 1.5s ease-in-out infinite' : 'none',
-      }}>
-        <style>{`
-          @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.55; }
-          }
-        `}</style>
-        <span style={{ color: fg, fontSize: 26, fontWeight: 800, lineHeight: 1 }}>
-          {data.score}
-        </span>
-      </div>
+        {/* Score badge */}
+        <div style={{
+          width: 72,
+          height: 72,
+          borderRadius: '50%',
+          background: 'var(--color-bg-secondary)',
+          border: `3px solid ${ring}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          animation: isFetching ? 'pulse 1.5s ease-in-out infinite' : 'none',
+        }}>
+          <style>{`
+            @keyframes pulse {
+              0%, 100% { opacity: 1; }
+              50% { opacity: 0.55; }
+            }
+          `}</style>
+          <span style={{ color: fg, fontFamily: 'var(--font-sans)', fontSize: 26, fontWeight: 800, lineHeight: 1 }}>
+            {data.score}
+          </span>
+        </div>
 
-      {/* Reasons */}
-      {data.reasons.length > 0 && (
-        <ul style={{ margin: 0, padding: 0, listStyle: 'none', width: '100%', display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {data.reasons.slice(0, 3).map((reason, i) => (
-            <li key={i} style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
-              <span style={{ color: fg, fontSize: 10, marginTop: 2, flexShrink: 0 }}>•</span>
-              <span style={{ color: '#94a3b8', fontSize: 11, lineHeight: 1.4 }}>{reason}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+        {/* Reasons */}
+        {data.reasons.length > 0 && (
+          <ul style={{ margin: 0, padding: 0, listStyle: 'none', width: '100%', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {data.reasons.slice(0, 3).map((reason, i) => (
+              <li key={i} style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                <span style={{ color: fg, fontSize: 'var(--text-xs)', marginTop: 2, flexShrink: 0 }}>•</span>
+                <span style={{ color: 'var(--color-text-secondary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', lineHeight: 1.4 }}>{reason}</span>
+              </li>
+            ))}
+          </ul>
+        )}
 
-      {/* Timestamp */}
-      <div style={{ color: '#475569', fontSize: 10, alignSelf: 'flex-start' }}>
-        Updated {timeAgo(data.updatedAt)}
-      </div>
-    </div>
+        <div style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', alignSelf: 'flex-start' }}>
+          Updated {timeAgo(data.updatedAt)}
+        </div>
+      </CardBody>
+    </Card>
   )
 }

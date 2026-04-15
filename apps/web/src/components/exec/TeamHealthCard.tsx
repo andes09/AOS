@@ -1,95 +1,100 @@
 import { useNavigate } from 'react-router-dom'
+import { Card, CardBody } from '../ui/Card'
+import { Badge } from '../ui/Badge'
+import type { BadgeVariant } from '../ui/Badge'
 import { TeamSummary, RAGStatus, VelocityTrend } from '../../types/exec'
 
 interface Props {
   team: TeamSummary
 }
 
-const RAG_COLOR: Record<RAGStatus, string> = {
-  green: '#22c55e',
-  amber: '#f59e0b',
-  red: '#ef4444',
+const RAG_BADGE_VARIANT: Record<RAGStatus, BadgeVariant> = {
+  green: 'success',
+  amber: 'warning',
+  red:   'danger',
+}
+
+const RAG_SCORE_COLOR: Record<RAGStatus, string> = {
+  green: 'var(--color-success)',
+  amber: 'var(--color-warning)',
+  red:   'var(--color-danger)',
 }
 
 const TREND_ARROW: Record<VelocityTrend, string> = {
   accelerating: '↑',
-  stable: '→',
-  declining: '↓',
+  stable:       '→',
+  declining:    '↓',
 }
 
 const TREND_COLOR: Record<VelocityTrend, string> = {
-  accelerating: '#22c55e',
-  stable: '#94a3b8',
-  declining: '#ef4444',
+  accelerating: 'var(--color-success)',
+  stable:       'var(--color-text-secondary)',
+  declining:    'var(--color-danger)',
 }
 
 export function TeamHealthCard({ team }: Props) {
   const navigate = useNavigate()
-  const ragColor = RAG_COLOR[team.status]
+  const ragColor = RAG_SCORE_COLOR[team.status]
   const trendArrow = TREND_ARROW[team.velocityTrend]
   const trendColor = TREND_COLOR[team.velocityTrend]
   const completionPct = Math.round(team.sprintCompletionRate * 100)
 
   return (
-    <div
+    <Card
       onClick={() => navigate(`/app/velocity-mirror?teamId=${team.teamId}`)}
-      style={{
-        background: '#1e2130',
-        border: '1px solid #334155',
-        borderRadius: 10,
-        padding: '1.25rem',
-        cursor: 'pointer',
-        transition: 'border-color 0.15s',
-      }}
-      onMouseEnter={e => (e.currentTarget.style.borderColor = '#475569')}
-      onMouseLeave={e => (e.currentTarget.style.borderColor = '#334155')}
+      style={{ cursor: 'pointer', transition: 'box-shadow 0.15s' }}
+      onMouseEnter={e => (e.currentTarget.style.boxShadow = 'var(--shadow-md)')}
+      onMouseLeave={e => (e.currentTarget.style.boxShadow = 'var(--shadow-sm)')}
     >
-      {/* Header: RAG dot + team name */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-        <div style={{
-          width: 10,
-          height: 10,
-          borderRadius: '50%',
-          background: ragColor,
-          flexShrink: 0,
-        }} />
-        <div style={{ color: '#e2e8f0', fontWeight: 700, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {team.name}
-        </div>
-      </div>
-
-      {/* Health score + trend arrow */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
-        <div style={{ fontSize: 32, fontWeight: 800, color: ragColor, lineHeight: 1 }}>
-          {team.healthScore}
-        </div>
-        <div style={{ fontSize: 22, color: trendColor, fontWeight: 700 }}>
-          {trendArrow}
-        </div>
-      </div>
-
-      {/* Completion rate progress bar */}
-      <div>
-        <div style={{ color: '#94a3b8', fontSize: 11, marginBottom: 4 }}>
-          Sprint completion · {completionPct}%
-        </div>
-        <div style={{ background: '#0f1117', borderRadius: 4, height: 6, overflow: 'hidden' }}>
+      <CardBody style={{ padding: '16px' }}>
+        {/* Header: RAG badge + team name */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12 }}>
           <div style={{
-            width: `${completionPct}%`,
-            height: '100%',
-            background: ragColor,
-            borderRadius: 4,
-            transition: 'width 0.3s',
-          }} />
+            color: 'var(--color-text-primary)',
+            fontFamily: 'var(--font-sans)',
+            fontWeight: 700,
+            fontSize: 'var(--text-base)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}>
+            {team.name}
+          </div>
+          <Badge variant={RAG_BADGE_VARIANT[team.status]}>{team.status.toUpperCase()}</Badge>
         </div>
-      </div>
 
-      {/* Last sprint name */}
-      {team.lastSprintName && (
-        <div style={{ color: '#64748b', fontSize: 11, marginTop: 10 }}>
-          Last: {team.lastSprintName}
+        {/* Health score + trend arrow */}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
+          <div style={{ fontSize: 'var(--text-2xl)', fontWeight: 800, color: ragColor, lineHeight: 1, fontFamily: 'var(--font-sans)' }}>
+            {team.healthScore}
+          </div>
+          <div style={{ fontSize: 22, color: trendColor, fontWeight: 700 }}>
+            {trendArrow}
+          </div>
         </div>
-      )}
-    </div>
+
+        {/* Completion rate progress bar */}
+        <div>
+          <div style={{ color: 'var(--color-text-secondary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', marginBottom: 4 }}>
+            Sprint completion · {completionPct}%
+          </div>
+          <div style={{ background: 'var(--color-bg-secondary)', borderRadius: 4, height: 6, overflow: 'hidden' }}>
+            <div style={{
+              width: `${completionPct}%`,
+              height: '100%',
+              background: ragColor,
+              borderRadius: 4,
+              transition: 'width 0.3s',
+            }} />
+          </div>
+        </div>
+
+        {team.lastSprintName && (
+          <div style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', marginTop: 10 }}>
+            Last: {team.lastSprintName}
+          </div>
+        )}
+      </CardBody>
+    </Card>
   )
 }

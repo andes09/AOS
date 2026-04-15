@@ -1,0 +1,104 @@
+/* ============================================================
+   AgileOS Design System — CSS Custom Properties
+   Aesthetic target: Jira/Atlassian (light) + Linear (dark)
+   ============================================================ */
+
+/* ── Light Theme ─────────────────────────────────────────── */
+[data-theme="light"] {
+  /* Backgrounds */
+  --color-bg-primary:    #ffffff;
+  --color-bg-secondary:  #f4f5f7;
+  --color-bg-tertiary:   #ebecf0;
+  --color-bg-elevated:   #ffffff;
+
+  /* Borders */
+  --color-border:        #dfe1e6;
+  --color-border-subtle: #ebecf0;
+
+  /* Text */
+  --color-text-primary:   #172b4d;
+  --color-text-secondary: #5e6c84;
+  --color-text-muted:     #97a0af;
+
+  /* Accent — Atlassian Blue */
+  --color-accent:        #0C66E4;
+  --color-accent-hover:  #0055CC;
+  --color-accent-subtle: #E9F2FF;
+
+  /* Semantic */
+  --color-success:       #216E4E;
+  --color-success-bg:    #DCFFF1;
+  --color-warning:       #974F0C;
+  --color-warning-bg:    #FFF7D6;
+  --color-danger:        #AE2A19;
+  --color-danger-subtle: #FFECEB;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(9, 30, 66, 0.08), 0 0 0 1px rgba(9, 30, 66, 0.04);
+  --shadow-md: 0 4px 8px rgba(9, 30, 66, 0.12), 0 0 1px rgba(9, 30, 66, 0.08);
+
+  /* Scrollbar */
+  color-scheme: light;
+}
+
+/* ── Dark Theme — Linear-style deep navy ──────────────────── */
+[data-theme="dark"] {
+  /* Backgrounds */
+  --color-bg-primary:    #0d1117;
+  --color-bg-secondary:  #161b22;
+  --color-bg-tertiary:   #1c2330;
+  --color-bg-elevated:   #1c2330;
+
+  /* Borders */
+  --color-border:        #30363d;
+  --color-border-subtle: #21262d;
+
+  /* Text */
+  --color-text-primary:   #e6edf3;
+  --color-text-secondary: #8b949e;
+  --color-text-muted:     #484f58;
+
+  /* Accent — same Atlassian blue, lighter in dark */
+  --color-accent:        #579DFF;
+  --color-accent-hover:  #85B8FF;
+  --color-accent-subtle: #0c2340;
+
+  /* Semantic */
+  --color-success:       #3fb950;
+  --color-success-bg:    #0d2d1a;
+  --color-warning:       #d29922;
+  --color-warning-bg:    #2d2005;
+  --color-danger:        #f85149;
+  --color-danger-subtle: #2d0f0f;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.5), 0 0 1px rgba(255, 255, 255, 0.06);
+
+  /* Scrollbar */
+  color-scheme: dark;
+}
+
+/* ── Radii ────────────────────────────────────────────────── */
+:root {
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+}
+
+/* ── Typography ───────────────────────────────────────────── */
+:root {
+  --font-sans:  'Inter Variable', system-ui, -apple-system, sans-serif;
+  --font-mono:  'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+
+  --text-xs:   11px;
+  --text-sm:   13px;
+  --text-base: 14px;
+  --text-lg:   16px;
+  --text-xl:   20px;
+  --text-2xl:  24px;
+
+  --font-weight-normal:   400;
+  --font-weight-medium:   500;
+  --font-weight-semibold: 600;
+}

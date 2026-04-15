@@ -12,6 +12,9 @@ import { AlertFeed } from '../components/mirror/AlertFeed'
 import { SprintHealthScore } from '../components/mirror/SprintHealthScore'
 import { VelocityStatsChart } from '../components/mirror/VelocityStatsChart'
 import { VelocityControls } from '../components/mirror/VelocityControls'
+import { Badge } from '../components/ui/Badge'
+import { Card, CardBody } from '../components/ui/Card'
+import { Button } from '../components/ui/Button'
 import type { RadarResponse } from '../types/dependencyRadar'
 import type { TeamListItem } from '../types/multiTeam'
 
@@ -47,7 +50,6 @@ export function VelocityMirrorPage() {
   const isLead = appRole === 'lead' || appRole === 'exec' || appRole === 'admin'
   const navigate = useNavigate()
 
-  // Team switcher — reads ?teamId from URL, falls back to 'default'
   const activeTeamId = searchParams.get('teamId') || 'default'
   const teamParam = activeTeamId !== 'default' ? `?team_id=${activeTeamId}` : ''
 
@@ -87,18 +89,13 @@ export function VelocityMirrorPage() {
   }
 
   return (
-    <div style={{
-      background: '#0f1117',
-      minHeight: '100%',
-      padding: '1.5rem',
-      fontFamily: 'system-ui, sans-serif',
-    }}>
+    <div style={{ fontFamily: 'var(--font-sans)', minHeight: '100%' }}>
 
       {/* Page header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
-            <h1 style={{ color: '#e2e8f0', fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: '-0.01em' }}>
+            <h1 style={{ color: 'var(--color-text-primary)', fontSize: 'var(--text-xl)', fontWeight: 700, margin: 0 }}>
               Velocity Mirror
             </h1>
             {teams.length > 1 && (
@@ -106,11 +103,12 @@ export function VelocityMirrorPage() {
                 value={activeTeamId}
                 onChange={e => handleTeamChange(e.target.value)}
                 style={{
-                  background: '#1e2030',
-                  border: '1px solid #2d2f45',
-                  borderRadius: 6,
-                  color: '#e2e8f0',
-                  fontSize: 13,
+                  background: 'var(--color-bg-elevated)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-md)',
+                  color: 'var(--color-text-primary)',
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 'var(--text-sm)',
                   padding: '4px 10px',
                   cursor: 'pointer',
                   outline: 'none',
@@ -124,15 +122,19 @@ export function VelocityMirrorPage() {
             )}
           </div>
           {isLoading && (
-            <div style={{ color: '#64748b', fontSize: 13, marginTop: 4 }}>Loading sprint…</div>
+            <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', marginTop: 4 }}>Loading sprint…</div>
           )}
           {isError && (
-            <div style={{ color: error instanceof ApiError && error.status === 404 ? '#475569' : '#ef4444', fontSize: 13, marginTop: 4 }}>
+            <div style={{
+              color: error instanceof ApiError && error.status === 404 ? 'var(--color-text-muted)' : 'var(--color-danger)',
+              fontSize: 'var(--text-sm)',
+              marginTop: 4,
+            }}>
               {error instanceof ApiError && error.status === 404 ? 'No active sprint — connect Jira to get started' : 'Could not load sprint data'}
             </div>
           )}
           {sprint && (
-            <div style={{ color: '#64748b', fontSize: 13, marginTop: 4 }}>
+            <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', marginTop: 4 }}>
               {sprint.name} · {new Date(sprint.startDate).toLocaleDateString()} – {new Date(sprint.endDate).toLocaleDateString()}
             </div>
           )}
@@ -144,23 +146,14 @@ export function VelocityMirrorPage() {
           {(completedSprintsData?.sprints ?? []).length > 0 && (
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               {(completedSprintsData?.sprints ?? []).slice(0, 3).map(s => (
-                <button
+                <Button
                   key={s.id}
+                  size="sm"
+                  variant="ghost"
                   onClick={() => navigate(`/app/retrospective?sprintId=${s.id}`)}
-                  style={{
-                    background: 'transparent',
-                    border: '1px solid #334155',
-                    borderRadius: 5,
-                    color: '#94a3b8',
-                    fontSize: 11,
-                    fontWeight: 600,
-                    padding: '3px 10px',
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                  }}
                 >
                   {s.name} · View Retro
-                </button>
+                </Button>
               ))}
             </div>
           )}
@@ -189,47 +182,36 @@ export function VelocityMirrorPage() {
           />
           <DeveloperCapacityRow teamId={activeTeamId} />
 
-          {/* Completed sprints — View Retro links */}
+          {/* Completed sprints */}
           {(completedSprintsData?.sprints ?? []).length > 0 && (
-            <div style={{
-              background: '#1e2330',
-              borderRadius: 8,
-              padding: '1rem 1.25rem',
-            }}>
-              <div style={{
-                color: '#94a3b8',
-                fontSize: 11,
-                fontWeight: 700,
-                textTransform: 'uppercase',
-                letterSpacing: '0.06em',
-                marginBottom: 10,
-              }}>
-                Completed Sprints
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {(completedSprintsData?.sprints ?? []).map(s => (
-                  <div key={s.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                    <span style={{ color: '#cbd5e1', fontSize: 13 }}>{s.name}</span>
-                    <button
-                      onClick={() => navigate(`/app/retrospective?sprintId=${s.id}`)}
-                      style={{
-                        background: 'transparent',
-                        border: '1px solid #334155',
-                        borderRadius: 5,
-                        color: '#a5b4fc',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        padding: '3px 12px',
-                        cursor: 'pointer',
-                        flexShrink: 0,
-                      }}
-                    >
-                      View Retro
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <Card>
+              <CardBody>
+                <div style={{
+                  color: 'var(--color-text-muted)',
+                  fontSize: 'var(--text-xs)',
+                  fontWeight: 600,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em',
+                  marginBottom: 10,
+                }}>
+                  Completed Sprints
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {(completedSprintsData?.sprints ?? []).map(s => (
+                    <div key={s.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                      <span style={{ color: 'var(--color-text-primary)', fontSize: 'var(--text-sm)' }}>{s.name}</span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => navigate(`/app/retrospective?sprintId=${s.id}`)}
+                      >
+                        View Retro
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </CardBody>
+            </Card>
           )}
         </div>
 
@@ -240,8 +222,8 @@ export function VelocityMirrorPage() {
           {highRiskDeps.length > 0 && (
             <div>
               <div style={{
-                color: '#94a3b8',
-                fontSize: 11,
+                color: 'var(--color-text-muted)',
+                fontSize: 'var(--text-xs)',
                 fontWeight: 700,
                 textTransform: 'uppercase',
                 letterSpacing: '0.06em',
@@ -251,56 +233,28 @@ export function VelocityMirrorPage() {
                 gap: 8,
               }}>
                 <span>High-Risk Dependencies</span>
-                <span style={{
-                  background: '#ef4444',
-                  color: '#fff',
-                  borderRadius: '50%',
-                  width: 18,
-                  height: 18,
-                  fontSize: 10,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: 700,
-                }}>
-                  {highRiskDeps.length}
-                </span>
+                <Badge variant="danger">{highRiskDeps.length}</Badge>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {highRiskDeps.map(dep => (
-                  <div
+                  <Card
                     key={dep.id}
-                    style={{
-                      background: '#1e2030',
-                      borderRadius: 8,
-                      padding: '0.75rem 1rem',
-                      borderLeft: '3px solid #ef4444',
-                    }}
+                    style={{ borderLeft: '3px solid var(--color-danger)' }}
                   >
-                    <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600, marginBottom: 3 }}>
-                      {dep.ticketKey}
-                    </div>
-                    {dep.description && (
-                      <div style={{ color: '#94a3b8', fontSize: 12, marginBottom: 8, lineHeight: 1.4 }}>
-                        {dep.description}
+                    <CardBody style={{ padding: '10px 14px' }}>
+                      <div style={{ color: 'var(--color-text-primary)', fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 3 }}>
+                        {dep.ticketKey}
                       </div>
-                    )}
-                    <button
-                      onClick={() => navigate('/app/dependency-radar')}
-                      style={{
-                        background: 'transparent',
-                        border: '1px solid #334155',
-                        color: '#94a3b8',
-                        borderRadius: 5,
-                        padding: '3px 10px',
-                        fontSize: 11,
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      View Radar
-                    </button>
-                  </div>
+                      {dep.description && (
+                        <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-xs)', marginBottom: 8, lineHeight: 1.4 }}>
+                          {dep.description}
+                        </div>
+                      )}
+                      <Button size="sm" variant="ghost" onClick={() => navigate('/app/dependency-radar')}>
+                        View Radar
+                      </Button>
+                    </CardBody>
+                  </Card>
                 ))}
               </div>
             </div>

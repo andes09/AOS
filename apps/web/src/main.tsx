@@ -1,3 +1,15 @@
+// Theme must be applied before React renders to prevent flash of wrong theme.
+// This runs synchronously, before the React tree mounts.
+;(function () {
+  try {
+    const stored = localStorage.getItem('aos_theme')
+    const theme = stored === 'dark' || stored === 'light' ? stored : 'light'
+    document.documentElement.setAttribute('data-theme', theme)
+  } catch {
+    document.documentElement.setAttribute('data-theme', 'light')
+  }
+})()
+
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ClerkProvider } from '@clerk/clerk-react'

@@ -3,25 +3,26 @@ import { useAuth } from '@clerk/clerk-react'
 import { useApi, ApiError } from '../lib/api'
 import { SectorHealthBanner } from '../components/exec/SectorHealthBanner'
 import { TeamHealthCard } from '../components/exec/TeamHealthCard'
+import { Alert } from '../components/ui/Alert'
 import { SectorOverviewResponse } from '../types/exec'
 
 function LoadingSkeleton() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {/* Banner skeleton */}
       <div style={{
-        background: '#1e2130',
-        borderRadius: 12,
-        height: 110,
+        background: 'var(--color-bg-elevated)',
+        border: '1px solid var(--color-border)',
+        borderRadius: 'var(--radius-lg)',
+        height: 80,
         marginBottom: 8,
         opacity: 0.5,
       }} />
-      {/* Card grid skeleton */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
         {[1, 2, 3].map(i => (
           <div key={i} style={{
-            background: '#1e2130',
-            borderRadius: 10,
+            background: 'var(--color-bg-elevated)',
+            border: '1px solid var(--color-border)',
+            borderRadius: 'var(--radius-lg)',
             height: 140,
             opacity: 0.4,
           }} />
@@ -44,17 +45,12 @@ export function ExecDashboardPage() {
   const is403 = isError && error instanceof ApiError && error.status === 403
 
   return (
-    <div style={{
-      background: '#0f1117',
-      minHeight: '100%',
-      padding: '1.5rem',
-      fontFamily: 'system-ui, sans-serif',
-    }}>
+    <div style={{ fontFamily: 'var(--font-sans)', minHeight: '100%' }}>
       <div style={{ marginBottom: 20 }}>
-        <h1 style={{ color: '#e2e8f0', fontSize: 22, fontWeight: 800, margin: 0, letterSpacing: '-0.01em' }}>
+        <h1 style={{ color: 'var(--color-text-primary)', fontSize: 'var(--text-xl)', fontWeight: 700, margin: 0 }}>
           Exec Dashboard
         </h1>
-        <div style={{ color: '#64748b', fontSize: 13, marginTop: 4 }}>
+        <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', marginTop: 4 }}>
           Organization-wide health overview
         </div>
       </div>
@@ -62,21 +58,11 @@ export function ExecDashboardPage() {
       {isLoading && <LoadingSkeleton />}
 
       {is403 && (
-        <div style={{
-          background: '#1e2130',
-          border: '1px solid #ef444433',
-          borderRadius: 10,
-          padding: '2rem',
-          textAlign: 'center',
-          color: '#ef4444',
-          fontSize: 15,
-        }}>
-          Access denied. Exec role required.
-        </div>
+        <Alert variant="danger">Access denied. Exec role required.</Alert>
       )}
 
       {isError && !is403 && (
-        <div style={{ color: '#ef4444', fontSize: 14 }}>
+        <div style={{ color: 'var(--color-danger)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)' }}>
           Failed to load sector overview.
         </div>
       )}
@@ -97,7 +83,7 @@ export function ExecDashboardPage() {
             ))}
           </div>
           {data.teams.length === 0 && (
-            <div style={{ color: '#64748b', fontSize: 14, textAlign: 'center', marginTop: 32 }}>
+            <div style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', textAlign: 'center', marginTop: 32 }}>
               No teams found in this organization.
             </div>
           )}

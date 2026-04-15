@@ -248,13 +248,18 @@ async def _build_enrichment(
         if not scope_rows:
             scope_cop_status = "not_analyzed"
         else:
-            flagged = [r for r in scope_rows if r.status != "ready"]
+            # r.status may be a ScopeCopStatus enum member or a plain string depending on
+            # SQLAlchemy version / dialect — normalize to string value before comparing.
+            def _status_str(s) -> str:
+                return s.value if hasattr(s, "value") else str(s)
+
+            flagged = [r for r in scope_rows if _status_str(r.status) != "ready"]
             if flagged:
                 scope_cop_status = "has_issues"
                 scope_warnings = [
                     ScopeWarning(
                         ticket_id=r.ticket_key,
-                        status=r.status,
+                        status=_status_str(r.status),
                         issues=r.issues or [],
                     )
                     for r in flagged

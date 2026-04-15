@@ -4,6 +4,7 @@ import { useAppRole } from '../hooks/useAppRole'
 import { RoleSwitcher } from '../components/RoleSwitcher'
 import { TeamProvider } from '../contexts/TeamContext'
 import { TeamSwitcher } from '../components/TeamSwitcher'
+import { ThemeToggle } from '../components/ui/ThemeToggle'
 
 export function DashboardLayout() {
   const { appRole } = useAppRole()
@@ -13,7 +14,7 @@ export function DashboardLayout() {
   return (
     <TeamProvider>
       <div style={{ display: 'flex', height: '100vh' }}>
-        <nav style={{ width: 220, padding: '1rem', borderRight: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column' }}>
+        <nav style={{ width: 220, padding: '1rem', borderRight: '1px solid var(--color-border)', display: 'flex', flexDirection: 'column', background: 'var(--color-bg-secondary)' }}>
           <div style={{ fontWeight: 700, fontSize: '1.125rem', marginBottom: '0.75rem' }}>AgileOS</div>
           <TeamSwitcher />
           <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1 }}>
@@ -37,9 +38,24 @@ export function DashboardLayout() {
           </ul>
           <UserButton />
         </nav>
-        <main style={{ flex: 1, padding: '1.5rem', overflowY: 'auto' }}>
-          <Outlet />
-        </main>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+          <header style={{
+            height: 48,
+            borderBottom: '1px solid var(--color-border)',
+            background: 'var(--color-bg-elevated)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            padding: '0 16px',
+            gap: 8,
+            flexShrink: 0,
+          }}>
+            <ThemeToggle />
+          </header>
+          <main style={{ flex: 1, padding: '1.5rem', overflowY: 'auto' }}>
+            <Outlet />
+          </main>
+        </div>
         <RoleSwitcher />
       </div>
     </TeamProvider>

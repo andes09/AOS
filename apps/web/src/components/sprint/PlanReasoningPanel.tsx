@@ -5,10 +5,10 @@ interface PlanReasoningPanelProps {
   assignments: Assignment[]
 }
 
-function dotColour(c: number): string {
-  if (c > 0.75) return '#4ade80'
-  if (c >= 0.5) return '#fbbf24'
-  return '#ef4444'
+function confidenceDot(c: number): string {
+  if (c > 0.75) return 'var(--color-success)'
+  if (c >= 0.5) return 'var(--color-warning)'
+  return 'var(--color-danger)'
 }
 
 export function PlanReasoningPanel({ assignments }: PlanReasoningPanelProps) {
@@ -16,7 +16,7 @@ export function PlanReasoningPanel({ assignments }: PlanReasoningPanelProps) {
 
   if (assignments.length === 0) {
     return (
-      <div style={{ color: '#64748b', fontSize: 13, padding: '1rem 0' }}>
+      <div style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', padding: '1rem 0' }}>
         Generate a plan to see assignment reasoning.
       </div>
     )
@@ -25,8 +25,9 @@ export function PlanReasoningPanel({ assignments }: PlanReasoningPanelProps) {
   return (
     <div>
       <div style={{
-        color: '#a5b4fc',
-        fontSize: 11,
+        color: 'var(--color-text-muted)',
+        fontFamily: 'var(--font-sans)',
+        fontSize: 'var(--text-xs)',
         fontWeight: 700,
         textTransform: 'uppercase',
         letterSpacing: '0.06em',
@@ -39,7 +40,15 @@ export function PlanReasoningPanel({ assignments }: PlanReasoningPanelProps) {
         {assignments.map(a => {
           const isOpen = openId === a.ticket_id
           return (
-            <div key={a.ticket_id} style={{ background: '#0f1117', borderRadius: 6, overflow: 'hidden' }}>
+            <div
+              key={a.ticket_id}
+              style={{
+                background: 'var(--color-bg-secondary)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-md)',
+                overflow: 'hidden',
+              }}
+            >
               <button
                 onClick={() => setOpenId(isOpen ? null : a.ticket_id)}
                 style={{
@@ -47,19 +56,20 @@ export function PlanReasoningPanel({ assignments }: PlanReasoningPanelProps) {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
-                  padding: '0.625rem 0.75rem',
+                  padding: '8px 10px',
                   background: 'transparent',
                   border: 'none',
                   cursor: 'pointer',
                   textAlign: 'left',
                 }}
               >
-                <span style={{ color: '#6366f1', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                <span style={{ color: 'var(--color-accent)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', fontWeight: 700, whiteSpace: 'nowrap' }}>
                   {a.ticket_id}
                 </span>
                 <span style={{
-                  color: '#94a3b8',
-                  fontSize: 12,
+                  color: 'var(--color-text-secondary)',
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 'var(--text-xs)',
                   flex: 1,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
@@ -67,26 +77,23 @@ export function PlanReasoningPanel({ assignments }: PlanReasoningPanelProps) {
                 }}>
                   → {a.developer_name || a.developer_id}
                 </span>
-                <span style={{ color: '#64748b', fontSize: 11, whiteSpace: 'nowrap' }}>
+                <span style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
                   {a.story_points}pts
                 </span>
-                <span style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  background: dotColour(a.confidence),
-                  flexShrink: 0,
-                }} />
-                <span style={{ color: '#64748b', fontSize: 10 }}>{isOpen ? '▲' : '▼'}</span>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: confidenceDot(a.confidence), flexShrink: 0 }} />
+                <span style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)' }}>
+                  {isOpen ? '▲' : '▼'}
+                </span>
               </button>
 
               {isOpen && (
                 <div style={{
-                  padding: '0.5rem 0.75rem 0.75rem',
-                  color: '#94a3b8',
-                  fontSize: 13,
+                  padding: '8px 10px 10px',
+                  color: 'var(--color-text-secondary)',
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 'var(--text-sm)',
                   lineHeight: 1.6,
-                  borderTop: '1px solid #2d2f45',
+                  borderTop: '1px solid var(--color-border-subtle)',
                 }}>
                   {a.reasoning}
                 </div>

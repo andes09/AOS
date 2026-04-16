@@ -7,12 +7,12 @@ export interface ConfidenceGaugeProps {
 }
 
 const R = 22
-const CIRC = 2 * Math.PI * R  // ≈ 138.23
+const CIRC = 2 * Math.PI * R
 
 function gaugeColour(score: number): string {
-  if (score > 0.75) return '#4ade80'
-  if (score >= 0.5) return '#fbbf24'
-  return '#ef4444'
+  if (score > 0.75) return 'var(--color-success)'
+  if (score >= 0.5) return 'var(--color-warning)'
+  return 'var(--color-danger)'
 }
 
 export function ConfidenceGauge({ score, sampleSize, sprintCount }: ConfidenceGaugeProps) {
@@ -36,15 +36,9 @@ export function ConfidenceGauge({ score, sampleSize, sprintCount }: ConfidenceGa
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-      <svg
-        width={60}
-        height={60}
-        viewBox="0 0 60 60"
-        role="img"
-        aria-label={tooltipLines.join(', ')}
-      >
+      <svg width={60} height={60} viewBox="0 0 60 60" role="img" aria-label={tooltipLines.join(', ')}>
         <title>{tooltipLines.join('\n')}</title>
-        <circle cx={30} cy={30} r={R} fill="none" stroke="#2d2f45" strokeWidth={6} />
+        <circle cx={30} cy={30} r={R} fill="none" stroke="var(--color-border)" strokeWidth={6} />
         <circle
           cx={30} cy={30} r={R}
           fill="none"
@@ -55,21 +49,22 @@ export function ConfidenceGauge({ score, sampleSize, sprintCount }: ConfidenceGa
           transform="rotate(-90 30 30)"
           style={{ transition: 'stroke-dashoffset 0.8s ease-out' }}
         />
-        <text x={30} y={34} textAnchor="middle" fill="#e2e8f0" fontSize={11} fontWeight={700}>
+        <text x={30} y={34} textAnchor="middle" fill="var(--color-text-primary)" fontSize={11} fontWeight={700}>
           {pct}%
         </text>
       </svg>
       <div>
         <div style={{
-          color: '#a5b4fc',
-          fontSize: 11,
+          color: 'var(--color-text-secondary)',
+          fontFamily: 'var(--font-sans)',
+          fontSize: 'var(--text-xs)',
           fontWeight: 700,
           textTransform: 'uppercase',
           letterSpacing: '0.06em',
         }}>
           Confidence
         </div>
-        <div style={{ color: colour, fontSize: 14, fontWeight: 700, marginTop: 2 }}>
+        <div style={{ color: colour, fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 700, marginTop: 2 }}>
           {label}
         </div>
       </div>

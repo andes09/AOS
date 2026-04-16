@@ -1,9 +1,24 @@
 import { useState, useEffect } from 'react'
 import { useApi } from '../../lib/api'
+import { Card, CardBody } from '../ui/Card'
+import { Button } from '../ui/Button'
 import type { TeamCapacityResponse, DeveloperCapacityItem } from '../../types/capacity'
 
 interface CapacitySettingsPanelProps {
   onCapacityLoaded?: (data: TeamCapacityResponse) => void
+}
+
+const inputStyle: React.CSSProperties = {
+  width: 60,
+  background: 'var(--color-bg-tertiary)',
+  border: '1px solid var(--color-border)',
+  borderRadius: 'var(--radius-sm)',
+  color: 'var(--color-text-primary)',
+  fontFamily: 'var(--font-sans)',
+  fontSize: 'var(--text-sm)',
+  padding: '2px 6px',
+  textAlign: 'right',
+  outline: 'none',
 }
 
 export function CapacitySettingsPanel({ onCapacityLoaded }: CapacitySettingsPanelProps) {
@@ -32,7 +47,7 @@ export function CapacitySettingsPanel({ onCapacityLoaded }: CapacitySettingsPane
       setDevOverrides(initial)
       onCapacityLoaded?.(resp)
     } catch {
-      // Non-critical — capacity panel silently fails if endpoint unavailable
+      // Non-critical
     } finally {
       setLoading(false)
     }
@@ -74,10 +89,7 @@ export function CapacitySettingsPanel({ onCapacityLoaded }: CapacitySettingsPane
         return
       }
       await put(`/api/capacity/team/${data.teamId}/developers/${dev.developerId}/override`, {
-        sprintId: null,
-        capacityPct,
-        ptoDays,
-        notes: null,
+        sprintId: null, capacityPct, ptoDays, notes: null,
       })
       setDevMsg(m => ({ ...m, [dev.developerId]: 'Saved' }))
       await loadCapacity()
@@ -89,127 +101,151 @@ export function CapacitySettingsPanel({ onCapacityLoaded }: CapacitySettingsPane
   }
 
   if (loading) {
-    return <div style={{ color: '#64748b', fontSize: 13, padding: '1rem 0' }}>Loading capacity data...</div>
+    return (
+      <div style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', padding: '1rem 0' }}>
+        Loading capacity data...
+      </div>
+    )
   }
 
   if (!data) return null
 
   return (
-    <div style={{ background: '#1e2030', borderRadius: 8, border: '1px solid #2d2f45', padding: '1rem 1.25rem' }}>
-      <div style={{ color: '#a5b4fc', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 12 }}>
-        Capacity Settings
-      </div>
-
-      {/* Team-wide meeting overhead */}
-      <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <span style={{ color: '#94a3b8', fontSize: 13, minWidth: 180 }}>Meeting overhead %</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input
-            type="range"
-            min={0}
-            max={50}
-            value={overheadInput}
-            onChange={e => setOverheadInput(e.target.value)}
-            style={{ width: 120 }}
-          />
-          <span style={{ color: '#e2e8f0', fontSize: 13, minWidth: 36 }}>{overheadInput}%</span>
-          <button
-            onClick={handleSaveOverhead}
-            disabled={overheadSaving}
-            style={{
-              background: overheadSaving ? '#374151' : '#6366f1',
-              color: overheadSaving ? '#64748b' : '#fff',
-              border: 'none',
-              borderRadius: 6,
-              padding: '4px 14px',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: overheadSaving ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {overheadSaving ? 'Saving...' : 'Save'}
-          </button>
-          {overheadMsg && (
-            <span style={{ fontSize: 12, color: overheadMsg === 'Saved' ? '#4ade80' : '#ef4444' }}>{overheadMsg}</span>
-          )}
+    <Card>
+      <CardBody>
+        <div style={{
+          color: 'var(--color-text-muted)',
+          fontFamily: 'var(--font-sans)',
+          fontSize: 'var(--text-xs)',
+          fontWeight: 700,
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          marginBottom: 12,
+        }}>
+          Capacity Settings
         </div>
-      </div>
 
-      {/* Per-developer overrides */}
-      {data.developers.length > 0 && (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead>
-            <tr style={{ color: '#64748b', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              <th style={{ textAlign: 'left', padding: '4px 8px', fontWeight: 600 }}>Developer</th>
-              <th style={{ textAlign: 'right', padding: '4px 8px', fontWeight: 600 }}>Base Vel.</th>
-              <th style={{ textAlign: 'right', padding: '4px 8px', fontWeight: 600 }}>PTO Days</th>
-              <th style={{ textAlign: 'right', padding: '4px 8px', fontWeight: 600 }}>Capacity %</th>
-              <th style={{ textAlign: 'right', padding: '4px 8px', fontWeight: 600 }}>Effective Pts</th>
-              <th style={{ padding: '4px 8px' }} />
-            </tr>
-          </thead>
-          <tbody>
-            {data.developers.map(dev => (
-              <tr key={dev.developerId} style={{ borderTop: '1px solid #2d2f45' }}>
-                <td style={{ padding: '6px 8px' }}>
-                  <span style={{ color: dev.isHighMeetingLoad ? '#fbbf24' : '#e2e8f0' }}>{dev.displayName}</span>
-                  {dev.isHighMeetingLoad && <span style={{ marginLeft: 6, fontSize: 11, color: '#f97316' }}>⚠ High load</span>}
-                </td>
-                <td style={{ textAlign: 'right', padding: '6px 8px', color: '#94a3b8' }}>{dev.baseVelocity.toFixed(1)}</td>
-                <td style={{ textAlign: 'right', padding: '6px 8px' }}>
-                  <input
-                    type="number"
-                    min={0}
-                    max={10}
-                    step={0.5}
-                    value={devOverrides[dev.developerId]?.ptoDays ?? '0'}
-                    onChange={e => setDevOverrides(m => ({ ...m, [dev.developerId]: { ...m[dev.developerId], ptoDays: e.target.value } }))}
-                    style={{ width: 60, background: '#0f1117', border: '1px solid #2d2f45', borderRadius: 4, color: '#e2e8f0', fontSize: 13, padding: '2px 6px', textAlign: 'right' }}
-                  />
-                </td>
-                <td style={{ textAlign: 'right', padding: '6px 8px' }}>
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    step={5}
-                    value={devOverrides[dev.developerId]?.capacityPct ?? '100'}
-                    onChange={e => setDevOverrides(m => ({ ...m, [dev.developerId]: { ...m[dev.developerId], capacityPct: e.target.value } }))}
-                    style={{ width: 60, background: '#0f1117', border: '1px solid #2d2f45', borderRadius: 4, color: '#e2e8f0', fontSize: 13, padding: '2px 6px', textAlign: 'right' }}
-                  />
-                </td>
-                <td style={{ textAlign: 'right', padding: '6px 8px', color: dev.isHighMeetingLoad ? '#fbbf24' : '#6ee7b7', fontWeight: 600 }}>
-                  {dev.effectiveCapacityPts.toFixed(1)}
-                </td>
-                <td style={{ padding: '6px 8px' }}>
-                  <button
-                    onClick={() => handleSaveDev(dev)}
-                    disabled={savingDev === dev.developerId}
-                    style={{
-                      background: savingDev === dev.developerId ? '#374151' : '#1e3a5f',
-                      color: savingDev === dev.developerId ? '#64748b' : '#60a5fa',
-                      border: '1px solid #1d4ed8',
-                      borderRadius: 4,
-                      padding: '3px 10px',
-                      fontSize: 12,
-                      fontWeight: 600,
-                      cursor: savingDev === dev.developerId ? 'not-allowed' : 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {savingDev === dev.developerId ? 'Saving...' : 'Save'}
-                  </button>
-                  {devMsg[dev.developerId] && (
-                    <span style={{ marginLeft: 6, fontSize: 11, color: devMsg[dev.developerId] === 'Saved' ? '#4ade80' : '#ef4444' }}>
-                      {devMsg[dev.developerId]}
-                    </span>
-                  )}
-                </td>
+        {/* Team-wide meeting overhead */}
+        <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ color: 'var(--color-text-secondary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', minWidth: 180 }}>
+            Meeting overhead %
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="range"
+              min={0}
+              max={50}
+              value={overheadInput}
+              onChange={e => setOverheadInput(e.target.value)}
+              style={{ width: 120 }}
+            />
+            <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', minWidth: 36 }}>
+              {overheadInput}%
+            </span>
+            <Button size="sm" variant="secondary" onClick={handleSaveOverhead} disabled={overheadSaving}>
+              {overheadSaving ? 'Saving...' : 'Save'}
+            </Button>
+            {overheadMsg && (
+              <span style={{
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--text-xs)',
+                color: overheadMsg === 'Saved' ? 'var(--color-success)' : 'var(--color-danger)',
+              }}>
+                {overheadMsg}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Per-developer overrides */}
+        {data.developers.length > 0 && (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)' }}>
+            <thead>
+              <tr>
+                {['Developer', 'Base Vel.', 'PTO Days', 'Capacity %', 'Effective Pts', ''].map((h, i) => (
+                  <th key={i} style={{
+                    textAlign: i === 0 ? 'left' : 'right',
+                    padding: '4px 8px',
+                    color: 'var(--color-text-muted)',
+                    fontFamily: 'var(--font-sans)',
+                    fontSize: 'var(--text-xs)',
+                    fontWeight: 600,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    borderBottom: '1px solid var(--color-border)',
+                  }}>
+                    {h}
+                  </th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
+            </thead>
+            <tbody>
+              {data.developers.map(dev => (
+                <tr key={dev.developerId} style={{ borderTop: '1px solid var(--color-border-subtle)' }}>
+                  <td style={{ padding: '6px 8px' }}>
+                    <span style={{ color: dev.isHighMeetingLoad ? 'var(--color-warning)' : 'var(--color-text-primary)', fontFamily: 'var(--font-sans)' }}>
+                      {dev.displayName}
+                    </span>
+                    {dev.isHighMeetingLoad && (
+                      <span style={{ marginLeft: 6, fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', color: 'var(--color-warning)' }}>
+                        High load
+                      </span>
+                    )}
+                  </td>
+                  <td style={{ textAlign: 'right', padding: '6px 8px', color: 'var(--color-text-secondary)' }}>
+                    {dev.baseVelocity.toFixed(1)}
+                  </td>
+                  <td style={{ textAlign: 'right', padding: '6px 8px' }}>
+                    <input
+                      type="number" min={0} max={10} step={0.5}
+                      value={devOverrides[dev.developerId]?.ptoDays ?? '0'}
+                      onChange={e => setDevOverrides(m => ({ ...m, [dev.developerId]: { ...m[dev.developerId], ptoDays: e.target.value } }))}
+                      style={inputStyle}
+                    />
+                  </td>
+                  <td style={{ textAlign: 'right', padding: '6px 8px' }}>
+                    <input
+                      type="number" min={0} max={100} step={5}
+                      value={devOverrides[dev.developerId]?.capacityPct ?? '100'}
+                      onChange={e => setDevOverrides(m => ({ ...m, [dev.developerId]: { ...m[dev.developerId], capacityPct: e.target.value } }))}
+                      style={inputStyle}
+                    />
+                  </td>
+                  <td style={{
+                    textAlign: 'right',
+                    padding: '6px 8px',
+                    color: dev.isHighMeetingLoad ? 'var(--color-warning)' : 'var(--color-success)',
+                    fontFamily: 'var(--font-sans)',
+                    fontWeight: 600,
+                  }}>
+                    {dev.effectiveCapacityPts.toFixed(1)}
+                  </td>
+                  <td style={{ padding: '6px 8px' }}>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => handleSaveDev(dev)}
+                      disabled={savingDev === dev.developerId}
+                    >
+                      {savingDev === dev.developerId ? 'Saving...' : 'Save'}
+                    </Button>
+                    {devMsg[dev.developerId] && (
+                      <span style={{
+                        marginLeft: 6,
+                        fontFamily: 'var(--font-sans)',
+                        fontSize: 'var(--text-xs)',
+                        color: devMsg[dev.developerId] === 'Saved' ? 'var(--color-success)' : 'var(--color-danger)',
+                      }}>
+                        {devMsg[dev.developerId]}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </CardBody>
+    </Card>
   )
 }

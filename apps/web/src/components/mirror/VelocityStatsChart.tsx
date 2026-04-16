@@ -14,6 +14,7 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 import { useApi, ApiError } from '../../lib/api'
+import { Card, CardBody } from '../ui/Card'
 
 interface SprintPoint {
   name: string
@@ -34,9 +35,20 @@ interface VelocityStatsData {
   sprintWindow: SprintPoint[]
 }
 
+// Recharts stroke/fill are SVG attrs — CSS vars don't work there.
+// These are stable chart-specific colors, not theme colors.
+const CHART = {
+  velocity:   '#64748b',
+  rolling:    '#6366f1',
+  weighted:   '#a78bfa',
+  forecast:   '#a78bfa',
+  outlier:    '#f59e0b',
+  grid:       '#30363d',
+}
+
 function TrendArrow({ trend }: { trend: number }) {
   const arrow = trend > 0.5 ? '↑' : trend < -0.5 ? '↓' : '→'
-  const color = trend > 0.5 ? '#22c55e' : trend < -0.5 ? '#ef4444' : '#94a3b8'
+  const color = trend > 0.5 ? 'var(--color-success)' : trend < -0.5 ? 'var(--color-danger)' : 'var(--color-text-muted)'
   return (
     <span style={{ color, fontSize: 18, fontWeight: 700, marginLeft: 8 }}>
       {arrow}
@@ -68,20 +80,22 @@ export function VelocityStatsChart({ window, fromDate, visibleMetrics, teamId }:
 
   if (isLoading) {
     return (
-      <div style={{ background: '#1e2030', borderRadius: 8, padding: '1.5rem', height: 280, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <span style={{ color: '#64748b', fontSize: 13 }}>Loading velocity stats…</span>
-      </div>
+      <Card style={{ height: 280, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <span style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)' }}>
+          Loading velocity stats…
+        </span>
+      </Card>
     )
   }
 
   if (isError) {
     const is422 = error instanceof ApiError && error.status === 422
     return (
-      <div style={{ background: '#1e2030', borderRadius: 8, padding: '1.5rem', height: 280, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <span style={{ color: is422 ? '#475569' : '#ef4444', fontSize: 13 }}>
+      <Card style={{ height: 280, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <span style={{ color: is422 ? 'var(--color-text-muted)' : 'var(--color-danger)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)' }}>
           {is422 ? 'Not enough completed sprints for velocity stats' : 'Failed to load velocity stats'}
         </span>
-      </div>
+      </Card>
     )
   }
 
@@ -134,13 +148,14 @@ export function VelocityStatsChart({ window, fromDate, visibleMetrics, teamId }:
   )
 
   return (
-    <div style={{ background: '#1e2030', borderRadius: 8, padding: '1rem 1rem 0.5rem' }}>
+    <Card>
+      <CardBody style={{ padding: '12px 12px 8px' }}>
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
-        <span style={{ color: '#94a3b8', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        <span style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
           Velocity Trend
         </span>
         <TrendArrow trend={data.trend} />
-        <span style={{ marginLeft: 'auto', color: '#475569', fontSize: 11 }}>
+        <span style={{ marginLeft: 'auto', color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)' }}>
           {data.sprintCount} sprints · window {data.window}
         </span>
       </div>
@@ -153,39 +168,39 @@ export function VelocityStatsChart({ window, fromDate, visibleMetrics, teamId }:
               <stop offset="95%" stopColor="#a78bfa" stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#2d2f45" />
+          <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} />
           <XAxis
             dataKey="name"
-            tick={{ fill: '#64748b', fontSize: 10 }}
+            tick={{ fill: CHART.velocity, fontSize: 10 }}
             tickLine={false}
             axisLine={false}
           />
           <YAxis
-            tick={{ fill: '#64748b', fontSize: 11 }}
+            tick={{ fill: CHART.velocity, fontSize: 11 }}
             tickLine={false}
             axisLine={false}
-            label={{ value: 'Points', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 11 }}
+            label={{ value: 'Points', angle: -90, position: 'insideLeft', fill: CHART.velocity, fontSize: 11 }}
           />
           <Tooltip
-            contentStyle={{ background: '#0f1117', border: '1px solid #2d2f45', borderRadius: 6, fontSize: 12 }}
-            labelStyle={{ color: '#94a3b8' }}
-            itemStyle={{ color: '#e2e8f0' }}
+            contentStyle={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border)', borderRadius: 6, fontSize: 12 }}
+            labelStyle={{ color: 'var(--color-text-secondary)' }}
+            itemStyle={{ color: 'var(--color-text-primary)' }}
             formatter={(value: unknown) => value == null ? '—' : `${value} pts`}
           />
-          <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8', paddingTop: 8 }} />
+          <Legend wrapperStyle={{ fontSize: 11, color: 'var(--color-text-secondary)', paddingTop: 8 }} />
 
           {/* Actual velocity per sprint */}
           <Line
             type="monotone"
             dataKey="velocity"
             name="Actual"
-            stroke="#64748b"
+            stroke={CHART.velocity}
             strokeWidth={1.5}
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             dot={(props: any) =>
               outlierNames.has(props.payload?.name)
-                ? <circle key={props.payload.name} cx={props.cx} cy={props.cy} r={5} fill="#f59e0b" stroke="#f59e0b" />
-                : <circle key={props.payload?.name} cx={props.cx} cy={props.cy} r={3} fill="#64748b" />
+                ? <circle key={props.payload.name} cx={props.cx} cy={props.cy} r={5} fill={CHART.outlier} stroke={CHART.outlier} />
+                : <circle key={props.payload?.name} cx={props.cx} cy={props.cy} r={3} fill={CHART.velocity} />
             }
             connectNulls={false}
           />
@@ -196,7 +211,7 @@ export function VelocityStatsChart({ window, fromDate, visibleMetrics, teamId }:
               type="monotone"
               dataKey="rollingAvg"
               name="Rolling Avg"
-              stroke="#6366f1"
+              stroke={CHART.rolling}
               strokeWidth={2}
               dot={false}
               connectNulls={false}
@@ -209,7 +224,7 @@ export function VelocityStatsChart({ window, fromDate, visibleMetrics, teamId }:
               type="monotone"
               dataKey="weightedAvg"
               name="Weighted Avg"
-              stroke="#a78bfa"
+              stroke={CHART.weighted}
               strokeWidth={2}
               strokeDasharray="4 2"
               dot={false}
@@ -232,10 +247,10 @@ export function VelocityStatsChart({ window, fromDate, visibleMetrics, teamId }:
             type="monotone"
             dataKey="forecastLow"
             name="Forecast Low"
-            stroke="#a78bfa"
+            stroke={CHART.forecast}
             strokeDasharray="3 2"
             strokeWidth={1}
-            fill="#1e2030"
+            fillOpacity={0}
             dot={false}
             connectNulls={false}
             legendType="none"
@@ -244,7 +259,7 @@ export function VelocityStatsChart({ window, fromDate, visibleMetrics, teamId }:
       </ResponsiveContainer>
 
       {/* Summary stats row */}
-      <div style={{ display: 'flex', gap: 24, marginTop: 8, paddingTop: 8, borderTop: '1px solid #2d2f45' }}>
+      <div style={{ display: 'flex', gap: 24, marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--color-border)' }}>
         {[
           { label: 'Rolling Avg', value: `${data.rollingAvg} pts`, metric: 'rolling' },
           { label: 'Weighted Avg', value: `${data.weightedAvg} pts`, metric: 'weighted' },
@@ -254,11 +269,12 @@ export function VelocityStatsChart({ window, fromDate, visibleMetrics, teamId }:
           .filter(({ metric }) => metric === null || visibleMetrics.includes(metric))
           .map(({ label, value }) => (
             <div key={label}>
-              <div style={{ color: '#475569', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
-              <div style={{ color: '#e2e8f0', fontSize: 13, fontWeight: 600 }}>{value}</div>
+              <div style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+              <div style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', fontWeight: 600 }}>{value}</div>
             </div>
           ))}
       </div>
-    </div>
+      </CardBody>
+    </Card>
   )
 }

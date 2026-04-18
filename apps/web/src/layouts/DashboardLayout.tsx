@@ -64,15 +64,16 @@ export function DashboardLayout() {
             display: 'flex',
             alignItems: 'center',
             padding: '0 10px',
-            fontFamily: 'var(--font-sans)',
-            fontWeight: 'var(--font-weight-semibold)' as CSSProperties['fontWeight'],
-            fontSize: 'var(--text-base)',
+            fontFamily: '"DM Sans", var(--font-sans)',
+            fontWeight: 600,
+            fontSize: 18,
+            letterSpacing: '-0.02em',
             color: 'var(--color-text-primary)',
             borderBottom: '1px solid var(--color-border)',
             marginBottom: 8,
             flexShrink: 0,
           }}>
-            AgileOS
+            Omada
           </div>
 
           <div style={{ marginBottom: 8 }}>
@@ -87,7 +88,7 @@ export function DashboardLayout() {
             </li>
             <li>
               <NavLink to="/app/velocity-mirror" style={({ isActive }) => navItemStyle(isActive)}>
-                Velocity Mirror
+                Sprint Pulse
               </NavLink>
             </li>
 
@@ -101,7 +102,7 @@ export function DashboardLayout() {
                 </li>
                 <li>
                   <NavLink to="/app/retrospective" style={({ isActive }) => navItemStyle(isActive)}>
-                    Retrospective
+                    Retro Prep
                   </NavLink>
                 </li>
                 <li>

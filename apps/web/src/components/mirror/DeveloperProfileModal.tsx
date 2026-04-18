@@ -77,6 +77,21 @@ export function DeveloperProfileModal({ developerId, onClose }: DeveloperProfile
           ✕
         </button>
 
+        {/* Privacy notice */}
+        <div style={{
+          background: '#12141c',
+          border: '1px solid #2d2f45',
+          borderRadius: 8,
+          padding: '10px 12px',
+          marginBottom: '1rem',
+          color: '#94a3b8',
+          fontSize: 12,
+          lineHeight: 1.5,
+          marginRight: 24,
+        }}>
+          Your velocity profile is visible to you and your team lead. It is never shared outside your team without your consent.
+        </div>
+
         {/* 403 */}
         {is403 && (
           <div style={{ color: '#fbbf24', fontSize: 14, padding: '1rem 0' }}>

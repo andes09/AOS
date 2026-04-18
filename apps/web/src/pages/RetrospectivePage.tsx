@@ -102,10 +102,10 @@ export function RetrospectivePage() {
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
         <h1 style={{ color: 'var(--color-text-primary)', fontSize: 'var(--text-xl)', fontWeight: 700, margin: 0 }}>
-          Retrospective
+          Retro Prep
         </h1>
         <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', marginTop: 4 }}>
-          AI-generated sprint retrospectives with action items and pattern tracking
+          Prepare your team for a better retro conversation
         </div>
       </div>
 

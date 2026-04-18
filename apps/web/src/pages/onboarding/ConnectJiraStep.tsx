@@ -44,7 +44,7 @@ export function ConnectJiraStep({ onNext }: ConnectJiraStepProps) {
         Connect Jira
       </h2>
       <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: '1.5rem', lineHeight: 1.6 }}>
-        Connect your Atlassian account so Sprint Brain can read your team's tickets and sprint history.
+        Connect your Atlassian account so Omada can read your team's tickets and sprint history.
       </p>
 
       {error && (

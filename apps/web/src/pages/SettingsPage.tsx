@@ -366,7 +366,7 @@ export function SettingsPage() {
         </CardHeader>
         <CardBody>
           <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: '0 0 12px' }}>
-            Required for Sprint Brain AI planning and Retrospective generation.
+            Required for Sprint Planning and Retro Prep.
           </p>
           <div style={{ display: 'flex', gap: 8 }}>
             <Input
@@ -407,7 +407,7 @@ export function SettingsPage() {
           </CardHeader>
           <CardBody>
             <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: '0 0 16px' }}>
-              Send a signup link to a teammate. They'll be added to your AOS team when they accept.
+              Send a signup link to a teammate. They'll be added to your Omada team when they accept.
             </p>
 
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8, alignItems: 'flex-end' }}>

@@ -28,7 +28,7 @@ async def send_slack_alert(
     try:
         message = template.format(**payload)
     except KeyError:
-        message = f"{payload.get('team_name', 'AgileOS')}: {alert_type}"
+        message = f"{payload.get('team_name', 'Omada')}: {alert_type}"
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -42,12 +42,12 @@ async def send_slack_alert(
 
 
 async def send_test_message(webhook_url: str, team_name: str) -> bool:
-    """Sends a simple "✅ AgileOS Slack connection verified for {team_name}" message."""
+    """Sends a simple "✅ Omada Slack connection verified for {team_name}" message."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.post(
                 webhook_url,
-                json={"text": f"✅ AgileOS Slack connection verified for {team_name}"},
+                json={"text": f"✅ Omada Slack connection verified for {team_name}"},
             )
             return r.status_code == 200
     except Exception:

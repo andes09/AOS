@@ -96,7 +96,7 @@ export function VelocityMirrorPage() {
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
             <h1 style={{ color: 'var(--color-text-primary)', fontSize: 'var(--text-xl)', fontWeight: 700, margin: 0 }}>
-              Velocity Mirror
+              Sprint Pulse
             </h1>
             {teams.length > 1 && (
               <select
@@ -120,6 +120,9 @@ export function VelocityMirrorPage() {
                 ))}
               </select>
             )}
+          </div>
+          <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', marginTop: 4 }}>
+            Live sprint health and execution signals
           </div>
           {isLoading && (
             <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', marginTop: 4 }}>Loading sprint…</div>

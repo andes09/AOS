@@ -25,7 +25,7 @@ from src.routers.teams import teams_router
 from src.routers.slack import slack_router
 
 app = FastAPI(
-    title="AgileOS API",
+    title="Omada API",
     version="0.1.0",
     docs_url="/docs" if not settings.is_production else None,
 )

@@ -363,7 +363,7 @@ export function SprintPlannerPage() {
       {plan?.enrichmentStatus && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
 
-          {/* Scope Cop status */}
+          {/* Scope Check status */}
           {plan.enrichmentStatus.scopeCop === 'not_analyzed' && !scopeAnalysisMutation.data && (
             <Alert variant="warning">
               Scope not analyzed — run Analyze Scope before planning

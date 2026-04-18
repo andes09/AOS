@@ -168,7 +168,7 @@ export function OnboardingPage() {
               Import Sprint History
             </h2>
             <p style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', margin: 0 }}>
-              Import recent completed sprints to give Sprint Brain historical context for better planning.
+              Import recent completed sprints to give Omada historical context for better sprint planning.
             </p>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -228,6 +228,19 @@ export function OnboardingPage() {
             <p style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', margin: 0 }}>
               Send invite links to your team members. They'll join via the link.
             </p>
+
+            <div style={{
+              background: 'var(--color-bg-secondary)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-md)',
+              padding: '10px 12px',
+              color: 'var(--color-text-secondary)',
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--text-xs)',
+              lineHeight: 1.5,
+            }}>
+              Omada shows individual velocity trends to developers first. Team leads see team-level trends. Individual data is never used for performance reviews.
+            </div>
 
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
               <Input

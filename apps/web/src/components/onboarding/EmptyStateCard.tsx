@@ -33,7 +33,7 @@ export function EmptyStateCard({ icon, title, description, sprintsNeeded, action
           padding: '4px 12px',
           fontWeight: 600,
         }}>
-          AI unlocks after {sprintsNeeded} more sprint{sprintsNeeded !== 1 ? 's' : ''}
+          Unlocks after {sprintsNeeded} more sprint{sprintsNeeded !== 1 ? 's' : ''}
         </div>
       )}
       {action && (

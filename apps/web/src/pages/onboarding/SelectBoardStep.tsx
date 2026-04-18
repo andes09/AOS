@@ -48,7 +48,7 @@ export function SelectBoardStep({ connectionId, onNext, onBack }: SelectBoardSte
         Select Board
       </h2>
       <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: '1.5rem', lineHeight: 1.6 }}>
-        Choose the Jira board Sprint Brain will use for sprint planning.
+        Choose the Jira board Omada will use for sprint planning.
       </p>
 
       {isLoading && (

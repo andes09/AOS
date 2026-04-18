@@ -41,7 +41,7 @@ export function SaveAnthropicKeyStep({ onNext, onBack }: SaveAnthropicKeyStepPro
         Anthropic API Key
       </h2>
       <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: '1.5rem', lineHeight: 1.6 }}>
-        Sprint Brain uses Claude to generate sprint plans. Paste your Anthropic API key — it is stored encrypted.
+        Omada uses Claude to help generate sprint plans. Paste your Anthropic API key — it is stored encrypted.
       </p>
 
       {savedMasked ? (

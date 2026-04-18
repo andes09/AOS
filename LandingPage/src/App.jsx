@@ -5,47 +5,86 @@ import { supabase } from './lib/supabase'
 const WAITLIST_COUNT = 2847
 
 const MARQUEE_ITEMS = [
-  'AGILE OS', '·', 'SPRINT INTELLIGENCE', '·', 'SCOPE COP', '·',
-  'SPRINT BRAIN', '·', 'DEPENDENCY RADAR', '·', 'VELOCITY MIRROR', '·',
-  'RETROSPECTIVE AI', '·', 'JIRA INTEGRATION', '·', 'BETA NOW OPEN', '·',
+  'OMADA', '·', 'SPRINT INTELLIGENCE', '·', 'SCOPE CHECK', '·',
+  'SPRINT PLANNING', '·', 'DEPENDENCY RADAR', '·', 'SPRINT PULSE', '·',
+  'RETRO PREP', '·', 'JIRA INTEGRATION', '·', 'BETA NOW OPEN', '·',
+]
+
+const PROBLEMS = [
+  {
+    title: 'The sprint that slips, slips the next one too',
+    body: 'One blown sprint cascades into the next. Tickets roll over. Commitments miss. The team learns nothing from it.',
+  },
+  {
+    title: 'Retros that never change anything',
+    body: '60 retros in, the same problems keep surfacing. Action items get written down and forgotten. The same sprint failure happens again next month.',
+  },
+  {
+    title: 'Dependencies that break silently',
+    body: "Jira links are just labels. You don't know a supplier's unreliable until 40% of your sprint is blocked on them. Again.",
+  },
 ]
 
 const MODULES = [
   {
     num: '01',
-    name: 'Scope Cop',
-    tag: 'Ticket Quality Enforcer',
-    phase: 'Before Sprint Planning',
-    desc: 'Every ticket analysed before planning begins. Flags vague requirements, estimation mismatches, and scope that historically causes overruns. Bad tickets stopped before they ruin a sprint.',
+    name: 'Sprint Planning',
+    phase: 'Before Sprint Starts',
+    outcome: "Plans based on your team's actual delivery history, not averages.",
+    detail: "Each developer's effective capacity accounts for meetings, PTO, and past performance on similar tickets.",
   },
   {
     num: '02',
-    name: 'Sprint Brain',
-    tag: 'Sprint Planner',
-    phase: 'Sprint Planning',
-    desc: "Builds sprint plans matched to each developer's actual delivery history — not team averages. Recommends assignments with evidence. Shows you exactly why a sprint will succeed or fail before it starts.",
+    name: 'Scope Check',
+    phase: 'Before Sprint Planning',
+    outcome: 'Surfaces vague or oversized tickets before they become sprint risks.',
+    detail: 'Flags ambiguous acceptance criteria and tickets likely to exceed their estimate based on historical patterns.',
   },
   {
     num: '03',
     name: 'Dependency Radar',
-    tag: 'Supplier & Dependency Tracker',
     phase: 'Pre-Sprint & Planning',
-    desc: 'Every external dependency tracked with a reliability score. Surfaces the risk at planning time: "This supplier delivered on time 2 of the last 6 sprints. Your plan has 40% of capacity blocked on them."',
+    outcome: 'Tracks which dependencies are actually reliable.',
+    detail: "This supplier has delivered on time 2 of the last 6 sprints. You've planned 40% of capacity around them.",
   },
   {
     num: '04',
-    name: 'Velocity Mirror',
-    tag: 'Live Sprint Dashboard',
+    name: 'Sprint Pulse',
     phase: 'During Execution',
-    desc: "Sprint failures become visible days before they're inevitable. Real-time monitoring catches stalled tickets, over-capacity developers, and blocked dependencies — with recommended interventions ranked by impact.",
+    outcome: "Real-time sprint health — know you're going to miss on day 3, not day 13.",
+    detail: 'Live burndown prediction, stalled ticket alerts, and capacity warnings throughout the sprint.',
   },
   {
     num: '05',
-    name: 'Retrospective AI',
-    tag: 'Sprint Learning Engine',
+    name: 'Retro Prep',
     phase: 'After Every Sprint',
-    desc: 'Automated retrospective reports generated at sprint close — no manual effort. Identifies patterns across sprints. Tracks action items. Closes the loop between identified problem and verified fix.',
+    outcome: 'Gives your team the data to run a better retrospective conversation.',
+    detail: 'Sprint summary, pattern detection across sprints, and action item tracking. Your team runs the retro — Omada prepares them for it.',
   },
+]
+
+const NOT_POINTS = [
+  {
+    title: 'Not an AI scrum master.',
+    body: 'Omada is a data layer. Your humans still run the ceremonies.',
+  },
+  {
+    title: 'Not a replacement for Jira.',
+    body: 'Omada connects on top. No migration, no admin burden, no plugin stacking.',
+  },
+  {
+    title: 'Not surveillance.',
+    body: 'Individual velocity data is private to each developer by default. Leads see team-level trends, not performance reviews.',
+  },
+]
+
+const INTEGRATIONS = [
+  { name: 'Jira', soon: false },
+  { name: 'Slack', soon: false },
+  { name: 'Google Calendar', soon: false },
+  { name: 'Microsoft Teams', soon: false },
+  { name: 'Linear', soon: true },
+  { name: 'GitHub', soon: true },
 ]
 
 
@@ -104,13 +143,21 @@ const { error } = await supabase
       {/* Navigation */}
       <nav className="nav" role="navigation" aria-label="Main navigation">
         <div className="nav-brand">
-          <span className="nav-logo">AOS</span>
-          <span className="nav-divider" aria-hidden="true" />
-          <span className="nav-full-name">Agile OS</span>
+          <span
+            className="nav-logo"
+            style={{
+              fontFamily: '"DM Sans", sans-serif',
+              fontWeight: 600,
+              fontSize: 20,
+              letterSpacing: '-0.02em',
+            }}
+          >
+            Omada
+          </span>
         </div>
         <div className="nav-links">
           <a href="#modules" className="nav-link">Features</a>
-          <a href="#waitlist" className="nav-cta">Request Access</a>
+          <a href="#waitlist" className="nav-cta">Join the Beta</a>
         </div>
       </nav>
 
@@ -122,15 +169,26 @@ const { error } = await supabase
               <span className="hero-badge-dot" aria-hidden="true" />
               <span>Now in Beta — Limited Access</span>
             </div>
-            <h1 className="hero-title animate-2" aria-label="Agile OS">AOS</h1>
-            <p className="hero-tagline animate-3">The Operating System for Engineering Teams</p>
+            <h1
+              className="hero-title animate-2"
+              style={{
+                fontFamily: '"DM Sans", sans-serif',
+                fontWeight: 500,
+                fontSize: 'clamp(2.5rem, 6vw, 4.5rem)',
+                lineHeight: 1.1,
+                letterSpacing: '-0.02em',
+                maxWidth: '18ch',
+              }}
+            >
+              Your sprint tools record what happened. <em style={{ fontStyle: 'italic' }}>Omada learns from it.</em>
+            </h1>
             <p className="hero-sub animate-4">
-              The planning and intelligence platform that helps engineering teams<br />
-              <em>stop repeating the same sprint failures.</em>
+              Sprint planning intelligence that connects to your existing Jira.<br />
+              No migration. No plugin stack. Works on top of what you already use.
             </p>
             <div className="hero-actions animate-5">
               <a href="#waitlist" className="btn-primary">
-                <span>Request Early Access</span>
+                <span>Join the Beta</span>
                 <ArrowIcon />
               </a>
               <a href="#modules" className="btn-ghost">
@@ -163,20 +221,58 @@ const { error } = await supabase
               <span>The problem</span>
             </div>
             <h2 className="problem-title">
-              Your tools record what happened.<br />
+              Sprint tools record what happened.<br />
               <em>None of them learn from it.</em>
             </h2>
-            <p className="problem-body">
-              Jira, Linear, GitHub Projects — they track tickets and sprint state. They do not connect
-              planning to execution to retrospective in a way that generates improvement over time.
-              Teams fail predictably, for the same reasons, sprint after sprint.
-            </p>
-            <p className="problem-body">
-              Agile OS is the intelligence layer that sits across every stage of the sprint lifecycle —
-              continuously learning from a team's patterns and making the next sprint smarter than the last.
-            </p>
-            <div className="problem-callout">
-              <p>The longer a team uses it, the smarter it becomes.</p>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                gap: 1,
+                background: 'var(--border)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius)',
+                overflow: 'hidden',
+                marginTop: '2.5rem',
+              }}
+            >
+              {PROBLEMS.map((p) => (
+                <article
+                  key={p.title}
+                  style={{
+                    background: 'var(--bg-card)',
+                    padding: '2rem 1.75rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.85rem',
+                  }}
+                >
+                  <h3
+                    style={{
+                      fontFamily: 'var(--font-display)',
+                      fontSize: '1.35rem',
+                      fontWeight: 500,
+                      lineHeight: 1.25,
+                      letterSpacing: '0.005em',
+                      margin: 0,
+                      color: 'var(--text-primary)',
+                    }}
+                  >
+                    {p.title}
+                  </h3>
+                  <p
+                    style={{
+                      fontSize: '0.92rem',
+                      color: 'var(--text-secondary)',
+                      lineHeight: 1.7,
+                      margin: 0,
+                    }}
+                  >
+                    {p.body}
+                  </p>
+                </article>
+              ))}
             </div>
           </div>
         </section>
@@ -204,25 +300,134 @@ const { error } = await supabase
                 </div>
                 <div className="module-header-row">
                   <h3 className="module-name">{m.name}</h3>
-                  <span className="module-tag">{m.tag}</span>
                 </div>
-                <p className="module-desc">{m.desc}</p>
+                <p className="module-desc">{m.outcome}</p>
+                <p
+                  style={{
+                    fontSize: '0.82rem',
+                    color: 'var(--text-muted)',
+                    lineHeight: 1.7,
+                    margin: 0,
+                    paddingTop: '0.5rem',
+                    borderTop: '1px solid var(--border)',
+                    fontStyle: 'italic',
+                  }}
+                >
+                  {m.detail}
+                </p>
               </article>
             ))}
+          </div>
+        </section>
+
+        {/* Positioning — "What Omada is not" */}
+        <section
+          style={{
+            padding: '7rem 2rem',
+            borderBottom: '1px solid var(--border)',
+          }}
+          aria-labelledby="positioning-heading"
+        >
+          <div style={{ maxWidth: 'var(--max-w)', margin: '0 auto' }}>
+            <div className="section-label left">
+              <span className="label-line" aria-hidden="true" />
+              <span>Positioning</span>
+            </div>
+            <h2
+              id="positioning-heading"
+              style={{
+                fontFamily: 'var(--font-display)',
+                fontSize: 'clamp(2rem, 4.5vw, 3.25rem)',
+                fontWeight: 400,
+                letterSpacing: '-0.01em',
+                lineHeight: 1.12,
+                margin: '1.25rem 0 2.5rem',
+                maxWidth: '20ch',
+                color: 'var(--text-primary)',
+              }}
+            >
+              What Omada <em style={{ fontStyle: 'italic' }}>is not.</em>
+            </h2>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                gap: '1.5rem',
+              }}
+            >
+              {NOT_POINTS.map((n) => (
+                <div
+                  key={n.title}
+                  style={{
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius)',
+                    padding: '1.75rem 1.5rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.6rem',
+                  }}
+                >
+                  <h3
+                    style={{
+                      fontFamily: 'var(--font-display)',
+                      fontSize: '1.15rem',
+                      fontWeight: 500,
+                      margin: 0,
+                      color: 'var(--text-primary)',
+                      lineHeight: 1.3,
+                    }}
+                  >
+                    {n.title}
+                  </h3>
+                  <p
+                    style={{
+                      fontSize: '0.9rem',
+                      color: 'var(--text-secondary)',
+                      lineHeight: 1.7,
+                      margin: 0,
+                    }}
+                  >
+                    {n.body}
+                  </p>
+                </div>
+              ))}
+            </div>
           </div>
         </section>
 
         {/* Integrations callout */}
         <section className="integrations-section" aria-label="Integrations">
           <div className="integrations-inner">
-            <p className="integrations-label">Works on top of your existing stack</p>
+            <p className="integrations-label">Connects to the tools you already use</p>
             <div className="integrations-list">
-              {['Jira', 'Linear', 'GitHub Projects'].map((tool) => (
-                <span key={tool} className="integration-chip">{tool}</span>
+              {INTEGRATIONS.map((tool) => (
+                <span
+                  key={tool.name}
+                  className="integration-chip"
+                  style={tool.soon ? { opacity: 0.65 } : undefined}
+                >
+                  {tool.name}
+                  {tool.soon && (
+                    <span
+                      style={{
+                        marginLeft: 6,
+                        fontSize: '0.62rem',
+                        fontWeight: 700,
+                        letterSpacing: '0.08em',
+                        textTransform: 'uppercase',
+                        color: 'var(--gold)',
+                      }}
+                    >
+                      Coming soon
+                    </span>
+                  )}
+                </span>
               ))}
             </div>
             <p className="integrations-note">
-              No migration required. Agile OS reads and writes to your existing tools — it doesn't replace them.
+              No migration required. Omada reads and writes to your existing tools — it doesn't replace them.
             </p>
           </div>
         </section>
@@ -240,7 +445,7 @@ const { error } = await supabase
                 <em>you could have won.</em>
               </h2>
               <p className="waitlist-desc">
-                We're onboarding beta teams now. Join the waitlist to get early access,
+                We're onboarding beta teams now. Join the beta to get early access,
                 shape the product, and see your sprint spillover drop within 3 months.
               </p>
               <p className="waitlist-count">
@@ -262,7 +467,7 @@ const { error } = await supabase
                 </div>
               ) : (
                 <form className="waitlist-form" onSubmit={handleSubmit} noValidate>
-                  <p className="form-header">Get early access to Agile OS</p>
+                  <p className="form-header">Get early access to Omada</p>
                   <div className="form-field">
                     <label htmlFor="email-input" className="form-label">Work email</label>
                     <input
@@ -284,7 +489,7 @@ const { error } = await supabase
                       <span className="spinner" aria-label="Submitting…" />
                     ) : (
                       <>
-                        <span>Join the Waitlist</span>
+                        <span>Join the Beta</span>
                         <ArrowIcon />
                       </>
                     )}
@@ -300,10 +505,20 @@ const { error } = await supabase
       {/* Footer */}
       <footer className="footer">
         <div className="footer-brand">
-          <span className="footer-logo">AOS</span>
-          <span className="footer-tagline">Agile OS — The Operating System for Engineering Teams</span>
+          <span
+            className="footer-logo"
+            style={{
+              fontFamily: '"DM Sans", sans-serif',
+              fontWeight: 600,
+              fontSize: 18,
+              letterSpacing: '-0.02em',
+            }}
+          >
+            Omada
+          </span>
+          <span className="footer-tagline">Sprint intelligence that learns from every sprint</span>
         </div>
-        <p className="footer-copy">© {new Date().getFullYear()} Agile OS. All rights reserved.</p>
+        <p className="footer-copy">© {new Date().getFullYear()} Omada. All rights reserved.</p>
       </footer>
     </>
   )

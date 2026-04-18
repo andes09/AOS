@@ -25,9 +25,9 @@ Deno.serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: 'Agile OS <onboarding@devaos.space>',
+        from: 'Omada <onboarding@devaos.space>',
         to: email,
-        subject: "You're on the Agile OS waitlist",
+        subject: "You're on the Omada beta list",
         html: thankYouEmail(email),
       }),
     })
@@ -61,7 +61,7 @@ function thankYouEmail(email: string): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>You're on the Agile OS waitlist</title>
+  <title>You're on the Omada beta list</title>
 </head>
 <body style="margin:0;padding:0;background:#050505;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#050505;padding:48px 16px;">
@@ -72,8 +72,8 @@ function thankYouEmail(email: string): string {
           <!-- Header -->
           <tr>
             <td style="padding-bottom:40px;border-bottom:1px solid rgba(240,235,224,0.08);">
-              <p style="margin:0;font-size:22px;font-weight:400;letter-spacing:6px;color:#f0ebe0;text-transform:uppercase;">
-                AOS
+              <p style="margin:0;font-family:'DM Sans',Helvetica,Arial,sans-serif;font-size:22px;font-weight:600;letter-spacing:-0.02em;color:#f0ebe0;">
+                Omada
               </p>
             </td>
           </tr>
@@ -85,7 +85,7 @@ function thankYouEmail(email: string): string {
                 You're on the list.
               </h1>
               <p style="margin:0 0 16px;font-size:15px;color:#7a7470;line-height:1.8;">
-                Thank you for signing up for the Agile OS waitlist. We're building the planning and intelligence platform that helps engineering teams stop repeating the same sprint failures.
+                Thank you for signing up for the Omada beta. We're building sprint planning intelligence that sits on top of Jira and learns from every sprint.
               </p>
               <p style="margin:0 0 32px;font-size:15px;color:#7a7470;line-height:1.8;">
                 We're onboarding beta teams now. When your spot is ready, you'll be the first to know.
@@ -100,11 +100,11 @@ function thankYouEmail(email: string): string {
                     </p>
                     <table width="100%" cellpadding="0" cellspacing="0">
                       ${[
-                        ['Scope Cop', 'Ticket quality enforced before planning begins'],
-                        ['Sprint Brain', 'Plans built on your team\'s actual delivery history'],
+                        ['Sprint Planning', 'Plans built on your team\'s actual delivery history'],
+                        ['Scope Check', 'Flags vague or oversized tickets before planning'],
                         ['Dependency Radar', 'Reliability scores for every external dependency'],
-                        ['Velocity Mirror', 'Sprint failures caught before they\'re inevitable'],
-                        ['Retrospective AI', 'Automated learning that compounds every sprint'],
+                        ['Sprint Pulse', 'Live sprint health — miss on day 3, not day 13'],
+                        ['Retro Prep', 'Data that drives a better retrospective conversation'],
                       ].map(([name, desc]) => `
                       <tr>
                         <td style="padding:10px 0;border-bottom:1px solid rgba(240,235,224,0.05);">
@@ -127,10 +127,10 @@ function thankYouEmail(email: string): string {
           <tr>
             <td style="padding-top:32px;border-top:1px solid rgba(240,235,224,0.06);">
               <p style="margin:0 0 8px;font-size:11px;color:#3d3a36;letter-spacing:1px;">
-                AGILE OS — The Operating System for Engineering Teams
+                OMADA — Sprint intelligence that learns from every sprint
               </p>
               <p style="margin:0;font-size:11px;color:#3d3a36;">
-                You're receiving this because you signed up at agileos.app.
+                You're receiving this because you signed up at devaos.space.
                 <br/>Reply to unsubscribe at any time.
               </p>
             </td>

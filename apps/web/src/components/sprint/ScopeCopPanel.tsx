@@ -99,7 +99,7 @@ export function ScopeCopPanel({ response, onReanalyze, isPending }: Props) {
       <CardBody>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
           <span style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--color-text-primary)', marginRight: 4 }}>
-            Scope Analysis
+            Scope Check
           </span>
           <Badge variant="success">{summary.readyCount} Ready</Badge>
           <Badge variant="warning">{summary.needsWorkCount} Needs Work</Badge>

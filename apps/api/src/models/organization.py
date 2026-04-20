@@ -15,6 +15,7 @@ class Organization(Base):
     slug: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     encrypted_anthropic_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     use_managed_key: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_simulated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
     onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -78,6 +78,57 @@ we agree on the approach before any code is written.
 
 If the answers are (1) yes to migration, (2) yes dual-row, (3) local only — I'll proceed. Otherwise, I'll revise.
 
-## Review section (fill in after implementation)
+## Review section
 
-_Pending implementation._
+All 5 commits landed on `tawos-importer` without touching any database:
+
+| Commit | SHA | Files |
+|---|---|---|
+| download + inspect tooling | `079fe8e` | 10 files, +588 lines |
+| schema mapper to omada models | `6c934ce` | 4 files, +464 net |
+| project import with transactions | `19fe2d8` | 2 files, +463 lines |
+| CLI + edge case handling | `012aec5` | 2 files, +414 lines |
+| README + usage docs | `35e568e` | 1 file, +187 lines |
+
+### What's built
+- `apps/api/tawos_importer/` — 10 Python modules + docker-compose.yml + README
+- `apps/api/alembic/versions/0015_tawos_simulated_and_carryover.py` —
+  `organizations.is_simulated` and `tickets.is_carryover` (both additive,
+  default FALSE, partial indexes)
+- Matching SQLAlchemy fields on Organization and Ticket models
+- PyMySQL added to api dev deps
+- `.gitignore` entry for `apps/api/tawos_importer/data/`
+
+### Safety guardrails baked in
+- `assert_not_production()` called before every mutating CLI subcommand;
+  hostname pattern list includes `api-production-2054` per user spec
+- `--reset` requires `--confirm`; touches only `is_simulated=TRUE` orgs
+- Per-project transaction: one failure rolls back the whole project, never
+  partial imports
+- `--all` is resumable (per-project failures logged but don't abort the loop)
+- Migration is additive only, safe to run on any env
+
+### Not yet executed (intentional)
+Per user instruction, NO code has been run against any database yet:
+- `alembic upgrade head` — not executed
+- `download.py`, `load_mysql.py`, `inspect.py`, `run_import.py`, `verify.py`
+  — not executed
+- The TAWOS MySQL container — not started
+- The dump — not downloaded
+
+All Python files pass `ast.parse()` syntax check. Runtime smoke test of
+the full pipeline is blocked on Railway staging being ready.
+
+### Follow-ups once staging is ready
+1. `alembic upgrade head` on staging
+2. `docker compose up -d` in `apps/api/tawos_importer/`
+3. `uv sync --extra dev` in `apps/api/`
+4. `python -m tawos_importer.download` then `load_mysql`
+5. `python -m tawos_importer.inspect` — compare the real column names to
+   the candidate lists in `mapper.py :: _pick()`; adjust if any column
+   names in the actual dump don't match what I guessed
+6. `python -m tawos_importer.run_import --project <something-small> --limit-issues 50`
+   — end-to-end smoke
+7. `python -m tawos_importer.verify --project-key <same>`
+8. If green: `--all-small`, then manual UI verification and BUGS.md
+

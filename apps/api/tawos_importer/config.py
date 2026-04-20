@@ -33,6 +33,7 @@ TAWOS_DUMP_SQL = DATA_DIR / "tawos.sql"
 # contains one of these is refused. User-supplied list; extend as prod infra grows.
 PROD_HOSTNAME_PATTERNS = (
     "api-production-2054",
+    "caboose.proxy.rlwy.net",  # Railway production Postgres endpoint
 )
 
 

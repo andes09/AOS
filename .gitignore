@@ -41,3 +41,7 @@ postgres_data/
 # Logs
 *.log
 .worktrees/
+
+# TAWOS importer — large MySQL dump + SQLite cache, never committed
+apps/api/tawos_importer/data/
+

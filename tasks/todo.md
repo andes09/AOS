@@ -1,44 +1,83 @@
-# AgileOS MVP Plan
+# TAWOS Dataset Importer — Plan
 
-## Track D — Statistical Velocity Engine
-- [ ] Per-developer velocity profiling by ticket type and domain
-- [ ] Sprint capacity modelling (PTO + meetings)
-- [ ] Confidence interval calculation
-- [ ] Service lives in `apps/api/src/services/velocity/`
+Branch: `tawos-importer` (created ✅)
 
----
+## Context gathered from reading models
 
-## Deferred
+Before writing the plan I read every Omada model under `apps/api/src/models/`.
+The task spec's conceptual mapping is correct, but several field names and
+relationships differ from what the spec describes. Those are flagged below so
+we agree on the approach before any code is written.
 
-- [ ] **Redis + Celery setup** — Jira sync tasks are enqueued via Celery but Redis isn't running locally.
-  Start Redis (`redis-server`) and a Celery worker (`celery -A src.worker worker`) to enable background sync.
-  The `sync_jira_team` task after board selection silently skips if broker is unavailable (by design for now).
-  Also note: sync uses `team.jira_board_id` with the agile board API, which needs to be updated to use
-  project-based sprint fetching since `aosTest` is a team-managed project (agile API not supported).
+## Schema mismatches vs. the task spec
 
----
+| Spec says | Reality | How I'll handle |
+|---|---|---|
+| `Organization.is_simulated` column exists | Not in model | **Alembic migration 0015** adds `is_simulated BOOLEAN NOT NULL DEFAULT FALSE` — spec explicitly allows this |
+| `Developer.display_name` | Field is `name` | Map `username` → `Developer.name` |
+| `Developer.baseline_velocity` | Field doesn't exist | Compute avg delivered pts/sprint, store on `DeveloperVelocityProfile.mean_completion_days` + `sprint_count`; keep a helper to expose it |
+| `Ticket.description` (truncate to 5000) | Field doesn't exist | Skip description entirely (title is Text and stores full title) |
+| `Ticket.is_carryover` | Field doesn't exist | **Migration 0015** adds `is_carryover BOOLEAN NOT NULL DEFAULT FALSE` |
+| `Ticket.story_points` | Field is `story_points_estimated` | Map accordingly |
+| `Ticket.assignee_developer_id` | FK is `assignee_id → team_members.id` | Create BOTH `Developer` and `TeamMember` rows per TAWOS user; `Ticket.assignee_id` points at TeamMember |
+| `Ticket.updated_at` | Field is `jira_updated_at` | Use that |
+| `Sprint.status` has FUTURE | Enum: PLANNING/ACTIVE/COMPLETED/CANCELLED | Map `FUTURE→PLANNING`, `ACTIVE→ACTIVE`, `CLOSED→COMPLETED` |
+| `Dependency.blocking_ticket_id`/`blocked_ticket_id` | Actual: `ticket_key` (blocked) + `blocked_by_key` (blocker) + `team_id` + `dependency_type` + `risk_level` + `source` | Map to actual column names |
 
-## Notes
+## Implementation plan (5 commits matching spec's commit structure)
 
-> **Future: Meeting data via Calendar integration (Google Calendar / Outlook)**
-> MVP uses manual input — team lead submits meeting hours per developer per sprint via API.
-> Full version should replace this with a calendar sync track (Track ??) that auto-detects
-> meetings and feeds them into the capacity model automatically.
+### Commit 1 — download & inspect tooling
+- [ ] Create `apps/api/tawos_importer/` with `__init__.py`, `data/` gitignore
+- [ ] `download.py`: download TAWOS SQLite from https://github.com/SOLAR-group/TAWOS, idempotent (skip if file exists with correct size)
+- [ ] `inspect.py`: print all tables, row counts, sample 5 rows per main table, full column list
+- [ ] Add `.gitignore` entry for `apps/api/tawos_importer/data/`
 
-> **Future: Custom domain granularity for velocity profiling**
-> The velocity engine currently uses a fixed `Domain` enum (`frontend`, `backend`, `infra`).
-> Consider allowing teams to define custom domains (e.g. `mobile`, `data`, `devops`) so that
-> velocity profiles and Sprint Brain citations reflect the team's actual work taxonomy.
-> Would require extending `Domain` in Track D's schemas and a migration path for existing data.
+### Commit 2 — schema mapper
+- [ ] **Migration 0015**: add `organizations.is_simulated`, `tickets.is_carryover`
+- [ ] `mapper.py`:
+  - `map_project(tawos_project) → (Organization, Team)`
+  - `map_user(tawos_user) → (Developer, TeamMember)`
+  - `map_sprint(tawos_sprint) → Sprint`
+  - `map_issue(tawos_issue, sprint_lookup, team_member_lookup) → Ticket`
+  - `map_link(tawos_link, ticket_lookup) → Dependency | None` (only blocks/is_blocked_by)
+  - All mapping functions are **pure** (dict in, SQLA model out) — easy to unit test
+  - Handle edge cases: null assignee, null points, unicode, truncation, etc.
 
-> **Dependency: DB Models not yet created**
-> `apps/api/src/models/` does not exist. A separate track must create SQLAlchemy models
-> (`Sprint`, `Ticket`, `Developer`, `PtoEntry`) before Track D can be wired to the DB.
-> Track D will be built with Pydantic input schemas as stand-ins so logic is fully decoupled
-> and can be integrated once models land.
+### Commit 3 — project import logic with transaction handling
+- [ ] `importer.py`:
+  - `async def import_project(project_id, session, limit_issues=None)`
+  - Single async DB transaction per project (rollback on any failure)
+  - Order: Org → Team → Developers (+ TeamMembers) → Sprints → Tickets (batched 500) → Dependencies
+  - Compute derived fields:
+    - `Sprint.committed_points` = sum of tickets at sprint start
+    - `Sprint.delivered_points` = sum of tickets moved to Done before sprint close
+    - `DeveloperVelocityProfile` per developer (baseline velocity)
+  - Structured logging: `[tawos] Imported <name>: N devs, M sprints, K tickets, L deps`
 
-> **Future: Clerk Webhook Handler**
-> `clerk_webhook_secret` is currently optional and unused. If user data needs to be synced
-> to the local DB on signup/update (e.g. creating a `User` record on `user.created` event),
-> a webhook handler must be built at `POST /api/webhooks/clerk` using svix signature
-> verification. Required events: `user.created`, `user.updated`, `user.deleted`.
+### Commit 4 — CLI interface + edge cases
+- [ ] `run_import.py` CLI with flags: `--list`, `--project`, `--limit-issues`, `--all-small`, `--all`, `--reset --confirm`
+- [ ] Log to `apps/api/tawos_importer/import.log` with timestamps
+- [ ] `--reset` guarded by `--confirm` and deletes only `is_simulated=TRUE` orgs (never production data)
+- [ ] Verification script `verify.py` for post-import sanity checks (orphan rows, point sums, velocity > 0)
+
+### Commit 5 — README + docs
+- [ ] `apps/api/tawos_importer/README.md`: download, inspect, import, reset, troubleshooting, known limitations
+- [ ] Note the skipped fields (comments, attachments, watchers, custom fields, resolution types)
+
+## Safety guardrails
+
+- Spec explicitly out of scope: modifying Omada model schemas beyond `is_simulated` + `is_carryover`, running against production. I will NOT run migrations or imports against prod Railway DB — local Postgres only.
+- `is_simulated` migration is additive-only (nullable/defaulted), cannot break existing data.
+- Every CLI entry point confirms the target DB URL before proceeding when it looks like a production host (hostname contains `railway`, `prod`, etc.).
+
+## Open questions for user (before I start coding)
+
+1. **Is adding migration 0015 (`is_simulated`, `is_carryover`) OK?** Spec implies yes but `is_carryover` isn't explicitly pre-approved — it's needed for the "carryover" mapping rule in the spec. Alternative: derive carryover on-read (no migration needed) by joining sprint_tickets history.
+2. **TAWOS issue → Ticket.assignee_id** points to `team_members`, not `developers`. Confirm: create both a `Developer` (for velocity/app users) and `TeamMember` (for ticket assignment) row per TAWOS username, linked by display_name? This matches how Jira-imported data works today.
+3. **Where should imports run?** `apps/api/.env` database URL — I'll read from there. Confirm this points to your local Docker Postgres (not Railway).
+
+If the answers are (1) yes to migration, (2) yes dual-row, (3) local only — I'll proceed. Otherwise, I'll revise.
+
+## Review section (fill in after implementation)
+
+_Pending implementation._

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Look for .env in the api directory, then fall back to repo root
@@ -35,6 +36,13 @@ class Settings(BaseSettings):
     @property
     def allowed_origins(self) -> list[str]:
         return [u.strip() for u in self.frontend_url.split(",")]
+
+    @field_validator("database_url")
+    @classmethod
+    def _rewrite_to_asyncpg(cls, v: str) -> str:
+        if v.startswith("postgresql://"):
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
 
 
 settings = Settings()

@@ -1,0 +1,23 @@
+services:
+  tawos-mysql:
+    image: mysql:8.0
+    container_name: tawos-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: tawos
+      MYSQL_DATABASE: tawos
+    ports:
+      - "3307:3306"   # 3307 externally to avoid collisions with any local MySQL
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max_allowed_packet=256M
+    volumes:
+      - tawos-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ptawos"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  tawos-mysql-data:

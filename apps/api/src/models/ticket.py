@@ -1,7 +1,7 @@
 import uuid
 import enum
 from datetime import datetime
-from sqlalchemy import String, DateTime, ForeignKey, Float, Enum as SAEnum, Text
+from sqlalchemy import String, DateTime, ForeignKey, Float, Enum as SAEnum, Text, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSON
 from src.database import Base
@@ -32,6 +32,7 @@ class Ticket(Base):
     time_actual_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
     labels: Mapped[list | None] = mapped_column(JSON, nullable=True)
     components: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    is_carryover: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     jira_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

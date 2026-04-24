@@ -13,9 +13,13 @@ from typing import Any
 
 
 def list_projects(conn) -> list[dict[str, Any]]:
-    """Every TAWOS project with its issue count, ordered by size descending."""
+    """Every TAWOS project with its issue count, ordered by size descending.
+
+    Returns a `Key` field (aliased from Project_Key) so downstream CLI/importer
+    code doesn't care about the actual column name.
+    """
     sql = """
-        SELECT p.ID, p.Name, p.`Key`,
+        SELECT p.ID, p.Name, p.Project_Key AS `Key`,
                (SELECT COUNT(*) FROM Issue i WHERE i.Project_ID = p.ID) AS issue_count
         FROM Project p
         ORDER BY issue_count DESC
@@ -33,7 +37,7 @@ def fetch_project(conn, project_id: int) -> dict[str, Any] | None:
 
 def fetch_project_by_key(conn, key: str) -> dict[str, Any] | None:
     with conn.cursor() as cur:
-        cur.execute("SELECT * FROM Project WHERE `Key` = %s", (key,))
+        cur.execute("SELECT * FROM Project WHERE Project_Key = %s", (key,))
         return cur.fetchone()
 
 
@@ -82,28 +86,43 @@ def fetch_issues(conn, project_id: int, limit: int | None = None) -> list[dict[s
 
 
 def fetch_blocking_links(conn, issue_ids: list[int]) -> list[dict[str, Any]]:
-    """Issue_Link rows of type 'blocks'/'is blocked by' for the given issues.
+    """Issue_Link rows representing 'blocks'/'is blocked by' relationships.
 
-    Includes the link type name and both endpoint keys so the mapper doesn't
-    need another round-trip for classification.
+    The TAWOS dump ships Issue_Link with columns:
+        ID, Issue_ID, Target_Issue_ID, Name, Description, Direction
+    There is NO separate Link_Type table — the link's human-readable text is
+    in Issue_Link.Name (e.g. 'Blocks') and Issue_Link.Description (e.g. 'is
+    blocked by', 'blocks'). Direction is 'INBOUND' | 'OUTBOUND' from the
+    perspective of Issue_ID. Each logical link is typically stored twice
+    (once per side); the mapper deduplicates.
+
+    Literal `%` must be doubled to survive PyMySQL's param substitution.
     """
     if not issue_ids:
         return []
     placeholders = ",".join(["%s"] * len(issue_ids))
     sql = f"""
-        SELECT il.ID, il.Source_Issue_ID, il.Target_Issue_ID,
-               lt.Name AS Link_Type_Name,
-               si.`Key` AS Source_Key, ti.`Key` AS Target_Key,
-               si.Title AS Source_Title, ti.Title AS Target_Title,
-               si.Resolution_Date AS Source_Resolved,
-               ti.Sprint_ID AS Target_Sprint_ID,
-               si.Sprint_ID AS Source_Sprint_ID
+        SELECT il.ID, il.Issue_ID, il.Target_Issue_ID,
+               il.Name        AS Link_Name,
+               il.Description AS Link_Description,
+               il.Direction   AS Link_Direction,
+               i1.Issue_Key      AS Source_Key,
+               i2.Issue_Key      AS Target_Key,
+               i1.Title          AS Source_Title,
+               i2.Title          AS Target_Title,
+               i1.Resolution_Date AS Source_Resolved,
+               i2.Resolution_Date AS Target_Resolved,
+               i1.Sprint_ID       AS Source_Sprint_ID,
+               i2.Sprint_ID       AS Target_Sprint_ID,
+               i1.Creation_Date   AS Source_Created,
+               i2.Creation_Date   AS Target_Created,
+               i1.Status          AS Source_Status,
+               i2.Status          AS Target_Status
         FROM Issue_Link il
-        JOIN Link_Type lt ON lt.ID = il.Link_Type_ID
-        JOIN Issue si ON si.ID = il.Source_Issue_ID
-        JOIN Issue ti ON ti.ID = il.Target_Issue_ID
-        WHERE (il.Source_Issue_ID IN ({placeholders}) OR il.Target_Issue_ID IN ({placeholders}))
-          AND (LOWER(lt.Name) LIKE '%block%' OR LOWER(lt.Outward_Description) LIKE '%block%')
+        JOIN Issue i1 ON i1.ID = il.Issue_ID
+        JOIN Issue i2 ON i2.ID = il.Target_Issue_ID
+        WHERE (il.Issue_ID IN ({placeholders}) OR il.Target_Issue_ID IN ({placeholders}))
+          AND (LOWER(il.Name) LIKE '%%block%%' OR LOWER(il.Description) LIKE '%%block%%')
     """
     with conn.cursor() as cur:
         cur.execute(sql, tuple(issue_ids) + tuple(issue_ids))

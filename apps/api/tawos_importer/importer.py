@@ -188,6 +188,7 @@ async def _do_import(
     sprint_to_id: dict[str, uuid.UUID] = {}
     sprint_objects: dict[str, Sprint] = {}
     sprint_start_by_sprint_id: dict[uuid.UUID, date | None] = {}
+    sprint_end_by_sprint_id: dict[uuid.UUID, date | None] = {}
 
     for sprint_row in sprint_rows:
         sprint_obj = map_sprint(sprint_row)
@@ -203,6 +204,7 @@ async def _do_import(
     for tid, sobj in sprint_objects.items():
         sprint_to_id[tid] = sobj.id
         sprint_start_by_sprint_id[sobj.id] = sobj.start_date
+        sprint_end_by_sprint_id[sobj.id] = sobj.end_date
     summary.sprints = len(sprint_to_id)
 
     # -------- 4. Tickets (batched) ------------------------------------ #
@@ -271,33 +273,47 @@ async def _do_import(
     summary.sprint_tickets = len(sprint_ticket_rows)
 
     # -------- 6. Dependencies ---------------------------------------- #
-    # Build a ticket-key → Sprint lookup so map_link_risk has the blocked
-    # ticket's sprint_start (the rule hinges on that date).
+    # Build ticket-key → sprint date lookups so map_link_risk has both the
+    # blocked ticket's sprint_start AND the blocker's sprint_end available;
+    # all three risk branches (LOW / MEDIUM / HIGH) depend on these.
     key_to_sprint_start: dict[str, date | None] = {}
+    key_to_sprint_end: dict[str, date | None] = {}
     for ticket, _ in ticket_for_sprint_ticket:
         if ticket.jira_issue_key and ticket.sprint_id is not None:
             key_to_sprint_start[ticket.jira_issue_key] = \
                 sprint_start_by_sprint_id.get(ticket.sprint_id)
+            key_to_sprint_end[ticket.jira_issue_key] = \
+                sprint_end_by_sprint_id.get(ticket.sprint_id)
 
+    # Each logical blocking link appears twice in Issue_Link (once per side),
+    # so we dedupe by (blocked, blocker) after mapping.
+    seen_deps: set[tuple[str, str]] = set()
     dep_count = 0
     for link_row in link_rows:
+        source_key = link_row.get("Source_Key")
+        target_key = link_row.get("Target_Key")
         mapped = map_link(
             link_row=link_row,
-            link_type_name=link_row.get("Link_Type_Name"),
-            source_ticket_key=link_row.get("Source_Key"),
-            target_ticket_key=link_row.get("Target_Key"),
-            blocker_resolved=link_row.get("Source_Resolved"),
-            blocker_sprint_end=None,
-            blocked_sprint_start=key_to_sprint_start.get(
-                str(link_row.get("Target_Key")) if link_row.get("Target_Key") else ""
-            ),
+            source_sprint_start=key_to_sprint_start.get(str(source_key)) if source_key else None,
+            target_sprint_start=key_to_sprint_start.get(str(target_key)) if target_key else None,
+            source_sprint_end=key_to_sprint_end.get(str(source_key)) if source_key else None,
+            target_sprint_end=key_to_sprint_end.get(str(target_key)) if target_key else None,
         )
         if mapped is None:
             continue
+        dep_key = (mapped.ticket_key, mapped.blocked_by_key)
+        if dep_key in seen_deps:
+            continue
+        seen_deps.add(dep_key)
+        # Prefer the blocked-side's title when available.
+        if mapped.ticket_key == str(source_key):
+            ticket_title = link_row.get("Source_Title")
+        else:
+            ticket_title = link_row.get("Target_Title")
         session.add(build_dependency(
             mapped,
             team_id=team_id,
-            ticket_title=link_row.get("Target_Title"),
+            ticket_title=ticket_title,
         ))
         dep_count += 1
     await session.flush()

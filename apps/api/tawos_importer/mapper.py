@@ -199,8 +199,16 @@ def map_user(row: dict[str, Any]) -> tuple[Developer, TeamMember]:
 
     The two are linked via identical display_name + a shared tawos_account_id
     prefix, so resolution is O(1) via a lookup dict in the importer.
+
+    The shipped TAWOS dump anonymizes users completely — the User table has
+    only (ID, Project_ID). We synthesize `user_<ID>` as the handle so every
+    assignee remains distinct and stable across re-imports. Earlier dataset
+    versions carried Username/Full_Name columns, so the code still prefers
+    real values when present.
     """
-    username = str(_pick(row, "Username", "username", "Name", "name") or "unknown")
+    tawos_id = row.get("ID")
+    username_fallback = f"user_{tawos_id}" if tawos_id is not None else f"user_{uuid.uuid4().hex[:8]}"
+    username = str(_pick(row, "Username", "username", "Name", "name") or username_fallback)
     full_name = str(_pick(row, "Full_Name", "full_name", "Display_Name") or username)
     account_id = f"tawos_{username.lower()}"
 
@@ -254,8 +262,15 @@ def map_issue(
     Unknown assignees (e.g. unassigned tickets or reporters-only in an earlier
     sprint whose username vanished) resolve to None without raising.
     """
-    jira_id = str(_pick(row, "Jira_ID", "jira_id", "ID", "id"))
-    jira_key = _pick(row, "Key", "key", "Issue_Key")
+    # `tickets.jira_issue_id` has a global UNIQUE constraint, but TAWOS Jira_ID
+    # values are only unique within one source Jira instance — across the 39
+    # TAWOS projects (sourced from different Jiras: Apache, Atlassian,
+    # Hyperledger, etc.) numeric Jira_IDs collide freely. TAWOS Issue.ID is the
+    # TAWOS-internal PK and is globally unique, so we use it with a "tawos_"
+    # prefix to guarantee uniqueness and mark provenance.
+    tawos_pk = _pick(row, "ID", "id")
+    jira_id = f"tawos_{tawos_pk}"
+    jira_key = _pick(row, "Issue_Key", "Key", "key")
 
     title = _pick(row, "Title", "title", "Summary", "summary") or f"(no title) {jira_key or jira_id}"
     title = _truncate(str(title), MAX_TITLE_LEN, warnings, f"title {jira_key or jira_id}")
@@ -269,7 +284,7 @@ def map_issue(
     raw_assignee = _pick(row, "Assignee_ID", "assignee_id")
     assignee_id = member_lookup.get(str(raw_assignee)) if raw_assignee is not None else None
 
-    created = _to_datetime(_pick(row, "Created_Date", "created_date", "Created", "created_at"))
+    created = _to_datetime(_pick(row, "Creation_Date", "Created_Date", "created_date", "Created", "created_at"))
     resolved = _to_datetime(_pick(row, "Resolution_Date", "resolution_date", "Resolved"))
     updated = _to_datetime(_pick(row, "Last_Updated", "last_updated", "Updated"))
 
@@ -306,18 +321,37 @@ def is_block_link(link_type_name: str | None) -> bool:
     return link_type_name.strip().lower() in _BLOCK_LINK_NAMES
 
 
+STALE_BLOCKER_AGE_DAYS = 60
+
+
 def map_link_risk(
     blocker_resolved: datetime | None,
     blocker_sprint_end: date | None,
     blocked_sprint_start: date | None,
+    blocker_created_at: datetime | None = None,
+    blocker_is_done: bool = False,
 ) -> RiskLevel:
-    """Classify dependency risk using the rule from the spec:
-      - blocker resolved before the blocked ticket's sprint started → LOW
-      - blocker has slipped past its own sprint end → HIGH
-      - otherwise → MEDIUM
+    """Classify dependency risk.
+
+    LOW:
+      - blocker resolved before the blocked ticket's sprint started.
+
+    HIGH (two independent triggers — either one promotes the dep to HIGH):
+      - sprint-based: blocker has slipped past its own sprint end (either
+        still unresolved past that date, or resolved after it)
+      - staleness-based: blocker is not done AND was created more than
+        `STALE_BLOCKER_AGE_DAYS` before the blocked ticket's sprint_start
+        (or before today if the blocked ticket has no sprint). This catches
+        the common TAWOS/Jira pattern where the blocker is a long-lived
+        backlog ticket that was never scheduled — the sprint-based trigger
+        can't fire in that case because the blocker has no sprint_end.
+
+    MEDIUM: everything else.
     """
     if blocker_resolved and blocked_sprint_start and blocker_resolved.date() <= blocked_sprint_start:
         return RiskLevel.LOW
+
+    # HIGH branch 1 — sprint-based
     if blocker_sprint_end and not blocker_resolved and blocker_sprint_end < date.today():
         return RiskLevel.HIGH
     if (
@@ -326,38 +360,76 @@ def map_link_risk(
         and blocker_resolved.date() > blocker_sprint_end
     ):
         return RiskLevel.HIGH
+
+    # HIGH branch 2 — staleness-based
+    if not blocker_is_done and blocker_created_at:
+        reference = blocked_sprint_start or date.today()
+        age_days = (reference - blocker_created_at.date()).days
+        if age_days > STALE_BLOCKER_AGE_DAYS:
+            return RiskLevel.HIGH
+
     return RiskLevel.MEDIUM
 
 
 def map_link(
     link_row: dict[str, Any],
-    link_type_name: str | None,
-    source_ticket_key: str | None,
-    target_ticket_key: str | None,
-    blocker_resolved: datetime | None,
-    blocker_sprint_end: date | None,
-    blocked_sprint_start: date | None,
+    source_sprint_start: date | None,
+    target_sprint_start: date | None,
+    source_sprint_end: date | None,
+    target_sprint_end: date | None,
 ) -> MappedLink | None:
     """TAWOS Issue_Link → Omada Dependency (or None if not a blocking link).
 
-    `source` in Jira/TAWOS is the OUTWARD side (the blocker for "blocks"
-    links); `target` is the INWARD side (the blocked ticket). We normalise to
-    Omada's `ticket_key` = blocked, `blocked_by_key` = blocker.
+    Issue_Link in the shipped TAWOS dump stores, for each link, one row per
+    side (e.g. {Name='Blocks', Description='is blocked by', Direction='INBOUND'}
+    and a matching {Description='blocks', Direction='OUTBOUND'} row). The
+    description text is authoritative about which end blocks which — we read
+    it directly and let the importer dedupe by (blocked, blocker).
+
+    `Issue_ID` is the viewer of the link (Source_Key); `Target_Issue_ID` is
+    the other end (Target_Key).
+
+    For risk classification we need the BLOCKER's sprint_end and the BLOCKED
+    ticket's sprint_start. Which side is which flips based on the description
+    text — we pick the right pair below.
     """
-    if not is_block_link(link_type_name):
-        return None
-    if not source_ticket_key or not target_ticket_key:
+    name = (link_row.get("Link_Name") or "").strip().lower()
+    desc = (link_row.get("Link_Description") or "").strip().lower()
+
+    if "block" not in name and "block" not in desc:
         return None
 
-    # For TAWOS "blocks" links: source blocks target.
-    # For "is blocked by": source is blocked by target — swap.
-    lname = (link_type_name or "").strip().lower()
-    if lname in {"is blocked by", "is-blocked-by", "blocked by"}:
-        blocker_key, blocked_key = target_ticket_key, source_ticket_key
+    source_key = link_row.get("Source_Key")   # = Issue_ID's jira key
+    target_key = link_row.get("Target_Key")   # = Target_Issue_ID's jira key
+    if not source_key or not target_key:
+        return None
+
+    # Description describes Issue_ID's relationship to Target_Issue_ID.
+    #   "is blocked by" → source is blocked, target is blocker
+    #   "blocks"        → source blocks, target is blocked
+    if "blocked by" in desc or "is blocked" in desc:
+        blocked_key, blocker_key = source_key, target_key
+        blocker_resolved = _to_datetime(link_row.get("Target_Resolved"))
+        blocked_sprint_start = source_sprint_start
+        blocker_sprint_end = target_sprint_end
+        blocker_created_at = _to_datetime(link_row.get("Target_Created"))
+        blocker_status_raw = link_row.get("Target_Status")
     else:
-        blocker_key, blocked_key = source_ticket_key, target_ticket_key
+        blocked_key, blocker_key = target_key, source_key
+        blocker_resolved = _to_datetime(link_row.get("Source_Resolved"))
+        blocked_sprint_start = target_sprint_start
+        blocker_sprint_end = source_sprint_end
+        blocker_created_at = _to_datetime(link_row.get("Source_Created"))
+        blocker_status_raw = link_row.get("Source_Status")
 
-    risk = map_link_risk(blocker_resolved, blocker_sprint_end, blocked_sprint_start)
+    blocker_is_done = map_ticket_status(blocker_status_raw) == TicketStatus.DONE
+    risk = map_link_risk(
+        blocker_resolved,
+        blocker_sprint_end,
+        blocked_sprint_start,
+        blocker_created_at=blocker_created_at,
+        blocker_is_done=blocker_is_done,
+    )
 
     return MappedLink(
         ticket_key=str(blocked_key)[:50],

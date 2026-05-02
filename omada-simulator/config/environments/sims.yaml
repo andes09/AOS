@@ -1,0 +1,20 @@
+name: "sims"
+description: "Sims Railway environment"
+
+omada:
+  api_url: "https://api-sims-cc98.up.railway.app"
+
+jira:
+  url: "https://omada-sim.atlassian.net"
+  project_key_prefix: "SIM"
+
+safety:
+  allow_production: false
+  required_url_substrings:
+    - "sims"
+  block_url_substrings:
+    - "production"
+    - "api-production-2054"
+    - "caboose"
+  max_real_users_in_org: 5
+  require_simulated_org: false

@@ -1,0 +1,19 @@
+name: "production"
+description: "BLOCKED — this config refuses to run"
+
+omada:
+  api_url: "https://api-production-2054.up.railway.app"
+
+jira:
+  url: ""
+  project_key_prefix: ""
+
+safety:
+  allow_production: false
+  refuse_with_message: |
+    Refusing to run simulator against production.
+    Use --env local for local development or --env sims for the
+    Railway Sims environment.
+  required_url_substrings: []
+  block_url_substrings: []
+  max_real_users_in_org: 0

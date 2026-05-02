@@ -27,17 +27,6 @@ interface CurrentSprint {
   totalPoints: number
 }
 
-interface CompletedSprint {
-  id: string
-  name: string
-  startDate: string | null
-  endDate: string | null
-}
-
-interface CompletedSprintsResponse {
-  sprints: CompletedSprint[]
-}
-
 export function VelocityMirrorPage() {
   const [window, setWindow] = useState(6)
   const [fromDate, setFromDate] = useState<string | null>(null)
@@ -63,12 +52,6 @@ export function VelocityMirrorPage() {
   const { data: sprint, isLoading, isError, error } = useQuery<CurrentSprint, ApiError>({
     queryKey: ['current-sprint', activeTeamId],
     queryFn: () => get<CurrentSprint>(`/api/sprints/current${teamParam}`),
-    enabled: isLoaded && isSignedIn,
-  })
-
-  const { data: completedSprintsData } = useQuery<CompletedSprintsResponse>({
-    queryKey: ['completed-sprints', activeTeamId],
-    queryFn: () => get<CompletedSprintsResponse>(`/api/sprints/completed${teamParam}`),
     enabled: isLoaded && isSignedIn,
   })
 
@@ -143,23 +126,9 @@ export function VelocityMirrorPage() {
           )}
         </div>
 
-        {/* Health score + completed sprint retro links */}
+        {/* Health score */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
           <SprintHealthScore sprintId={sprint?.id} />
-          {(completedSprintsData?.sprints ?? []).length > 0 && (
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              {(completedSprintsData?.sprints ?? []).slice(0, 3).map(s => (
-                <Button
-                  key={s.id}
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => navigate(`/app/retrospective?sprintId=${s.id}`)}
-                >
-                  {s.name} · View Retro
-                </Button>
-              ))}
-            </div>
-          )}
         </div>
       </div>
 
@@ -184,38 +153,6 @@ export function VelocityMirrorPage() {
             teamId={activeTeamId}
           />
           <DeveloperCapacityRow teamId={activeTeamId} />
-
-          {/* Completed sprints */}
-          {(completedSprintsData?.sprints ?? []).length > 0 && (
-            <Card>
-              <CardBody>
-                <div style={{
-                  color: 'var(--color-text-muted)',
-                  fontSize: 'var(--text-xs)',
-                  fontWeight: 600,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.06em',
-                  marginBottom: 10,
-                }}>
-                  Completed Sprints
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {(completedSprintsData?.sprints ?? []).map(s => (
-                    <div key={s.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                      <span style={{ color: 'var(--color-text-primary)', fontSize: 'var(--text-sm)' }}>{s.name}</span>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => navigate(`/app/retrospective?sprintId=${s.id}`)}
-                      >
-                        View Retro
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              </CardBody>
-            </Card>
-          )}
         </div>
 
         {/* Right: alerts + high-risk dep alerts */}

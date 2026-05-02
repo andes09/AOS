@@ -19,6 +19,15 @@ import { Card, CardBody } from '../ui/Card'
 interface SprintPoint {
   name: string
   velocity: number
+  startDate: string | null
+}
+
+function formatSprintDate(startDate: string | null, fallback: string): string {
+  if (!startDate) return fallback
+  // API returns YYYY-MM-DD; force UTC to avoid timezone shifting the calendar day.
+  const d = new Date(startDate)
+  if (Number.isNaN(d.getTime())) return fallback
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
 interface VelocityStatsData {
@@ -124,6 +133,7 @@ export function VelocityStatsChart({ window, fromDate, visibleMetrics, teamId }:
       const { rolling, weighted } = trailingAvgs(slice)
       return {
         name: s.name,
+        dateLabel: formatSprintDate(s.startDate, s.name),
         velocity: s.velocity,
         rollingAvg: rolling,
         weightedAvg: weighted,
@@ -133,6 +143,7 @@ export function VelocityStatsChart({ window, fromDate, visibleMetrics, teamId }:
     }),
     {
       name: 'Forecast',
+      dateLabel: 'Forecast',
       velocity: undefined as number | undefined,
       rollingAvg: undefined as number | undefined,
       weightedAvg: undefined as number | undefined,
@@ -170,7 +181,7 @@ export function VelocityStatsChart({ window, fromDate, visibleMetrics, teamId }:
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} />
           <XAxis
-            dataKey="name"
+            dataKey="dateLabel"
             tick={{ fill: CHART.velocity, fontSize: 10 }}
             tickLine={false}
             axisLine={false}

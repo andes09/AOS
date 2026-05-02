@@ -368,6 +368,7 @@ class SprintPoint(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
     name: str
     velocity: float
+    start_date: date | None = None
 
 
 class VelocityStatsResponse(BaseModel):
@@ -577,7 +578,7 @@ async def get_velocity_stats(
     ]
 
     sprint_window_points = [
-        SprintPoint(name=s.name, velocity=float(s.delivered_points))
+        SprintPoint(name=s.name, velocity=float(s.delivered_points), start_date=s.start_date)
         for s in window_sprints
     ]
 

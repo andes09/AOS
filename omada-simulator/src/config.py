@@ -145,7 +145,12 @@ def validate_safety(env: EnvironmentConfig) -> None:
         )
 
 
-async def verify_connectivity(env: EnvironmentConfig, secrets: Secrets) -> None:
+async def verify_connectivity(
+    env: EnvironmentConfig,
+    secrets: Secrets,
+    *,
+    transport: Optional[httpx.AsyncBaseTransport] = None,
+) -> None:
     """Ping the Omada API and verify the env looks like what the config claims.
 
     Steps:
@@ -153,13 +158,17 @@ async def verify_connectivity(env: EnvironmentConfig, secrets: Secrets) -> None:
     2. GET {api_url}/api/organizations with Clerk token; count <= max_real_users_in_org.
     3. If require_simulated_org is True, confirm the active org has is_simulated=True.
 
-    Raises SystemExit if any check fails.
+    Raises SystemExit if any check fails. The optional ``transport`` parameter
+    is for tests — production code should leave it as None.
     """
     base = env.omada.api_url.rstrip("/")
     headers = {"Authorization": f"Bearer {secrets.omada_clerk_token}"}
 
     timeout = httpx.Timeout(10.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    client_kwargs = {"timeout": timeout}
+    if transport is not None:
+        client_kwargs["transport"] = transport
+    async with httpx.AsyncClient(**client_kwargs) as client:
         try:
             health = await client.get(f"{base}/health")
         except httpx.HTTPError as e:

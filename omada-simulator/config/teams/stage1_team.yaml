@@ -1,0 +1,27 @@
+team_name: "Stage1 Test Team"
+sprint_length_minutes: 30
+total_sprints: 3
+ticket_pool_size: 100
+
+developers:
+  - name: "Alex"
+    completion_rate: 0.85
+    speed: 1.0
+  - name: "Jordan"
+    completion_rate: 0.70
+    speed: 0.9
+  - name: "Sam"
+    completion_rate: 0.90
+    speed: 1.1
+  - name: "Riley"
+    completion_rate: 0.75
+    speed: 0.95
+
+ticket_distribution:
+  type:
+    Story: 0.5
+    Bug: 0.3
+    Task: 0.2
+  story_points: [1, 2, 3, 5, 8]
+
+dependency_density: 0.1

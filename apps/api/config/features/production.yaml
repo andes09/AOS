@@ -1,0 +1,8 @@
+features:
+  push_to_jira: false
+  scope_check_v2: false
+  multi_team_dashboard: false
+  exec_dashboard: false
+  data_collection_phase: false
+  retro_pattern_detection: true
+  skill_based_assignment: false

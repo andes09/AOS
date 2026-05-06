@@ -23,6 +23,7 @@ from src.routers.onboarding import onboarding_router, invitations_router
 from src.routers.capacity import capacity_router
 from src.routers.teams import teams_router
 from src.routers.slack import slack_router
+from src.routers.features import router as features_router
 
 app = FastAPI(
     title="Omada API",
@@ -64,6 +65,7 @@ app.include_router(invitations_router, prefix="/api/invitations")
 app.include_router(capacity_router, prefix="/api/capacity")
 app.include_router(teams_router, prefix="/api/teams")
 app.include_router(slack_router, prefix="/api/teams")
+app.include_router(features_router)
 
 
 @app.get("/health")

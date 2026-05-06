@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import get_current_org_id
 from src.auth_roles import require_role
+from src.config import settings
 from src.database import get_db
 from src.models.organization import Organization
 from src.models.sprint import Sprint, SprintStatus, SprintTicket
@@ -121,6 +122,8 @@ async def get_sector_overview(
     db: AsyncSession = Depends(get_db),
 ):
     """Aggregate health and velocity overview for all teams in the organisation."""
+    if not settings.is_feature_enabled("exec_dashboard"):
+        raise HTTPException(status_code=404, detail="Feature not available")
     org = await db.scalar(
         select(Organization).where(Organization.clerk_org_id == clerk_org_id)
     )

@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
     encryption_key: str  # 32-byte hex string
 
-    environment: str = "development"
+    environment: str = "local"
     frontend_url: str = "http://localhost:5174"
     api_url: str = "http://localhost:8000"
 

@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { SignedIn, SignedOut, RedirectToSignIn, SignIn } from '@clerk/clerk-react'
 import { DashboardLayout } from './layouts/DashboardLayout'
 import { OrgProvider } from './components/OrgProvider'
+import { RequireFeature } from './components/RequireFeature'
 import { SprintPlannerPage } from './pages/SprintPlannerPage'
 import { VelocityMirrorPage } from './pages/VelocityMirrorPage'
 import { ExecDashboardPage } from './pages/ExecDashboardPage'
@@ -39,10 +40,14 @@ export default function App() {
         <Route index element={<Navigate to="sprint-planner" replace />} />
         <Route path="sprint-planner" element={<SprintPlannerPage />} />
         <Route path="velocity-mirror" element={<VelocityMirrorPage />} />
-        <Route path="exec-dashboard" element={<ExecDashboardPage />} />
+        <Route path="exec-dashboard" element={
+          <RequireFeature flag="exec_dashboard"><ExecDashboardPage /></RequireFeature>
+        } />
         <Route path="dependency-radar" element={<DependencyRadarPage />} />
         <Route path="retrospective" element={<RetrospectivePage />} />
-        <Route path="multi-team" element={<MultiTeamDashboardPage />} />
+        <Route path="multi-team" element={
+          <RequireFeature flag="multi_team_dashboard"><MultiTeamDashboardPage /></RequireFeature>
+        } />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/app" replace />} />

@@ -4,5 +4,5 @@ features:
   multi_team_dashboard: false
   exec_dashboard: false
   data_collection_phase: false
-  retro_pattern_detection: true
+  retro_pattern_detection: false
   skill_based_assignment: false

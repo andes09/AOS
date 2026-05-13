@@ -113,7 +113,7 @@ async def jira_callback(
     db.add(connection)
     await db.commit()
 
-    frontend_base = settings.allowed_origins[0]
+    frontend_base = settings.frontend_url.split(",")[0].strip()
     return RedirectResponse(
         f"{frontend_base}/onboarding?connection_id={connection.id}"
     )

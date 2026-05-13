@@ -15,7 +15,8 @@ One-time steps to flip production deploys from `main` to `release`. Do these in 
 4. [ ] Save. Railway will *not* redeploy until the next push to `release`.
 5. [ ] Go to **Variables**.
 6. [ ] Confirm `ENVIRONMENT=production` is set. Add it if missing.
-7. [ ] Confirm all other required vars are present: `DATABASE_URL`, `DATABASE_URL_SYNC`, `REDIS_URL`, `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_WEBHOOK_SECRET`, `ENCRYPTION_KEY`, `FRONTEND_URL`, `API_URL`, `JIRA_CLIENT_ID`, `JIRA_CLIENT_SECRET`, `JIRA_REDIRECT_URI`.
+7. [ ] Confirm `FRONTEND_URL=<your production frontend URL>` is set (e.g. `https://omada.up.railway.app`). Comma-separate if multiple origins. **Without this, the API will reject browser requests with CORS errors.**
+8. [ ] Confirm all other required vars are present: `DATABASE_URL`, `DATABASE_URL_SYNC`, `REDIS_URL`, `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_WEBHOOK_SECRET`, `ENCRYPTION_KEY`, `API_URL`, `JIRA_CLIENT_ID`, `JIRA_CLIENT_SECRET`, `JIRA_REDIRECT_URI`.
 
 ## Railway: Web service
 

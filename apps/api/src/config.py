@@ -36,7 +36,20 @@ class Settings(BaseSettings):
 
     @property
     def allowed_origins(self) -> list[str]:
-        return [u.strip() for u in self.frontend_url.split(",")]
+        origins = [
+            o.strip() for o in self.frontend_url.split(",") if o.strip()
+        ]
+        if self.environment == "local":
+            local_defaults = [
+                "http://localhost:5173",
+                "http://localhost:5174",
+                "http://localhost:3000",
+                "http://127.0.0.1:5174",
+            ]
+            for o in local_defaults:
+                if o not in origins:
+                    origins.append(o)
+        return origins
 
     @property
     def feature_flags(self) -> dict[str, bool]:

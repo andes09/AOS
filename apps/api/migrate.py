@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
 
 
-HEAD = "0014"
+HEAD = "0015"
 
 MIGRATIONS = [
     # (revision_id, sql_statements)
@@ -130,9 +130,10 @@ MIGRATIONS = [
         """CREATE INDEX IF NOT EXISTS ix_dev_velocity_developer_id ON developer_velocity_profiles(developer_id)""",
         """CREATE INDEX IF NOT EXISTS ix_dev_velocity_team_id ON developer_velocity_profiles(team_id)""",
     ]),
-    ("init002", [
-        """ALTER TABLE sprints ADD COLUMN IF NOT EXISTS alert_sent BOOLEAN NOT NULL DEFAULT FALSE""",
-    ]),
+    # init002 historically attempted `ALTER TABLE sprints ADD COLUMN alert_sent`,
+    # but no such column exists on the Sprint model — sprint_alerts is a separate
+    # table created in revision 0015 below.
+    ("init002", []),
     ("init003", [
         """ALTER TABLE teams ADD COLUMN IF NOT EXISTS jira_project_key VARCHAR(100)""",
     ]),
@@ -337,6 +338,31 @@ MIGRATIONS = [
         CREATE UNIQUE INDEX IF NOT EXISTS uq_slack_config_team
             ON slack_configs(team_id) WHERE is_active = TRUE
         """,
+    ]),
+    ("0015", [
+        """
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'alerttype') THEN
+                CREATE TYPE alerttype AS ENUM (
+                    'stalled_ticket','over_capacity','dependency_risk','spillover_prediction'
+                );
+            END IF;
+        END $$
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sprint_alerts (
+            id                  UUID PRIMARY KEY,
+            sprint_id           UUID NOT NULL REFERENCES sprints(id),
+            team_id             UUID NOT NULL REFERENCES teams(id),
+            type                alerttype NOT NULL,
+            description         TEXT NOT NULL,
+            recommended_action  TEXT NOT NULL,
+            dismissed           BOOLEAN   NOT NULL DEFAULT FALSE,
+            created_at          TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        """CREATE INDEX IF NOT EXISTS ix_sprint_alerts_sprint_id ON sprint_alerts(sprint_id)""",
+        """CREATE INDEX IF NOT EXISTS ix_sprint_alerts_team_id ON sprint_alerts(team_id)""",
     ]),
 ]
 

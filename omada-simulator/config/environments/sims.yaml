@@ -16,5 +16,4 @@ safety:
     - "production"
     - "api-production-2054"
     - "caboose"
-  max_real_users_in_org: 5
-  require_simulated_org: false
+  refuse_with_message: null

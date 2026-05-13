@@ -1,5 +1,5 @@
 name: "local"
-description: "Local Omada instance with local Postgres"
+description: "Local Omada instance running on localhost"
 
 omada:
   api_url: "http://localhost:8000"
@@ -16,5 +16,4 @@ safety:
   block_url_substrings:
     - "production"
     - "api-production"
-  max_real_users_in_org: 5
-  require_simulated_org: false
+  refuse_with_message: null

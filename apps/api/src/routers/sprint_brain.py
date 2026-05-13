@@ -34,6 +34,7 @@ from sqlalchemy import select, func
 
 from src.auth import get_current_user_id, get_current_org_id
 from src.auth_roles import require_role
+from src.config import settings
 from src.database import get_db
 from src.integrations.jira.push import resolve_jira_account_id
 from src.integrations.jira.sync import _get_fresh_client
@@ -592,6 +593,8 @@ async def push_to_jira(
 
     Requires 'lead' role or higher.
     """
+    if not settings.is_feature_enabled("push_to_jira"):
+        raise HTTPException(status_code=404, detail="Feature not available")
     # 1. Resolve team by teamId — 404 if not found
     resolved_team_id = await _resolve_team_id(request.teamId, clerk_org_id, db)
     import uuid as _uuid

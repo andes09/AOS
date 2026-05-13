@@ -13,6 +13,7 @@ import { MeetingLoadWarning } from '../components/sprint/MeetingLoadWarning'
 import { Button } from '../components/ui/Button'
 import { Alert } from '../components/ui/Alert'
 import { Card, CardBody } from '../components/ui/Card'
+import { useFeature } from '../featureFlags'
 import { useNavigate } from 'react-router-dom'
 import type { SprintPlanResponse, WhatIfResponse, Ticket, PushToJiraResponse } from '../types/sprint'
 import type { AnalyzeResponse } from '../types/scopeCop'
@@ -71,6 +72,7 @@ function RecurringIssuesPanel({ warnings }: { warnings: string[] }) {
 export function SprintPlannerPage() {
   const { post, get } = useApi()
   const navigate = useNavigate()
+  const canPushToJira = useFeature('push_to_jira')
 
   const [plan, setPlan] = useState<SprintPlanResponse | null>(() => {
     try {
@@ -258,7 +260,7 @@ export function SprintPlannerPage() {
             {generatePlan.isPending ? 'Generating...' : 'Generate Plan'}
           </Button>
 
-          {plan && (
+          {plan && canPushToJira && (
             <Button
               variant="secondary"
               onClick={() => pushMutation.mutate()}

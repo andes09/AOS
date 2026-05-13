@@ -6,6 +6,7 @@ import { RoleSwitcher } from '../components/RoleSwitcher'
 import { TeamProvider } from '../contexts/TeamContext'
 import { TeamSwitcher } from '../components/TeamSwitcher'
 import { ThemeToggle } from '../components/ui/ThemeToggle'
+import { useFeature } from '../featureFlags'
 
 function navItemStyle(isActive: boolean): CSSProperties {
   return {
@@ -42,6 +43,8 @@ export function DashboardLayout() {
   const { appRole } = useAppRole()
   const canSeeLead = appRole === 'lead' || appRole === 'exec' || appRole === 'admin'
   const canSeeExec = appRole === 'exec' || appRole === 'admin'
+  const showMultiTeam = useFeature('multi_team_dashboard')
+  const showExecDashboard = useFeature('exec_dashboard')
 
   return (
     <TeamProvider>
@@ -105,15 +108,17 @@ export function DashboardLayout() {
                     Retro Prep
                   </NavLink>
                 </li>
-                <li>
-                  <NavLink to="/app/multi-team" style={({ isActive }) => navItemStyle(isActive)}>
-                    Multi-Team
-                  </NavLink>
-                </li>
+                {showMultiTeam && (
+                  <li>
+                    <NavLink to="/app/multi-team" style={({ isActive }) => navItemStyle(isActive)}>
+                      Multi-Team
+                    </NavLink>
+                  </li>
+                )}
               </>
             )}
 
-            {canSeeExec && (
+            {canSeeExec && showExecDashboard && (
               <>
                 <li style={sectionLabel}>Executive</li>
                 <li>

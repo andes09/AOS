@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import get_current_org_id, get_current_user_id
 from src.auth_roles import require_role
+from src.config import settings
 from src.database import get_db
 from src.models.developer import Developer
 from src.models.organization import Organization
@@ -109,6 +110,8 @@ async def multi_dashboard(
     _role: str = Depends(require_role("lead")),
     db: AsyncSession = Depends(get_db),
 ):
+    if not settings.is_feature_enabled("multi_team_dashboard"):
+        raise HTTPException(status_code=404, detail="Feature not available")
     teams = await get_accessible_teams(user_id, clerk_org_id, db)
     if not teams:
         return MultiDashboardResponse(teams=[])

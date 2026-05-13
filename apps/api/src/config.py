@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import yaml
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -25,7 +26,7 @@ class Settings(BaseSettings):
 
     encryption_key: str  # 32-byte hex string
 
-    environment: str = "development"
+    environment: str = "local"
     frontend_url: str = "http://localhost:5174"
     api_url: str = "http://localhost:8000"
 
@@ -36,6 +37,33 @@ class Settings(BaseSettings):
     @property
     def allowed_origins(self) -> list[str]:
         return [u.strip() for u in self.frontend_url.split(",")]
+
+    @property
+    def feature_flags(self) -> dict[str, bool]:
+        """Load feature flags from config/features/{environment}.yaml."""
+        flag_file = (
+            Path(__file__).resolve().parent.parent
+            / "config"
+            / "features"
+            / f"{self.environment}.yaml"
+        )
+        if not flag_file.exists():
+            available = (
+                sorted(p.name for p in flag_file.parent.glob("*.yaml"))
+                if flag_file.parent.exists()
+                else "directory missing"
+            )
+            raise RuntimeError(
+                f"Feature flag file not found: {flag_file}. "
+                f"Environment={self.environment}. Available: {available}"
+            )
+        with open(flag_file) as f:
+            data = yaml.safe_load(f) or {}
+        return data.get("features", {})
+
+    def is_feature_enabled(self, flag_name: str) -> bool:
+        """Return True if the named flag is enabled in the current environment."""
+        return self.feature_flags.get(flag_name, False)
 
     @field_validator("database_url")
     @classmethod

@@ -4,9 +4,9 @@ import yaml
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Look for .env in the api directory, then fall back to repo root
+# Only load .env from the apps/api directory; never crawl up to the repo root.
 _api_dir = Path(__file__).parent.parent
-_env_files = [_api_dir / ".env", _api_dir.parent.parent / ".env"]
+_env_files = [p for p in [_api_dir / ".env", _api_dir / ".env.local"] if p.exists()]
 
 
 class Settings(BaseSettings):

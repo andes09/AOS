@@ -17,7 +17,119 @@ HEAD = "0014"
 
 MIGRATIONS = [
     # (revision_id, sql_statements)
-    ("init001", []),   # handled by initial schema; presence checked below
+    ("init001", [
+        """
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'sprintstatus') THEN
+                CREATE TYPE sprintstatus AS ENUM ('PLANNING','ACTIVE','COMPLETED','CANCELLED');
+            END IF;
+        END $$
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS organizations (
+            id                       UUID PRIMARY KEY,
+            clerk_org_id             VARCHAR(255) NOT NULL UNIQUE,
+            name                     VARCHAR(255) NOT NULL,
+            slug                     VARCHAR(100) NOT NULL UNIQUE,
+            encrypted_anthropic_key  TEXT,
+            use_managed_key          BOOLEAN   NOT NULL DEFAULT FALSE,
+            created_at               TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at               TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        """CREATE INDEX IF NOT EXISTS ix_organizations_clerk_org_id ON organizations(clerk_org_id)""",
+        """CREATE INDEX IF NOT EXISTS ix_organizations_slug ON organizations(slug)""",
+        """
+        CREATE TABLE IF NOT EXISTS teams (
+            id                  UUID PRIMARY KEY,
+            organization_id     UUID NOT NULL REFERENCES organizations(id),
+            name                VARCHAR(255) NOT NULL,
+            jira_board_id       VARCHAR(100),
+            sprint_length_days  INTEGER   NOT NULL DEFAULT 14,
+            created_at          TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        """CREATE INDEX IF NOT EXISTS ix_teams_organization_id ON teams(organization_id)""",
+        """
+        CREATE TABLE IF NOT EXISTS developers (
+            id              UUID PRIMARY KEY,
+            team_id         UUID NOT NULL REFERENCES teams(id),
+            clerk_user_id   VARCHAR(255),
+            name            VARCHAR(255) NOT NULL,
+            email           VARCHAR(255),
+            role            VARCHAR(100),
+            is_active       BOOLEAN   NOT NULL DEFAULT TRUE,
+            created_at      TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        """CREATE INDEX IF NOT EXISTS ix_developers_team_id ON developers(team_id)""",
+        """CREATE INDEX IF NOT EXISTS ix_developers_clerk_user_id ON developers(clerk_user_id)""",
+        """
+        CREATE TABLE IF NOT EXISTS jira_connections (
+            id                        UUID PRIMARY KEY,
+            organization_id           UUID NOT NULL REFERENCES organizations(id),
+            jira_cloud_id             VARCHAR(255) NOT NULL,
+            jira_cloud_url            VARCHAR(500) NOT NULL,
+            encrypted_access_token    TEXT NOT NULL,
+            encrypted_refresh_token   TEXT NOT NULL,
+            token_expires_at          TIMESTAMP,
+            scopes                    JSON,
+            is_active                 BOOLEAN   NOT NULL DEFAULT TRUE,
+            last_synced_at            TIMESTAMP,
+            created_at                TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        """CREATE INDEX IF NOT EXISTS ix_jira_connections_organization_id ON jira_connections(organization_id)""",
+        """
+        CREATE TABLE IF NOT EXISTS sprints (
+            id                 UUID PRIMARY KEY,
+            team_id            UUID NOT NULL REFERENCES teams(id),
+            jira_sprint_id     VARCHAR(100),
+            name               VARCHAR(255) NOT NULL,
+            start_date         DATE,
+            end_date           DATE,
+            committed_points   FLOAT,
+            delivered_points   FLOAT,
+            status             sprintstatus NOT NULL DEFAULT 'PLANNING',
+            created_at         TIMESTAMP    NOT NULL DEFAULT NOW()
+        )
+        """,
+        """CREATE INDEX IF NOT EXISTS ix_sprints_team_id ON sprints(team_id)""",
+        """CREATE INDEX IF NOT EXISTS ix_sprints_jira_sprint_id ON sprints(jira_sprint_id)""",
+        """
+        CREATE TABLE IF NOT EXISTS sprint_tickets (
+            id                UUID PRIMARY KEY,
+            sprint_id         UUID NOT NULL REFERENCES sprints(id),
+            ticket_id         VARCHAR(100) NOT NULL,
+            assignee_id       UUID REFERENCES developers(id),
+            estimated_points  FLOAT,
+            actual_points     FLOAT,
+            completed         BOOLEAN   NOT NULL DEFAULT FALSE,
+            slip_cause        VARCHAR(100),
+            created_at        TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        """CREATE INDEX IF NOT EXISTS ix_sprint_tickets_sprint_id ON sprint_tickets(sprint_id)""",
+        """CREATE INDEX IF NOT EXISTS ix_sprint_tickets_ticket_id ON sprint_tickets(ticket_id)""",
+        """CREATE INDEX IF NOT EXISTS ix_sprint_tickets_assignee_id ON sprint_tickets(assignee_id)""",
+        """
+        CREATE TABLE IF NOT EXISTS developer_velocity_profiles (
+            id                     UUID PRIMARY KEY,
+            developer_id           UUID NOT NULL REFERENCES developers(id),
+            team_id                UUID NOT NULL REFERENCES teams(id),
+            ticket_type            VARCHAR(100),
+            domain                 VARCHAR(255),
+            mean_completion_days   FLOAT,
+            std_dev                FLOAT,
+            sample_size            INTEGER   NOT NULL DEFAULT 0,
+            sprint_count           INTEGER   NOT NULL DEFAULT 0,
+            created_at             TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at             TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        """CREATE INDEX IF NOT EXISTS ix_dev_velocity_developer_id ON developer_velocity_profiles(developer_id)""",
+        """CREATE INDEX IF NOT EXISTS ix_dev_velocity_team_id ON developer_velocity_profiles(team_id)""",
+    ]),
     ("init002", [
         """ALTER TABLE sprints ADD COLUMN IF NOT EXISTS alert_sent BOOLEAN NOT NULL DEFAULT FALSE""",
     ]),

@@ -1,12 +1,9 @@
-"""Tests for src/config.py — loading, safety validation, and secret parsing."""
+"""Tests for src/config.py — loading, safety validation, secrets, connectivity."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
 import httpx
+import pytest
 
 from src.config import (
     EnvironmentConfig,
@@ -23,6 +20,8 @@ from src.config import (
 )
 
 
+# ---------- helpers ----------
+
 def _make_env(
     *,
     name: str = "test",
@@ -31,7 +30,6 @@ def _make_env(
     required: list[str] | None = None,
     blocked: list[str] | None = None,
     refuse: str | None = None,
-    max_users: int = 5,
 ) -> EnvironmentConfig:
     return EnvironmentConfig(
         name=name,
@@ -42,11 +40,22 @@ def _make_env(
             allow_production=allow_production,
             required_url_substrings=required or [],
             block_url_substrings=blocked or [],
-            max_real_users_in_org=max_users,
             refuse_with_message=refuse,
         ),
     )
 
+
+def _secrets() -> Secrets:
+    return Secrets(
+        jira_email="x@y.com", jira_api_token="t", omada_clerk_token="clerk"
+    )
+
+
+def _transport(handler):
+    return httpx.MockTransport(handler)
+
+
+# ---------- spec-named tests ----------
 
 def test_load_local_env_succeeds():
     env = load_environment("local")
@@ -60,40 +69,25 @@ def test_load_sims_env_succeeds():
     env = load_environment("sims")
     assert env.name == "sims"
     assert "sims" in env.omada.api_url
+    assert "caboose" in env.safety.block_url_substrings
 
 
-def test_load_prod_blocked_env_succeeds():
-    env = load_environment("prod_blocked")
-    assert env.safety.refuse_with_message is not None
-    assert "Refusing" in env.safety.refuse_with_message
-
-
-def test_load_nonexistent_env_raises():
-    with pytest.raises(FileNotFoundError):
-        load_environment("does_not_exist")
-
-
-def test_load_typo_env_raises_filenotfounderror():
+def test_load_nonexistent_env_raises_file_not_found():
     with pytest.raises(FileNotFoundError) as exc:
-        load_environment("locall")
-    assert "locall" in str(exc.value)
+        load_environment("does_not_exist")
+    msg = str(exc.value)
+    assert "does_not_exist" in msg
+    # Error must list the available environments so the user can self-correct.
+    assert "local" in msg
+    assert "sims" in msg
 
 
-def test_validate_safety_passes_for_local():
-    env = load_environment("local")
-    validate_safety(env)
-
-
-def test_validate_safety_passes_for_sims():
-    env = load_environment("sims")
-    validate_safety(env)
-
-
-def test_prod_blocked_raises_on_validate():
+def test_prod_blocked_refuses_on_validate():
     env = load_environment("prod_blocked")
     with pytest.raises(SystemExit) as exc:
         validate_safety(env)
     assert "Refusing" in str(exc.value)
+    assert "production" in str(exc.value).lower()
 
 
 def test_safety_refuses_production_url():
@@ -103,19 +97,61 @@ def test_safety_refuses_production_url():
     assert "production" in str(exc.value)
 
 
-def test_safety_allow_production_permits_production_url():
-    env = _make_env(
-        api_url="https://api-production-2054.up.railway.app",
-        allow_production=True,
-    )
-    validate_safety(env)
-
-
-def test_safety_requires_substring():
+def test_safety_requires_substring_match():
     env = _make_env(api_url="https://example.com", required=["sims"])
     with pytest.raises(SystemExit) as exc:
         validate_safety(env)
     assert "sims" in str(exc.value)
+
+
+def test_missing_secrets_raises_system_exit(monkeypatch, tmp_path):
+    # Point .env resolution at an empty tmp dir so the real .env can't leak in.
+    monkeypatch.setattr("src.config.PACKAGE_ROOT", tmp_path)
+    for key in ("JIRA_EMAIL", "JIRA_API_TOKEN", "OMADA_CLERK_TOKEN"):
+        monkeypatch.delenv(key, raising=False)
+    with pytest.raises(SystemExit) as exc:
+        load_secrets()
+    msg = str(exc.value)
+    # All three missing secrets must be listed in a single error message.
+    assert "JIRA_EMAIL" in msg
+    assert "JIRA_API_TOKEN" in msg
+    assert "OMADA_CLERK_TOKEN" in msg
+
+
+def test_empty_secret_treated_as_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr("src.config.PACKAGE_ROOT", tmp_path)
+    monkeypatch.setenv("JIRA_EMAIL", "ok@example.com")
+    monkeypatch.setenv("JIRA_API_TOKEN", "")
+    monkeypatch.setenv("OMADA_CLERK_TOKEN", "ok-clerk")
+    with pytest.raises(SystemExit) as exc:
+        load_secrets()
+    msg = str(exc.value)
+    assert "JIRA_API_TOKEN" in msg
+    # Set secrets must not be flagged
+    assert "JIRA_EMAIL" not in msg
+    assert "OMADA_CLERK_TOKEN" not in msg
+
+
+def test_load_team_succeeds():
+    team = load_team("stage1_team")
+    assert team["team_name"] == "Stage1 Test Team"
+    assert len(team["developers"]) == 4
+    assert team["developers"][0]["name"] == "Alex"
+
+
+def test_unknown_team_raises():
+    with pytest.raises(FileNotFoundError):
+        load_team("ghost_team")
+
+
+# ---------- supplementary coverage ----------
+
+def test_validate_safety_passes_for_local():
+    validate_safety(load_environment("local"))
+
+
+def test_validate_safety_passes_for_sims():
+    validate_safety(load_environment("sims"))
 
 
 def test_safety_required_substring_satisfied():
@@ -130,60 +166,47 @@ def test_safety_blocks_url_substring():
     assert "caboose" in str(exc.value)
 
 
+def test_safety_allow_production_permits_production_url():
+    env = _make_env(
+        api_url="https://api-production-2054.up.railway.app",
+        allow_production=True,
+    )
+    validate_safety(env)
+
+
 def test_secrets_loaded_from_env(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("src.config.PACKAGE_ROOT", tmp_path)
     monkeypatch.setenv("JIRA_EMAIL", "test@example.com")
     monkeypatch.setenv("JIRA_API_TOKEN", "tok-123")
     monkeypatch.setenv("OMADA_CLERK_TOKEN", "clerk-456")
-    secrets = load_secrets()
-    assert secrets.jira_email == "test@example.com"
-    assert secrets.jira_api_token == "tok-123"
-    assert secrets.omada_clerk_token == "clerk-456"
+    s = load_secrets()
+    assert s.jira_email == "test@example.com"
+    assert s.jira_api_token == "tok-123"
+    assert s.omada_clerk_token == "clerk-456"
 
 
-def test_secrets_missing_raises(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("JIRA_EMAIL", raising=False)
-    monkeypatch.delenv("JIRA_API_TOKEN", raising=False)
-    monkeypatch.delenv("OMADA_CLERK_TOKEN", raising=False)
-    with pytest.raises(SystemExit) as exc:
-        load_secrets()
-    assert "JIRA_EMAIL" in str(exc.value)
+def test_print_environment_banner(capsys):
+    env = load_environment("local")
+    print_environment_banner(env, _secrets())
+    out = capsys.readouterr().out
+    assert "Active environment: local" in out
+    assert "http://localhost:8000" in out
+    assert "allow_production=false" in out
 
 
-def test_load_team_returns_dict():
-    team = load_team("stage1_team")
-    assert team["team_name"] == "Stage1 Test Team"
-    assert len(team["developers"]) == 4
-    assert team["developers"][0]["name"] == "Alex"
-
-
-def test_load_team_nonexistent_raises():
-    with pytest.raises(FileNotFoundError):
-        load_team("ghost_team")
-
-
-def _secrets() -> Secrets:
-    return Secrets(
-        jira_email="x@y.com", jira_api_token="t", omada_clerk_token="c"
-    )
-
-
-def _transport(handler):
-    return httpx.MockTransport(handler)
-
+# ---------- connectivity tests (httpx.MockTransport) ----------
 
 @pytest.mark.asyncio
 async def test_verify_connectivity_succeeds():
     def handler(req: httpx.Request) -> httpx.Response:
         if req.url.path == "/health":
             return httpx.Response(200, json={"ok": True})
-        if req.url.path == "/api/organizations":
-            assert req.headers.get("Authorization") == "Bearer c"
-            return httpx.Response(200, json=[{"id": 1, "is_simulated": True}])
+        if req.url.path == "/api/me":
+            assert req.headers.get("Authorization") == "Bearer clerk"
+            return httpx.Response(200, json={"id": "user_123"})
         return httpx.Response(404)
 
-    env = _make_env(api_url="http://localhost:8000", max_users=5)
+    env = _make_env(api_url="http://localhost:8000")
     await verify_connectivity(env, _secrets(), transport=_transport(handler))
 
 
@@ -195,11 +218,11 @@ async def test_verify_connectivity_health_unreachable():
     env = _make_env()
     with pytest.raises(SystemExit) as exc:
         await verify_connectivity(env, _secrets(), transport=_transport(handler))
-    assert "Cannot reach Omada" in str(exc.value)
+    assert "Omada not running" in str(exc.value)
 
 
 @pytest.mark.asyncio
-async def test_verify_connectivity_health_500():
+async def test_verify_connectivity_health_5xx():
     def handler(req):
         return httpx.Response(500, text="boom")
 
@@ -210,7 +233,7 @@ async def test_verify_connectivity_health_500():
 
 
 @pytest.mark.asyncio
-async def test_verify_connectivity_orgs_401():
+async def test_verify_connectivity_me_401_says_clerk_expired():
     def handler(req):
         if req.url.path == "/health":
             return httpx.Response(200)
@@ -219,72 +242,20 @@ async def test_verify_connectivity_orgs_401():
     env = _make_env()
     with pytest.raises(SystemExit) as exc:
         await verify_connectivity(env, _secrets(), transport=_transport(handler))
-    assert "401" in str(exc.value)
+    msg = str(exc.value)
+    assert "Clerk token expired" in msg
+    assert "__session" in msg
 
 
 @pytest.mark.asyncio
-async def test_verify_connectivity_orgs_500():
+async def test_verify_connectivity_me_5xx_shows_body():
     def handler(req):
         if req.url.path == "/health":
             return httpx.Response(200)
-        return httpx.Response(500, text="server error")
+        return httpx.Response(500, text="db down")
 
     env = _make_env()
     with pytest.raises(SystemExit) as exc:
         await verify_connectivity(env, _secrets(), transport=_transport(handler))
-    assert "500" in str(exc.value)
-
-
-@pytest.mark.asyncio
-async def test_verify_connectivity_too_many_orgs():
-    def handler(req):
-        if req.url.path == "/health":
-            return httpx.Response(200)
-        return httpx.Response(200, json=[{"id": i} for i in range(50)])
-
-    env = _make_env(max_users=5)
-    with pytest.raises(SystemExit) as exc:
-        await verify_connectivity(env, _secrets(), transport=_transport(handler))
-    assert "max_real_users_in_org" in str(exc.value)
-
-
-@pytest.mark.asyncio
-async def test_verify_connectivity_requires_simulated_org():
-    def handler(req):
-        if req.url.path == "/health":
-            return httpx.Response(200)
-        return httpx.Response(200, json=[{"id": 1, "is_simulated": False}])
-
-    env = _make_env()
-    env.safety.require_simulated_org = True
-    with pytest.raises(SystemExit) as exc:
-        await verify_connectivity(env, _secrets(), transport=_transport(handler))
-    assert "is_simulated" in str(exc.value)
-
-
-@pytest.mark.asyncio
-async def test_verify_connectivity_orgs_dict_envelope():
-    def handler(req):
-        if req.url.path == "/health":
-            return httpx.Response(200)
-        return httpx.Response(
-            200, json={"organizations": [{"id": 1, "is_simulated": True}]}
-        )
-
-    env = _make_env()
-    env.safety.require_simulated_org = True
-    await verify_connectivity(env, _secrets(), transport=_transport(handler))
-
-
-def test_print_environment_banner(capsys):
-    env = load_environment("local")
-    secrets = type(
-        "S",
-        (),
-        {"jira_email": "x@y", "jira_api_token": "t", "omada_clerk_token": "c"},
-    )()
-    print_environment_banner(env, secrets)  # type: ignore[arg-type]
-    out = capsys.readouterr().out
-    assert "Active environment: local" in out
-    assert "http://localhost:8000" in out
-    assert "allow_production=false" in out
+    assert "/api/me returned 500" in str(exc.value)
+    assert "db down" in str(exc.value)

@@ -11,6 +11,10 @@ export type FeatureFlags = {
   data_collection_phase: boolean
   retro_pattern_detection: boolean
   skill_based_assignment: boolean
+  slack_alerts: boolean
+  dependency_radar: boolean
+  omada_simulator: boolean
+  onboarding: boolean
 }
 
 type FeaturesResponse = {

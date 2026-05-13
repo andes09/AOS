@@ -6,3 +6,7 @@ features:
   data_collection_phase: true
   retro_pattern_detection: true
   skill_based_assignment: true
+  slack_alerts: true
+  dependency_radar: true
+  omada_simulator: true
+  onboarding: true

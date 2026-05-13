@@ -43,7 +43,9 @@ export default function App() {
         <Route path="exec-dashboard" element={
           <RequireFeature flag="exec_dashboard"><ExecDashboardPage /></RequireFeature>
         } />
-        <Route path="dependency-radar" element={<DependencyRadarPage />} />
+        <Route path="dependency-radar" element={
+          <RequireFeature flag="dependency_radar"><DependencyRadarPage /></RequireFeature>
+        } />
         <Route path="retrospective" element={<RetrospectivePage />} />
         <Route path="multi-team" element={
           <RequireFeature flag="multi_team_dashboard"><MultiTeamDashboardPage /></RequireFeature>

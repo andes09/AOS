@@ -81,5 +81,9 @@ Hotfix path: if a flag must be flipped urgently, commit directly to `release`, p
 | `multi_team_dashboard`     | true  | false      | Multi-team management UI           |
 | `exec_dashboard`           | true  | false      | Sector overview / exec view        |
 | `data_collection_phase`    | true  | false      | Verbose telemetry collection       |
-| `retro_pattern_detection`  | true  | true       | Live retro analysis                |
+| `retro_pattern_detection`  | true  | false      | Live retro analysis                |
 | `skill_based_assignment`   | true  | false      | Ticket auto-assignment by skill    |
+| `slack_alerts`             | true  | false      | Slack Alerts settings card         |
+| `dependency_radar`         | true  | false      | Dependency Radar page + nav        |
+| `omada_simulator`          | true  | false      | Reserved — surface not built yet   |
+| `onboarding`               | true  | false      | Reserved — surface not built yet   |

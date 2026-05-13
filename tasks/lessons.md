@@ -272,3 +272,20 @@
 3. When staging + committing, do it in one chained command to prevent branch drift between calls
 4. On Windows especially: shell state does not persist at all between calls — every git operation must re-establish context in the same command
 
+---
+
+## Any column added to a SQLAlchemy model must exist in production Postgres before the code deploys
+
+**Pattern:** Migration `0015` added `organizations.is_simulated` and `tickets.is_carryover` as alembic files AND as SQLAlchemy model fields, but was never added to `apps/api/migrate.py`'s `MIGRATIONS` list. Production deploy ran `migrate.py` (which stops at `0014`), so the columns were never created in prod Postgres — but the code shipped with the columns declared on the model. Every `SELECT` against `organizations` or `tickets` crashed with `column ... does not exist` because SQLAlchemy expands `Organization` into `SELECT id, ..., is_simulated, ... FROM organizations`.
+
+**Root cause (two failures stacked):**
+1. **Two parallel migration systems out of sync.** This codebase uses `migrate.py` (a hand-rolled idempotent runner) in Railway's `preDeployCommand`, not raw `alembic upgrade head`. Adding a file under `alembic/versions/` does NOT cause production to apply it. The model change shipped without the schema change.
+2. **Experiment-only columns added to core product tables.** `is_simulated` and `is_carryover` exist purely for the TAWOS simulator, but they were attached to `Organization` and `Ticket` — tables every request hits. The blast radius was every API call, not just simulator code paths.
+
+**Rules:**
+1. **Any change to a SQLAlchemy model is a schema change.** Adding/removing/renaming a column requires a corresponding migration that runs against production *in the same deploy*. Never merge a model change without confirming the matching migration is in the path that production actually executes.
+2. **In this repo specifically:** the production migration path is `apps/api/migrate.py`'s `MIGRATIONS` list (called via Railway `preDeployCommand`). The `alembic/versions/` directory is for local development only. Any schema change must be added to BOTH — alembic alone is invisible to production.
+3. **Pre-merge checklist for model PRs:** open `apps/api/migrate.py` and confirm (a) a new entry exists in `MIGRATIONS`, (b) `HEAD` is bumped to that revision, (c) the SQL uses `ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS` so it's idempotent. If any of those are missing, the deploy will crash.
+4. **Don't add experiment/simulator columns to core product tables.** If a feature is local/dev-only (TAWOS importer, simulator, internal tooling), the columns belong in a separate table or schema that the core API doesn't query. Attaching them to `Organization`/`Ticket`/etc. means every production request now depends on local-only schema being present.
+5. **For the next outage of this shape:** the fix is fast — remove the offending columns from the SQLAlchemy models and redeploy. SQLAlchemy will stop selecting them and the crash stops immediately. The DB itself doesn't need a rollback. Do the model edit first, deploy, then clean up the orphan migration files.
+

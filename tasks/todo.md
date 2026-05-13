@@ -1,134 +1,106 @@
-# TAWOS Dataset Importer — Plan
+# Simulator Config Foundation — Spec Re-Alignment
 
-Branch: `tawos-importer` (created ✅)
+Branch: `simulator-config-foundation` (fresh, cut from `release`)
 
-## Context gathered from reading models
+## Context
+An earlier iteration of this directory was merged into `release` and
+referenced `is_simulated` on the Organization payload. That field was
+removed from prod after the outage captured in `tasks/lessons.md`
+("Any column added to a SQLAlchemy model must exist in production
+Postgres before the code deploys"). The new spec drops those checks
+entirely. We are rewriting to the new spec.
 
-Before writing the plan I read every Omada model under `apps/api/src/models/`.
-The task spec's conceptual mapping is correct, but several field names and
-relationships differ from what the spec describes. Those are flagged below so
-we agree on the approach before any code is written.
+## Plan
 
-## Schema mismatches vs. the task spec
+- [x] Inspect existing files — confirmed divergences.
+- [x] Create fresh `simulator-config-foundation` branch (old, fully-merged
+      branch deleted with user approval).
+- [ ] Rewrite `config/environments/local.yaml` to match spec exactly
+      (remove `max_real_users_in_org`, `require_simulated_org`; add
+      `refuse_with_message: null`).
+- [ ] Rewrite `config/environments/sims.yaml` similarly.
+- [ ] Rewrite `config/environments/prod_blocked.yaml` similarly
+      (empty `required_url_substrings` and `block_url_substrings`,
+      `refuse_with_message` set, no `max_real_users_in_org`).
+- [ ] Leave `config/teams/stage1_team.yaml` as-is (already matches spec).
+- [ ] Rewrite `src/config.py`:
+  - [ ] `SafetyConfig` keeps only the 4 spec fields.
+  - [ ] `verify_connectivity` does `/health` (200) then `/api/me`
+        (200, 401 → expired-Clerk message, else print body).
+  - [ ] Drop `max_real_users_in_org` and `require_simulated_org` logic
+        and any `is_simulated` references.
+  - [ ] Banner shows only `allow_production={value}` (no max_users).
+- [ ] Update `src/main.py` order to match spec:
+      `load_environment → load_secrets → validate_safety → banner →
+       asyncio.run(verify_connectivity) → success print`.
+- [ ] Rewrite `tests/test_config.py` to cover the 10 spec-named tests
+      plus connectivity tests via `httpx.MockTransport` against
+      `/api/me`. Target ≥90% coverage of `src/config.py`.
+- [ ] Verify `pyproject.toml`, `.env.example`, `.gitignore` against spec
+      (current versions are very close — only minor edits if needed).
+- [ ] Update `README.md` to drop references to org-count /
+      `is_simulated` and to describe the `/api/me` flow.
+- [ ] Run `pytest tests/ --cov=src` and confirm ≥90% on src/config.py.
+- [ ] Run `python -m src.main --check-env --env prod_blocked` —
+      expect immediate refusal, zero HTTP.
+- [ ] Run `python -m src.main --check-env --env typo` —
+      expect FileNotFoundError listing valid envs.
+- [ ] Commit in 7 chunks per spec.
+- [ ] Confirm with user before merging to main or pushing.
 
-| Spec says | Reality | How I'll handle |
-|---|---|---|
-| `Organization.is_simulated` column exists | Not in model | **Alembic migration 0015** adds `is_simulated BOOLEAN NOT NULL DEFAULT FALSE` — spec explicitly allows this |
-| `Developer.display_name` | Field is `name` | Map `username` → `Developer.name` |
-| `Developer.baseline_velocity` | Field doesn't exist | Compute avg delivered pts/sprint, store on `DeveloperVelocityProfile.mean_completion_days` + `sprint_count`; keep a helper to expose it |
-| `Ticket.description` (truncate to 5000) | Field doesn't exist | Skip description entirely (title is Text and stores full title) |
-| `Ticket.is_carryover` | Field doesn't exist | **Migration 0015** adds `is_carryover BOOLEAN NOT NULL DEFAULT FALSE` |
-| `Ticket.story_points` | Field is `story_points_estimated` | Map accordingly |
-| `Ticket.assignee_developer_id` | FK is `assignee_id → team_members.id` | Create BOTH `Developer` and `TeamMember` rows per TAWOS user; `Ticket.assignee_id` points at TeamMember |
-| `Ticket.updated_at` | Field is `jira_updated_at` | Use that |
-| `Sprint.status` has FUTURE | Enum: PLANNING/ACTIVE/COMPLETED/CANCELLED | Map `FUTURE→PLANNING`, `ACTIVE→ACTIVE`, `CLOSED→COMPLETED` |
-| `Dependency.blocking_ticket_id`/`blocked_ticket_id` | Actual: `ticket_key` (blocked) + `blocked_by_key` (blocker) + `team_id` + `dependency_type` + `risk_level` + `source` | Map to actual column names |
+## Out of scope
+- Simulator behavioral logic (Jira driver, observer, dev model, orchestrator).
+- Connecting to real Jira.
 
-## Implementation plan (5 commits matching spec's commit structure)
+## Review
 
-### Commit 1 — download & inspect tooling
-- [ ] Create `apps/api/tawos_importer/` with `__init__.py`, `data/` gitignore
-- [ ] `download.py`: download TAWOS SQLite from https://github.com/SOLAR-group/TAWOS, idempotent (skip if file exists with correct size)
-- [ ] `inspect.py`: print all tables, row counts, sample 5 rows per main table, full column list
-- [ ] Add `.gitignore` entry for `apps/api/tawos_importer/data/`
+### What landed (5 commits on `simulator-config-foundation`)
 
-### Commit 2 — schema mapper
-- [ ] **Migration 0015**: add `organizations.is_simulated`, `tickets.is_carryover`
-- [ ] `mapper.py`:
-  - `map_project(tawos_project) → (Organization, Team)`
-  - `map_user(tawos_user) → (Developer, TeamMember)`
-  - `map_sprint(tawos_sprint) → Sprint`
-  - `map_issue(tawos_issue, sprint_lookup, team_member_lookup) → Ticket`
-  - `map_link(tawos_link, ticket_lookup) → Dependency | None` (only blocks/is_blocked_by)
-  - All mapping functions are **pure** (dict in, SQLA model out) — easy to unit test
-  - Handle edge cases: null assignee, null points, unicode, truncation, etc.
+| Commit  | Subject                                         |
+| ------- | ----------------------------------------------- |
+| 3e0a325 | feat: env yaml files local, sims, prod_blocked  |
+| 428577f | feat: src/config.py pydantic config loading     |
+| 2173f61 | feat: --check-env cli command                   |
+| ba7b000 | test: config loading and safety validation      |
+| 6d5923c | docs: readme for simulator config               |
 
-### Commit 3 — project import logic with transaction handling
-- [ ] `importer.py`:
-  - `async def import_project(project_id, session, limit_issues=None)`
-  - Single async DB transaction per project (rollback on any failure)
-  - Order: Org → Team → Developers (+ TeamMembers) → Sprints → Tickets (batched 500) → Dependencies
-  - Compute derived fields:
-    - `Sprint.committed_points` = sum of tickets at sprint start
-    - `Sprint.delivered_points` = sum of tickets moved to Done before sprint close
-    - `DeveloperVelocityProfile` per developer (baseline velocity)
-  - Structured logging: `[tawos] Imported <name>: N devs, M sprints, K tickets, L deps`
+The spec's 7-commit plan included scaffolding and a team config commit.
+Both files (`pyproject.toml`, `config/teams/stage1_team.yaml`) were
+already on `release` from the prior iteration and already match the
+spec verbatim, so there was no diff to capture. The 5 commits above
+cover every actual code change.
 
-### Commit 4 — CLI interface + edge cases
-- [ ] `run_import.py` CLI with flags: `--list`, `--project`, `--limit-issues`, `--all-small`, `--all`, `--reset --confirm`
-- [ ] Log to `apps/api/tawos_importer/import.log` with timestamps
-- [ ] `--reset` guarded by `--confirm` and deletes only `is_simulated=TRUE` orgs (never production data)
-- [ ] Verification script `verify.py` for post-import sanity checks (orphan rows, point sums, velocity > 0)
+### Spec acceptance criteria
 
-### Commit 5 — README + docs
-- [ ] `apps/api/tawos_importer/README.md`: download, inspect, import, reset, troubleshooting, known limitations
-- [ ] Note the skipped fields (comments, attachments, watchers, custom fields, resolution types)
+- ✅ `python -m src.main --check-env --env prod_blocked` —
+  prints the refusal message; zero HTTP calls (refusal happens in
+  `validate_safety`, before `verify_connectivity` is reached).
+- ✅ `python -m src.main --check-env --env typo` —
+  `FileNotFoundError` with `['local', 'prod_blocked', 'sims']` listed.
+- ✅ `python -m src.main --check-env --env local` (with Omada not
+  running locally) — fails cleanly with the spec-mandated message
+  *"Omada not running at http://localhost:8000. Start with uvicorn
+  src.main:app --reload from apps/api."*
+- ✅ `pytest tests/ --cov=src.config` — 22/22 pass, 98% coverage.
+- ✅ `.env.example` exists with placeholders; `.env` is gitignored.
+- ✅ `README.md` updated to drop org-count / `is_simulated` references.
 
-## Safety guardrails
+### Notes
 
-- Spec explicitly out of scope: modifying Omada model schemas beyond `is_simulated` + `is_carryover`, running against production. I will NOT run migrations or imports against prod Railway DB — local Postgres only.
-- `is_simulated` migration is additive-only (nullable/defaulted), cannot break existing data.
-- Every CLI entry point confirms the target DB URL before proceeding when it looks like a production host (hostname contains `railway`, `prod`, etc.).
+- The `.gitignore` line `output/*` (rather than `output/`) is kept from
+  the prior iteration because git can't un-ignore a file inside a
+  fully-ignored directory. The spec's literal text would silently
+  ignore `output/.gitkeep`; `output/*` + `!output/.gitkeep` does what
+  the spec intends.
+- The CLI flow puts `load_secrets()` immediately after
+  `load_environment()`, per spec. This means a `.env` with missing keys
+  will error before `validate_safety` runs for any env, including
+  `prod_blocked`. The acceptance criterion ("immediately refuses with
+  the configured message") is satisfied for users who have a populated
+  `.env` (which is the documented setup).
 
-## Open questions for user (before I start coding)
+### Not yet executed (awaiting user)
 
-1. **Is adding migration 0015 (`is_simulated`, `is_carryover`) OK?** Spec implies yes but `is_carryover` isn't explicitly pre-approved — it's needed for the "carryover" mapping rule in the spec. Alternative: derive carryover on-read (no migration needed) by joining sprint_tickets history.
-2. **TAWOS issue → Ticket.assignee_id** points to `team_members`, not `developers`. Confirm: create both a `Developer` (for velocity/app users) and `TeamMember` (for ticket assignment) row per TAWOS username, linked by display_name? This matches how Jira-imported data works today.
-3. **Where should imports run?** `apps/api/.env` database URL — I'll read from there. Confirm this points to your local Docker Postgres (not Railway).
-
-If the answers are (1) yes to migration, (2) yes dual-row, (3) local only — I'll proceed. Otherwise, I'll revise.
-
-## Review section
-
-All 5 commits landed on `tawos-importer` without touching any database:
-
-| Commit | SHA | Files |
-|---|---|---|
-| download + inspect tooling | `079fe8e` | 10 files, +588 lines |
-| schema mapper to omada models | `6c934ce` | 4 files, +464 net |
-| project import with transactions | `19fe2d8` | 2 files, +463 lines |
-| CLI + edge case handling | `012aec5` | 2 files, +414 lines |
-| README + usage docs | `35e568e` | 1 file, +187 lines |
-
-### What's built
-- `apps/api/tawos_importer/` — 10 Python modules + docker-compose.yml + README
-- `apps/api/alembic/versions/0015_tawos_simulated_and_carryover.py` —
-  `organizations.is_simulated` and `tickets.is_carryover` (both additive,
-  default FALSE, partial indexes)
-- Matching SQLAlchemy fields on Organization and Ticket models
-- PyMySQL added to api dev deps
-- `.gitignore` entry for `apps/api/tawos_importer/data/`
-
-### Safety guardrails baked in
-- `assert_not_production()` called before every mutating CLI subcommand;
-  hostname pattern list includes `api-production-2054` per user spec
-- `--reset` requires `--confirm`; touches only `is_simulated=TRUE` orgs
-- Per-project transaction: one failure rolls back the whole project, never
-  partial imports
-- `--all` is resumable (per-project failures logged but don't abort the loop)
-- Migration is additive only, safe to run on any env
-
-### Not yet executed (intentional)
-Per user instruction, NO code has been run against any database yet:
-- `alembic upgrade head` — not executed
-- `download.py`, `load_mysql.py`, `inspect.py`, `run_import.py`, `verify.py`
-  — not executed
-- The TAWOS MySQL container — not started
-- The dump — not downloaded
-
-All Python files pass `ast.parse()` syntax check. Runtime smoke test of
-the full pipeline is blocked on Railway staging being ready.
-
-### Follow-ups once staging is ready
-1. `alembic upgrade head` on staging
-2. `docker compose up -d` in `apps/api/tawos_importer/`
-3. `uv sync --extra dev` in `apps/api/`
-4. `python -m tawos_importer.download` then `load_mysql`
-5. `python -m tawos_importer.inspect` — compare the real column names to
-   the candidate lists in `mapper.py :: _pick()`; adjust if any column
-   names in the actual dump don't match what I guessed
-6. `python -m tawos_importer.run_import --project <something-small> --limit-issues 50`
-   — end-to-end smoke
-7. `python -m tawos_importer.verify --project-key <same>`
-8. If green: `--all-small`, then manual UI verification and BUGS.md
-
+- `git checkout main && git merge simulator-config-foundation`
+- `git push origin main`
+- `git checkout release && git merge main && git push origin release`

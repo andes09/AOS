@@ -45,6 +45,7 @@ export function DashboardLayout() {
   const canSeeExec = appRole === 'exec' || appRole === 'admin'
   const showMultiTeam = useFeature('multi_team_dashboard')
   const showExecDashboard = useFeature('exec_dashboard')
+  const showDependencyRadar = useFeature('dependency_radar')
 
   return (
     <TeamProvider>
@@ -98,11 +99,13 @@ export function DashboardLayout() {
             {canSeeLead && (
               <>
                 <li style={sectionLabel}>Intelligence</li>
-                <li>
-                  <NavLink to="/app/dependency-radar" style={({ isActive }) => navItemStyle(isActive)}>
-                    Dependency Radar
-                  </NavLink>
-                </li>
+                {showDependencyRadar && (
+                  <li>
+                    <NavLink to="/app/dependency-radar" style={({ isActive }) => navItemStyle(isActive)}>
+                      Dependency Radar
+                    </NavLink>
+                  </li>
+                )}
                 <li>
                   <NavLink to="/app/retrospective" style={({ isActive }) => navItemStyle(isActive)}>
                     Retro Prep

@@ -12,6 +12,10 @@ def test_local_yaml_loads():
     assert flags["push_to_jira"] is True
     assert flags["retro_pattern_detection"] is True
     assert flags["skill_based_assignment"] is True
+    assert flags["slack_alerts"] is True
+    assert flags["dependency_radar"] is True
+    assert flags["omada_simulator"] is True
+    assert flags["onboarding"] is True
 
 
 def test_production_yaml_loads():
@@ -20,7 +24,11 @@ def test_production_yaml_loads():
     assert flags["push_to_jira"] is False
     assert flags["multi_team_dashboard"] is False
     assert flags["exec_dashboard"] is False
-    assert flags["retro_pattern_detection"] is True
+    assert flags["retro_pattern_detection"] is False
+    assert flags["slack_alerts"] is False
+    assert flags["dependency_radar"] is False
+    assert flags["omada_simulator"] is False
+    assert flags["onboarding"] is False
 
 
 def test_missing_flag_defaults_to_false():

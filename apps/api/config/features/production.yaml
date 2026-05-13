@@ -6,3 +6,7 @@ features:
   data_collection_phase: false
   retro_pattern_detection: false
   skill_based_assignment: false
+  slack_alerts: false
+  dependency_radar: false
+  omada_simulator: false
+  onboarding: false

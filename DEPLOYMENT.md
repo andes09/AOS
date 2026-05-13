@@ -87,3 +87,14 @@ Hotfix path: if a flag must be flipped urgently, commit directly to `release`, p
 | `dependency_radar`         | true  | false      | Dependency Radar page + nav        |
 | `omada_simulator`          | true  | false      | Reserved — surface not built yet   |
 | `onboarding`               | true  | false      | Reserved — surface not built yet   |
+
+## Common Issues
+
+### CORS errors on a new environment
+Update the `FRONTEND_URL` environment variable in Railway to include the new frontend origin. Comma-separate multiple origins:
+
+```
+FRONTEND_URL=https://frontend-a.railway.app,https://frontend-b.railway.app
+```
+
+Redeploy. Never use `allow_origins=["*"]`.

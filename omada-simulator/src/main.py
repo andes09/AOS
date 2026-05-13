@@ -17,30 +17,32 @@ from src.config import (
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="omada-simulator",
-        description="Omada simulator config foundation. "
-        "Use --check-env to verify a target environment.",
+        description=(
+            "Omada simulator config foundation. "
+            "Use --check-env to verify a target environment."
+        ),
     )
     parser.add_argument(
         "--env",
         required=True,
-        help="Environment name (local, sims, prod_blocked)",
+        help="Environment name (e.g. local, sims, prod_blocked)",
     )
     parser.add_argument(
         "--check-env",
         action="store_true",
-        help="Verify env config and connectivity",
+        help="Load env, validate safety, then probe Omada /health and /api/me.",
     )
     args = parser.parse_args()
 
-    if args.check_env:
-        env = load_environment(args.env)
-        validate_safety(env)
-        secrets = load_secrets()
-        print_environment_banner(env, secrets)
-        asyncio.run(verify_connectivity(env, secrets))
-        print("✓ All checks passed")
-    else:
+    if not args.check_env:
         parser.error("No command specified. Use --check-env to verify.")
+
+    env = load_environment(args.env)
+    secrets = load_secrets()
+    validate_safety(env)
+    print_environment_banner(env, secrets)
+    asyncio.run(verify_connectivity(env, secrets))
+    print("✓ All checks passed")
 
 
 if __name__ == "__main__":

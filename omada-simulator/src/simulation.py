@@ -30,7 +30,12 @@ def _ensure_output_dir() -> None:
 
 
 def _write_json(path: Path, payload: Any) -> None:
-    path.write_text(json.dumps(payload, indent=2, default=str))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, default=str))
+        print(f"[output] Wrote {path}")
+    except Exception as e:
+        print(f"[output] ERROR writing {path}: {e}")
 
 
 def _safety_check_project_key(project_key: str) -> None:

@@ -13,7 +13,7 @@ from src.config import (
     validate_safety,
     verify_connectivity,
 )
-from src.simulation import run_reset, run_setup, run_simulation
+from src.simulation import run_clean, run_reset, run_setup, run_simulation
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -57,6 +57,13 @@ def _build_parser() -> argparse.ArgumentParser:
              "Requires --confirm.",
     )
     parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Full reset: delete the Jira SIM project, remove all "
+             "output/*.json files, and truncate audit logs. Requires "
+             "--project-key.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print what would happen without making API calls. "
@@ -86,13 +93,16 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    cmds = [args.check_env, args.setup, args.simulate, args.reset]
+    cmds = [args.check_env, args.setup, args.simulate, args.reset, args.clean]
     if sum(cmds) == 0:
         parser.error(
-            "Specify one of --check-env, --setup, --simulate, --reset."
+            "Specify one of --check-env, --setup, --simulate, --reset, --clean."
         )
     if sum(cmds) > 1:
         parser.error("Specify only one command at a time.")
+
+    if args.clean and not args.project_key:
+        parser.error("--clean requires --project-key.")
 
     env = load_environment(args.env)
     validate_safety(env)
@@ -139,6 +149,18 @@ def main() -> None:
                     project_key_override=args.project_key,
                 )
             )
+        elif args.clean:
+            class _Stub:
+                jira_email = ""
+                jira_api_token = ""
+                omada_clerk_token = ""
+            asyncio.run(
+                run_clean(
+                    env, _Stub(),
+                    project_key_override=args.project_key,
+                    dry_run=True,
+                )
+            )
         else:
             parser.error("--dry-run is not supported with --check-env.")
         return
@@ -168,6 +190,11 @@ def main() -> None:
         asyncio.run(run_reset(
             env, secrets,
             confirm=args.confirm,
+            project_key_override=args.project_key,
+        ))
+    elif args.clean:
+        asyncio.run(run_clean(
+            env, secrets,
             project_key_override=args.project_key,
         ))
 

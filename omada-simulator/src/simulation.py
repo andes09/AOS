@@ -201,6 +201,16 @@ async def run_simulation(
         JiraDriver(env.jira.url, secrets.jira_email, secrets.jira_api_token) as jira,
         OmadaObserver(env.omada.api_url, secrets.omada_clerk_token) as omada,
     ):
+        resolved = omada.resolve_team_id()
+        if resolved:
+            print(f"[omada] Resolved team ID: {resolved}")
+            omada_team_id = resolved
+        elif not omada_team_id:
+            print(
+                "[warning] Could not resolve Omada team ID — "
+                "Omada-side calls will be skipped"
+            )
+
         for sprint_num in range(1, total_sprints + 1):
             print(f"\n=== Sprint {sprint_num}/{total_sprints} ===")
 
@@ -273,12 +283,19 @@ async def run_simulation(
             if omada_team_id:
                 omada.trigger_sync(omada_team_id)
 
-            retro = (
+            retro_gen = (
                 omada.generate_retro(str(sprint_id))
                 if omada_team_id
                 else None
             )
-            _write_json(OUTPUT_DIR / f"sprint_{sprint_num}_retro.json", retro or {})
+            retro_get = (
+                omada.get_retro(str(sprint_id)) if omada_team_id else None
+            )
+            retro = retro_gen or retro_get
+            _write_json(
+                OUTPUT_DIR / f"sprint_{sprint_num}_retro.json",
+                {"generate": retro_gen or {}, "get": retro_get or {}},
+            )
 
             health = (
                 omada.get_health_score(omada_team_id) if omada_team_id else None
@@ -289,6 +306,11 @@ async def run_simulation(
                 omada.get_dependency_radar(omada_team_id) if omada_team_id else None
             )
             _write_json(OUTPUT_DIR / f"sprint_{sprint_num}_deps.json", deps or {})
+
+            features = omada.get_features()
+            _write_json(
+                OUTPUT_DIR / f"sprint_{sprint_num}_features.json", features or {}
+            )
 
             committed = len(committed_keys)
             completed = sum(1 for r in results.values() if r == "completed")
@@ -302,8 +324,10 @@ async def run_simulation(
                 "plan_ok": plan is not None,
                 "push_ok": push_resp is not None,
                 "retro_ok": retro is not None,
+                "retro_get_ok": retro_get is not None,
                 "health_ok": health is not None,
                 "deps_ok": deps is not None,
+                "features_ok": features is not None,
                 "ticket_results": results,
             })
 
@@ -369,3 +393,44 @@ async def run_reset(
         print(f"Removed {SETUP_STATE_PATH}")
     else:
         print("No setup_state.json to remove.")
+
+
+async def run_clean(
+    env: EnvironmentConfig,
+    secrets: Secrets,
+    *,
+    project_key_override: str,
+    dry_run: bool = False,
+) -> None:
+    """Full simulator reset: delete Jira project, wipe JSON output, truncate logs."""
+    _ensure_output_dir()
+
+    await run_reset(
+        env, secrets,
+        confirm=True,
+        dry_run=dry_run,
+        project_key_override=project_key_override,
+    )
+
+    json_files = sorted(OUTPUT_DIR.glob("*.json"))
+    log_files = [OUTPUT_DIR / "jira_audit.log", OUTPUT_DIR / "omada_audit.log"]
+
+    if dry_run:
+        for path in json_files:
+            print(f"[DRY RUN] Would delete {path}")
+        for path in log_files:
+            if path.exists():
+                print(f"[DRY RUN] Would truncate {path}")
+        print("[DRY RUN] Simulator reset complete. Ready for --setup.")
+        return
+
+    for path in json_files:
+        path.unlink()
+        print(f"Removed {path}")
+
+    for path in log_files:
+        if path.exists():
+            path.write_text("")
+            print(f"Truncated {path}")
+
+    print("Simulator reset complete. Ready for --setup.")

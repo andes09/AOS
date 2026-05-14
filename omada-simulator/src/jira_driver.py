@@ -95,7 +95,7 @@ class JiraDriver:
         # Should be unreachable; keep mypy/readers happy.
         raise JiraDriverError(f"Unexpected retry loop exit: {last_exc}")
 
-    def _current_account_id(self) -> str:
+    def _get_current_user_account_id(self) -> str:
         if self._account_id is None:
             resp = self._request("GET", "/rest/api/3/myself")
             self._account_id = resp.json()["accountId"]
@@ -105,15 +105,18 @@ class JiraDriver:
         resp = self._request("GET", f"/rest/api/3/project/{key}")
         if resp.status_code == 200:
             return resp.json()
+        if resp.status_code != 404:
+            raise JiraDriverError(
+                f"Unexpected status checking project {key}: "
+                f"{resp.status_code}: {resp.text[:200]}"
+            )
 
         body = {
             "key": key,
             "name": name,
             "projectTypeKey": "software",
-            "projectTemplateKey": (
-                "com.pyxis.greenhopper.jira.gh-simplified-agility-scrum"
-            ),
-            "leadAccountId": self._current_account_id(),
+            "projectTemplateKey": "com.pyxis.greenhopper.jira:gh-scrum-template",
+            "leadAccountId": self._get_current_user_account_id(),
         }
         create = self._request("POST", "/rest/api/3/project", json=body)
         return create.json()

@@ -1,4 +1,4 @@
-"""CLI entry point for the Omada simulator config layer."""
+"""CLI entry point for the Omada simulator."""
 
 from __future__ import annotations
 
@@ -8,18 +8,21 @@ import asyncio
 from src.config import (
     load_environment,
     load_secrets,
+    load_team,
     print_environment_banner,
     validate_safety,
     verify_connectivity,
 )
+from src.simulation import run_reset, run_setup, run_simulation
 
 
-def main() -> None:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="omada-simulator",
         description=(
-            "Omada simulator config foundation. "
-            "Use --check-env to verify a target environment."
+            "Omada Stage 1 simulator. Use --check-env to verify a target "
+            "environment, --setup to create the Jira SIM project + ticket pool, "
+            "--simulate to run 3 sprints, --reset to tear down."
         ),
     )
     parser.add_argument(
@@ -28,21 +31,115 @@ def main() -> None:
         help="Environment name (e.g. local, sims, prod_blocked)",
     )
     parser.add_argument(
+        "--team",
+        default="stage1_team",
+        help="Team config name in config/teams/ (default: stage1_team)",
+    )
+    parser.add_argument(
         "--check-env",
         action="store_true",
-        help="Load env, validate safety, then probe Omada /health and /api/me.",
+        help="Validate safety, then probe Omada /health and /api/me.",
     )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Create the Jira SIM project, ticket pool, and dependency links.",
+    )
+    parser.add_argument(
+        "--simulate",
+        action="store_true",
+        help="Run the 3-sprint simulation (requires --setup first).",
+    )
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Delete the Jira SIM project and remove setup_state.json. "
+             "Requires --confirm.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would happen without making API calls. "
+             "Works with --setup, --simulate, --reset.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing setup_state.json on --setup.",
+    )
+    parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Required to actually delete the SIM project on --reset.",
+    )
+    return parser
+
+
+def main() -> None:
+    parser = _build_parser()
     args = parser.parse_args()
 
-    if not args.check_env:
-        parser.error("No command specified. Use --check-env to verify.")
+    cmds = [args.check_env, args.setup, args.simulate, args.reset]
+    if sum(cmds) == 0:
+        parser.error(
+            "Specify one of --check-env, --setup, --simulate, --reset."
+        )
+    if sum(cmds) > 1:
+        parser.error("Specify only one command at a time.")
 
     env = load_environment(args.env)
-    secrets = load_secrets()
     validate_safety(env)
+
+    # Dry-run never loads secrets, never touches the network. That's the
+    # whole point — the integration-verification step in the orchestrator
+    # spec runs --setup --dry-run without any creds configured.
+    if args.dry_run:
+        print(f"[DRY RUN] env={env.name}  team={args.team}")
+        team_config = load_team(args.team)
+        if args.setup:
+            class _Stub:
+                jira_email = ""
+                jira_api_token = ""
+                omada_clerk_token = ""
+            asyncio.run(
+                run_setup(env, _Stub(), team_config, force=args.force, dry_run=True)
+            )
+        elif args.simulate:
+            class _Stub:
+                jira_email = ""
+                jira_api_token = ""
+                omada_clerk_token = ""
+            asyncio.run(
+                run_simulation(env, _Stub(), team_config, dry_run=True)
+            )
+        elif args.reset:
+            class _Stub:
+                jira_email = ""
+                jira_api_token = ""
+                omada_clerk_token = ""
+            asyncio.run(
+                run_reset(env, _Stub(), confirm=args.confirm, dry_run=True)
+            )
+        else:
+            parser.error("--dry-run is not supported with --check-env.")
+        return
+
+    secrets = load_secrets()
     print_environment_banner(env, secrets)
-    asyncio.run(verify_connectivity(env, secrets))
-    print("✓ All checks passed")
+
+    if args.check_env:
+        asyncio.run(verify_connectivity(env, secrets))
+        print("✓ All checks passed")
+        return
+
+    team_config = load_team(args.team)
+
+    if args.setup:
+        asyncio.run(run_setup(env, secrets, team_config, force=args.force))
+    elif args.simulate:
+        asyncio.run(run_simulation(env, secrets, team_config))
+    elif args.reset:
+        asyncio.run(run_reset(env, secrets, confirm=args.confirm))
 
 
 if __name__ == "__main__":

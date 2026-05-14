@@ -72,6 +72,13 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Required to actually delete the SIM project on --reset.",
     )
+    parser.add_argument(
+        "--project-key",
+        default=None,
+        help="Override the SIM project key (must start with SIM). "
+             "Useful when the default SIM key is still in Jira's "
+             "post-deletion reservation window.",
+    )
     return parser
 
 
@@ -102,7 +109,11 @@ def main() -> None:
                 jira_api_token = ""
                 omada_clerk_token = ""
             asyncio.run(
-                run_setup(env, _Stub(), team_config, force=args.force, dry_run=True)
+                run_setup(
+                    env, _Stub(), team_config,
+                    force=args.force, dry_run=True,
+                    project_key_override=args.project_key,
+                )
             )
         elif args.simulate:
             class _Stub:
@@ -110,7 +121,11 @@ def main() -> None:
                 jira_api_token = ""
                 omada_clerk_token = ""
             asyncio.run(
-                run_simulation(env, _Stub(), team_config, dry_run=True)
+                run_simulation(
+                    env, _Stub(), team_config,
+                    dry_run=True,
+                    project_key_override=args.project_key,
+                )
             )
         elif args.reset:
             class _Stub:
@@ -118,7 +133,11 @@ def main() -> None:
                 jira_api_token = ""
                 omada_clerk_token = ""
             asyncio.run(
-                run_reset(env, _Stub(), confirm=args.confirm, dry_run=True)
+                run_reset(
+                    env, _Stub(),
+                    confirm=args.confirm, dry_run=True,
+                    project_key_override=args.project_key,
+                )
             )
         else:
             parser.error("--dry-run is not supported with --check-env.")
@@ -135,11 +154,22 @@ def main() -> None:
     team_config = load_team(args.team)
 
     if args.setup:
-        asyncio.run(run_setup(env, secrets, team_config, force=args.force))
+        asyncio.run(run_setup(
+            env, secrets, team_config,
+            force=args.force,
+            project_key_override=args.project_key,
+        ))
     elif args.simulate:
-        asyncio.run(run_simulation(env, secrets, team_config))
+        asyncio.run(run_simulation(
+            env, secrets, team_config,
+            project_key_override=args.project_key,
+        ))
     elif args.reset:
-        asyncio.run(run_reset(env, secrets, confirm=args.confirm))
+        asyncio.run(run_reset(
+            env, secrets,
+            confirm=args.confirm,
+            project_key_override=args.project_key,
+        ))
 
 
 if __name__ == "__main__":

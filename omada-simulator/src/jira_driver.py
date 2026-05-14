@@ -177,8 +177,10 @@ class JiraDriver:
         create = self._request("POST", "/rest/agile/1.0/sprint", json=body)
         sprint_id = int(create.json()["id"])
         # Activate immediately so the sprint counts as in-progress.
+        # POST is partial-update; PUT requires the full sprint body and
+        # rejects state-only payloads with "Sprint name is required".
         self._request(
-            "PUT",
+            "POST",
             f"/rest/agile/1.0/sprint/{sprint_id}",
             json={"state": "active"},
         )
@@ -224,7 +226,7 @@ class JiraDriver:
 
     def close_sprint(self, sprint_id: int) -> None:
         self._request(
-            "PUT",
+            "POST",
             f"/rest/agile/1.0/sprint/{sprint_id}",
             json={"state": "closed"},
         )

@@ -48,12 +48,21 @@ async def run_setup(
     *,
     force: bool = False,
     dry_run: bool = False,
+    project_key_override: str | None = None,
 ) -> None:
     """Create the Jira SIM project, generate the ticket pool, persist state."""
     _ensure_output_dir()
 
-    project_key = env.jira.project_key_prefix or "SIM"
+    project_key = project_key_override or env.jira.project_key_prefix or "SIM"
     _safety_check_project_key(project_key)
+    # Default project name collides with Jira's post-deletion name
+    # reservation. When the caller picks a non-default key, derive a
+    # matching unique name so the create call doesn't 400.
+    project_name = (
+        "Omada Simulation"
+        if project_key == "SIM"
+        else f"Omada Simulation ({project_key})"
+    )
 
     if SETUP_STATE_PATH.exists() and not force:
         raise SystemExit(
@@ -81,7 +90,7 @@ async def run_setup(
 
     print(f"Creating Jira project '{project_key}' at {env.jira.url} ...")
     with JiraDriver(env.jira.url, secrets.jira_email, secrets.jira_api_token) as jira:
-        jira.get_or_create_project(project_key, "Omada Simulation")
+        jira.get_or_create_project(project_key, project_name)
         board_id = jira.get_board_id(project_key)
 
         try:
@@ -133,6 +142,7 @@ async def run_simulation(
     team_config: dict,
     *,
     dry_run: bool = False,
+    project_key_override: str | None = None,
 ) -> None:
     """Drive 3 sprints. Capture every Omada response. Generate bug report."""
     _ensure_output_dir()
@@ -149,8 +159,10 @@ async def run_simulation(
         state = json.loads(SETUP_STATE_PATH.read_text())
 
     pool: list[dict] = state["pool"]
-    project_key = state["project_key"]
+    project_key = project_key_override or state["project_key"]
     board_id = state["board_id"]
+    if project_key_override:
+        _safety_check_project_key(project_key)
 
     total_sprints = int(team_config.get("total_sprints", 3))
     duration_min = int(team_config.get("sprint_length_minutes", 30))
@@ -324,6 +336,7 @@ async def run_reset(
     *,
     confirm: bool = False,
     dry_run: bool = False,
+    project_key_override: str | None = None,
 ) -> None:
     """Delete the SIM Jira project and remove setup_state.json."""
     _ensure_output_dir()
@@ -331,7 +344,7 @@ async def run_reset(
     if not confirm:
         raise SystemExit("--reset requires --confirm to proceed.")
 
-    project_key = env.jira.project_key_prefix or "SIM"
+    project_key = project_key_override or env.jira.project_key_prefix or "SIM"
     _safety_check_project_key(project_key)
 
     if dry_run:

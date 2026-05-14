@@ -13,6 +13,8 @@ from typing import Any, Optional
 
 import httpx
 
+from src.clerk_auth import ClerkAuth
+
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 AUDIT_LOG_PATH = PACKAGE_ROOT / "output" / "omada_audit.log"
@@ -20,14 +22,12 @@ REQUEST_TIMEOUT = 30.0
 
 
 class OmadaObserver:
-    def __init__(self, omada_url: str, clerk_token: str) -> None:
+    def __init__(self, omada_url: str, auth: ClerkAuth) -> None:
         self._base_url = omada_url.rstrip("/")
+        self._auth = auth
         self._client = httpx.Client(
             timeout=REQUEST_TIMEOUT,
-            headers={
-                "Authorization": f"Bearer {clerk_token}",
-                "Content-Type": "application/json",
-            },
+            headers={"Content-Type": "application/json"},
         )
 
     def close(self) -> None:
@@ -53,8 +53,12 @@ class OmadaObserver:
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Optional[dict]:
         url = f"{self._base_url}{path}"
+        # Mint a fresh JWT on every call — Clerk session tokens expire 60s
+        # after issue and a single sprint can outlive that window.
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers["Authorization"] = f"Bearer {self._auth.get_token()}"
         try:
-            response = self._client.request(method, url, **kwargs)
+            response = self._client.request(method, url, headers=headers, **kwargs)
         except Exception as e:  # httpx.HTTPError and anything else
             self._log(method, path, "ERR", repr(e))
             return None

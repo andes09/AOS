@@ -10,6 +10,7 @@ from src.config import (
     load_secrets,
     load_team,
     print_environment_banner,
+    sign_in_clerk,
     validate_safety,
     verify_connectivity,
 )
@@ -113,50 +114,44 @@ def main() -> None:
     if args.dry_run:
         print(f"[DRY RUN] env={env.name}  team={args.team}")
         team_config = load_team(args.team)
+
+        class _StubSecrets:
+            jira_email = ""
+            jira_api_token = ""
+            omada_email = ""
+            omada_password = ""
+            clerk_publishable_key = ""
+
+        stub = _StubSecrets()
         if args.setup:
-            class _Stub:
-                jira_email = ""
-                jira_api_token = ""
-                omada_clerk_token = ""
             asyncio.run(
                 run_setup(
-                    env, _Stub(), team_config,
+                    env, stub, team_config,
                     force=args.force, dry_run=True,
                     project_key_override=args.project_key,
                 )
             )
         elif args.simulate:
-            class _Stub:
-                jira_email = ""
-                jira_api_token = ""
-                omada_clerk_token = ""
             asyncio.run(
                 run_simulation(
-                    env, _Stub(), team_config,
+                    env, stub, team_config,
+                    auth=None,
                     dry_run=True,
                     project_key_override=args.project_key,
                 )
             )
         elif args.reset:
-            class _Stub:
-                jira_email = ""
-                jira_api_token = ""
-                omada_clerk_token = ""
             asyncio.run(
                 run_reset(
-                    env, _Stub(),
+                    env, stub,
                     confirm=args.confirm, dry_run=True,
                     project_key_override=args.project_key,
                 )
             )
         elif args.clean:
-            class _Stub:
-                jira_email = ""
-                jira_api_token = ""
-                omada_clerk_token = ""
             asyncio.run(
                 run_clean(
-                    env, _Stub(),
+                    env, stub,
                     project_key_override=args.project_key,
                     dry_run=True,
                 )
@@ -168,35 +163,44 @@ def main() -> None:
     secrets = load_secrets()
     print_environment_banner(env, secrets)
 
-    if args.check_env:
-        asyncio.run(verify_connectivity(env, secrets))
-        print("✓ All checks passed")
-        return
+    # --setup, --reset and --clean only touch Jira; --check-env and
+    # --simulate need a live Clerk session.
+    needs_clerk = args.check_env or args.simulate
+    auth = sign_in_clerk(secrets) if needs_clerk else None
+    try:
+        if args.check_env:
+            asyncio.run(verify_connectivity(env, auth))
+            print("✓ All checks passed")
+            return
 
-    team_config = load_team(args.team)
+        team_config = load_team(args.team)
 
-    if args.setup:
-        asyncio.run(run_setup(
-            env, secrets, team_config,
-            force=args.force,
-            project_key_override=args.project_key,
-        ))
-    elif args.simulate:
-        asyncio.run(run_simulation(
-            env, secrets, team_config,
-            project_key_override=args.project_key,
-        ))
-    elif args.reset:
-        asyncio.run(run_reset(
-            env, secrets,
-            confirm=args.confirm,
-            project_key_override=args.project_key,
-        ))
-    elif args.clean:
-        asyncio.run(run_clean(
-            env, secrets,
-            project_key_override=args.project_key,
-        ))
+        if args.setup:
+            asyncio.run(run_setup(
+                env, secrets, team_config,
+                force=args.force,
+                project_key_override=args.project_key,
+            ))
+        elif args.simulate:
+            asyncio.run(run_simulation(
+                env, secrets, team_config,
+                auth=auth,
+                project_key_override=args.project_key,
+            ))
+        elif args.reset:
+            asyncio.run(run_reset(
+                env, secrets,
+                confirm=args.confirm,
+                project_key_override=args.project_key,
+            ))
+        elif args.clean:
+            asyncio.run(run_clean(
+                env, secrets,
+                project_key_override=args.project_key,
+            ))
+    finally:
+        if auth is not None:
+            auth.close()
 
 
 if __name__ == "__main__":

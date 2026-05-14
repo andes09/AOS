@@ -11,6 +11,8 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
+from src.clerk_auth import ClerkAuth, derive_frontend_api_url
+
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 ENV_DIR = PACKAGE_ROOT / "config" / "environments"
@@ -44,7 +46,9 @@ class EnvironmentConfig(BaseModel):
 class Secrets(BaseModel):
     jira_email: str
     jira_api_token: str
-    omada_clerk_token: str
+    omada_email: str
+    omada_password: str
+    clerk_publishable_key: str
 
 
 def _available_envs() -> list[str]:
@@ -73,13 +77,17 @@ def load_secrets() -> Secrets:
     """Load .env and return a validated Secrets object.
 
     Empty strings are treated the same as missing. Raises SystemExit
-    listing every missing secret in one shot.
+    listing every missing secret in one shot. The simulator signs in to
+    Clerk at runtime with OMADA_EMAIL / OMADA_PASSWORD; static session
+    tokens were unworkable because they expire after 60 seconds.
     """
     load_dotenv(PACKAGE_ROOT / ".env")
     required = {
         "JIRA_EMAIL": os.getenv("JIRA_EMAIL"),
         "JIRA_API_TOKEN": os.getenv("JIRA_API_TOKEN"),
-        "OMADA_CLERK_TOKEN": os.getenv("OMADA_CLERK_TOKEN"),
+        "OMADA_EMAIL": os.getenv("OMADA_EMAIL"),
+        "OMADA_PASSWORD": os.getenv("OMADA_PASSWORD"),
+        "CLERK_PUBLISHABLE_KEY": os.getenv("CLERK_PUBLISHABLE_KEY"),
     }
     missing = [name for name, value in required.items() if not value]
     if missing:
@@ -90,8 +98,20 @@ def load_secrets() -> Secrets:
     return Secrets(
         jira_email=required["JIRA_EMAIL"],
         jira_api_token=required["JIRA_API_TOKEN"],
-        omada_clerk_token=required["OMADA_CLERK_TOKEN"],
+        omada_email=required["OMADA_EMAIL"],
+        omada_password=required["OMADA_PASSWORD"],
+        clerk_publishable_key=required["CLERK_PUBLISHABLE_KEY"],
     )
+
+
+def sign_in_clerk(secrets: Secrets) -> ClerkAuth:
+    """Convenience: turn loaded secrets into a ready-to-use ClerkAuth.
+
+    Encapsulates the publishable-key → frontend-API-URL derivation so
+    callers don't have to know the encoding trick.
+    """
+    frontend_url = derive_frontend_api_url(secrets.clerk_publishable_key)
+    return ClerkAuth.sign_in(frontend_url, secrets.omada_email, secrets.omada_password)
 
 
 def load_team(team_name: str) -> dict:
@@ -150,21 +170,22 @@ def validate_safety(env: EnvironmentConfig) -> None:
 
 async def verify_connectivity(
     env: EnvironmentConfig,
-    secrets: Secrets,
+    auth: ClerkAuth,
     *,
     transport: Optional[httpx.AsyncBaseTransport] = None,
 ) -> None:
     """Probe Omada for liveness and auth.
 
     Step 1 — GET /health (expects 200).
-    Step 2 — GET /api/me with Bearer {omada_clerk_token} (expects 200;
-             401 indicates an expired Clerk token).
+    Step 2 — GET /api/me with a freshly minted Clerk JWT (expects 200; a
+             401 here means the signed-in account lacks an Omada user
+             record, since the token itself was just issued by Clerk).
 
     The ``transport`` parameter exists for tests using
     ``httpx.MockTransport``; production callers pass nothing.
     """
     base = env.omada.api_url.rstrip("/")
-    headers = {"Authorization": f"Bearer {secrets.omada_clerk_token}"}
+    headers = {"Authorization": f"Bearer {auth.get_token()}"}
 
     client_kwargs: dict = {"timeout": httpx.Timeout(10.0)}
     if transport is not None:
@@ -192,8 +213,9 @@ async def verify_connectivity(
 
         if me.status_code == 401:
             raise SystemExit(
-                "Clerk token expired. Re-grab from DevTools → "
-                "Application → Cookies → __session"
+                "Omada rejected a freshly-minted Clerk token. The signed-in "
+                "account (OMADA_EMAIL) likely has no matching Omada user. "
+                "Verify the account can sign in via the web UI first."
             )
         if me.status_code >= 400:
             raise SystemExit(

@@ -38,15 +38,19 @@ cp .env.example .env
 # Edit .env with real values (see below).
 ```
 
-### Getting the Omada Clerk session token
+### Omada sign-in credentials
 
-1. Open Omada locally and sign in.
-2. Open DevTools → Application → Cookies → your Omada origin.
-3. Copy the value of the cookie named `__session`.
-4. Paste it into `.env` as `OMADA_CLERK_TOKEN=...`.
+The simulator signs in to Clerk with email + password at startup and
+auto-refreshes the session token throughout the run, so static cookies
+are out of the picture.
 
-Clerk session tokens expire (typically within an hour). When you see
-`Clerk token expired` from `--check-env`, repeat the steps above.
+1. Set `OMADA_EMAIL` and `OMADA_PASSWORD` in `.env` to a valid Omada
+   account (use a dedicated service account if you can — MFA on the
+   account will cause sign-in to fail since the simulator can't satisfy
+   a second factor).
+2. Set `CLERK_PUBLISHABLE_KEY` in `.env` to the same value used by the
+   web app (`apps/web/.env` → `VITE_CLERK_PUBLISHABLE_KEY`). The
+   simulator decodes the Frontend API host from this key.
 
 ## How environments work
 
@@ -86,7 +90,8 @@ The validator will tell you if the URL fails the substring rules.
 
 Strict boundary:
 
-- **`.env`** (gitignored) — `JIRA_EMAIL`, `JIRA_API_TOKEN`, `OMADA_CLERK_TOKEN`
+- **`.env`** (gitignored) — `JIRA_EMAIL`, `JIRA_API_TOKEN`, `OMADA_EMAIL`,
+  `OMADA_PASSWORD`, `CLERK_PUBLISHABLE_KEY`
 - **YAML files** (committed) — every other piece of config
 
 If a value would cause a security incident if it leaked, it goes in
@@ -110,11 +115,13 @@ What it does, in order:
    enforce `required_url_substrings`, `block_url_substrings`, and the
    `allow_production` gate.
 4. `print_environment_banner(env, secrets)` — show what's about to run.
-5. `verify_connectivity(env, secrets)`:
+5. `sign_in_clerk(secrets)` — signs in to Clerk's Frontend API with
+   `OMADA_EMAIL` / `OMADA_PASSWORD` and caches the session for refresh.
+6. `verify_connectivity(env, auth)`:
    - `GET {api_url}/health` — confirms Omada is reachable.
-   - `GET {api_url}/api/me` with `Authorization: Bearer {OMADA_CLERK_TOKEN}` —
-     confirms the Clerk token is valid.
-6. Prints `✓ All checks passed`.
+   - `GET {api_url}/api/me` with a freshly-minted Clerk JWT — confirms
+     the signed-in account is recognised by Omada.
+7. Prints `✓ All checks passed`.
 
 ### Expected output for `--env local` (Omada running locally)
 

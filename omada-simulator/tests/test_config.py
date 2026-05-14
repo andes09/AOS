@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from src.clerk_auth import ClerkAuth
 from src.config import (
     EnvironmentConfig,
     JiraConfig,
@@ -47,8 +48,27 @@ def _make_env(
 
 def _secrets() -> Secrets:
     return Secrets(
-        jira_email="x@y.com", jira_api_token="t", omada_clerk_token="clerk"
+        jira_email="x@y.com",
+        jira_api_token="t",
+        omada_email="sim@example.com",
+        omada_password="hunter2",
+        clerk_publishable_key="pk_test_c2luY2VyZS1yaGluby0wLmNsZXJrLmFjY291bnRzLmRldiQ",
     )
+
+
+class _StubAuth:
+    """Lightweight ClerkAuth stand-in for verify_connectivity tests.
+
+    We don't want connectivity tests to depend on Clerk's Frontend API
+    being mocked end-to-end — they only care that the token we return
+    rides in the /api/me request.
+    """
+
+    def __init__(self, token: str = "stub-jwt") -> None:
+        self._token = token
+
+    def get_token(self) -> str:
+        return self._token
 
 
 def _transport(handler):
@@ -107,29 +127,39 @@ def test_safety_requires_substring_match():
 def test_missing_secrets_raises_system_exit(monkeypatch, tmp_path):
     # Point .env resolution at an empty tmp dir so the real .env can't leak in.
     monkeypatch.setattr("src.config.PACKAGE_ROOT", tmp_path)
-    for key in ("JIRA_EMAIL", "JIRA_API_TOKEN", "OMADA_CLERK_TOKEN"):
+    for key in (
+        "JIRA_EMAIL",
+        "JIRA_API_TOKEN",
+        "OMADA_EMAIL",
+        "OMADA_PASSWORD",
+        "CLERK_PUBLISHABLE_KEY",
+    ):
         monkeypatch.delenv(key, raising=False)
     with pytest.raises(SystemExit) as exc:
         load_secrets()
     msg = str(exc.value)
-    # All three missing secrets must be listed in a single error message.
+    # All five missing secrets must be listed in a single error message.
     assert "JIRA_EMAIL" in msg
     assert "JIRA_API_TOKEN" in msg
-    assert "OMADA_CLERK_TOKEN" in msg
+    assert "OMADA_EMAIL" in msg
+    assert "OMADA_PASSWORD" in msg
+    assert "CLERK_PUBLISHABLE_KEY" in msg
 
 
 def test_empty_secret_treated_as_missing(monkeypatch, tmp_path):
     monkeypatch.setattr("src.config.PACKAGE_ROOT", tmp_path)
     monkeypatch.setenv("JIRA_EMAIL", "ok@example.com")
     monkeypatch.setenv("JIRA_API_TOKEN", "")
-    monkeypatch.setenv("OMADA_CLERK_TOKEN", "ok-clerk")
+    monkeypatch.setenv("OMADA_EMAIL", "sim@example.com")
+    monkeypatch.setenv("OMADA_PASSWORD", "hunter2")
+    monkeypatch.setenv("CLERK_PUBLISHABLE_KEY", "pk_test_xyz")
     with pytest.raises(SystemExit) as exc:
         load_secrets()
     msg = str(exc.value)
     assert "JIRA_API_TOKEN" in msg
     # Set secrets must not be flagged
     assert "JIRA_EMAIL" not in msg
-    assert "OMADA_CLERK_TOKEN" not in msg
+    assert "OMADA_PASSWORD" not in msg
 
 
 def test_load_team_succeeds():
@@ -178,11 +208,15 @@ def test_secrets_loaded_from_env(monkeypatch, tmp_path):
     monkeypatch.setattr("src.config.PACKAGE_ROOT", tmp_path)
     monkeypatch.setenv("JIRA_EMAIL", "test@example.com")
     monkeypatch.setenv("JIRA_API_TOKEN", "tok-123")
-    monkeypatch.setenv("OMADA_CLERK_TOKEN", "clerk-456")
+    monkeypatch.setenv("OMADA_EMAIL", "sim@example.com")
+    monkeypatch.setenv("OMADA_PASSWORD", "hunter2")
+    monkeypatch.setenv("CLERK_PUBLISHABLE_KEY", "pk_test_xyz")
     s = load_secrets()
     assert s.jira_email == "test@example.com"
     assert s.jira_api_token == "tok-123"
-    assert s.omada_clerk_token == "clerk-456"
+    assert s.omada_email == "sim@example.com"
+    assert s.omada_password == "hunter2"
+    assert s.clerk_publishable_key == "pk_test_xyz"
 
 
 def test_print_environment_banner(capsys):
@@ -202,12 +236,12 @@ async def test_verify_connectivity_succeeds():
         if req.url.path == "/health":
             return httpx.Response(200, json={"ok": True})
         if req.url.path == "/api/me":
-            assert req.headers.get("Authorization") == "Bearer clerk"
+            assert req.headers.get("Authorization") == "Bearer stub-jwt"
             return httpx.Response(200, json={"id": "user_123"})
         return httpx.Response(404)
 
     env = _make_env(api_url="http://localhost:8000")
-    await verify_connectivity(env, _secrets(), transport=_transport(handler))
+    await verify_connectivity(env, _StubAuth(), transport=_transport(handler))
 
 
 @pytest.mark.asyncio
@@ -217,7 +251,7 @@ async def test_verify_connectivity_health_unreachable():
 
     env = _make_env()
     with pytest.raises(SystemExit) as exc:
-        await verify_connectivity(env, _secrets(), transport=_transport(handler))
+        await verify_connectivity(env, _StubAuth(), transport=_transport(handler))
     assert "Omada not running" in str(exc.value)
 
 
@@ -228,12 +262,16 @@ async def test_verify_connectivity_health_5xx():
 
     env = _make_env()
     with pytest.raises(SystemExit) as exc:
-        await verify_connectivity(env, _secrets(), transport=_transport(handler))
+        await verify_connectivity(env, _StubAuth(), transport=_transport(handler))
     assert "/health returned 500" in str(exc.value)
 
 
 @pytest.mark.asyncio
-async def test_verify_connectivity_me_401_says_clerk_expired():
+async def test_verify_connectivity_me_401_blames_account_not_token():
+    """A 401 used to mean a stale pasted cookie. Now we always mint a fresh
+    token at request time, so a 401 means the signed-in account isn't a
+    known Omada user — surface that distinct message instead.
+    """
     def handler(req):
         if req.url.path == "/health":
             return httpx.Response(200)
@@ -241,10 +279,10 @@ async def test_verify_connectivity_me_401_says_clerk_expired():
 
     env = _make_env()
     with pytest.raises(SystemExit) as exc:
-        await verify_connectivity(env, _secrets(), transport=_transport(handler))
+        await verify_connectivity(env, _StubAuth(), transport=_transport(handler))
     msg = str(exc.value)
-    assert "Clerk token expired" in msg
-    assert "__session" in msg
+    assert "freshly-minted Clerk token" in msg
+    assert "OMADA_EMAIL" in msg
 
 
 @pytest.mark.asyncio
@@ -256,6 +294,13 @@ async def test_verify_connectivity_me_5xx_shows_body():
 
     env = _make_env()
     with pytest.raises(SystemExit) as exc:
-        await verify_connectivity(env, _secrets(), transport=_transport(handler))
+        await verify_connectivity(env, _StubAuth(), transport=_transport(handler))
     assert "/api/me returned 500" in str(exc.value)
     assert "db down" in str(exc.value)
+
+
+# Type-only smoke test: _StubAuth must satisfy the duck-typed protocol
+# expected by verify_connectivity. ClerkAuth has the same shape.
+def test_stub_auth_matches_clerk_auth_protocol():
+    assert hasattr(ClerkAuth, "get_token")
+    assert hasattr(_StubAuth(), "get_token")

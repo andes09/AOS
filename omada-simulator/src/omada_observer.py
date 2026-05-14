@@ -7,6 +7,8 @@ None. Surfacing bugs is the point of the simulator, so we never raise.
 
 from __future__ import annotations
 
+import base64
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -22,6 +24,8 @@ REQUEST_TIMEOUT = 30.0
 class OmadaObserver:
     def __init__(self, omada_url: str, clerk_token: str) -> None:
         self._base_url = omada_url.rstrip("/")
+        self.token = clerk_token
+        self.session_id = self._extract_session_id(clerk_token)
         self._client = httpx.Client(
             timeout=REQUEST_TIMEOUT,
             headers={
@@ -29,9 +33,9 @@ class OmadaObserver:
                 "Content-Type": "application/json",
             },
         )
-        # Print the token-expired guidance at most once per run — every
+        # Print the token-refresh-failed guidance at most once per run — every
         # subsequent endpoint will 401 too once the token dies, and we'd
-        # rather not spam the same two lines fifty times.
+        # rather not spam the same line fifty times.
         self._token_expired_warned = False
 
     def close(self) -> None:
@@ -42,6 +46,36 @@ class OmadaObserver:
 
     def __exit__(self, *_: Any) -> None:
         self.close()
+
+    @staticmethod
+    def _extract_session_id(token: str) -> Optional[str]:
+        try:
+            payload = token.split(".")[1]
+            payload += "=" * (4 - len(payload) % 4)
+            decoded = json.loads(base64.b64decode(payload))
+            return decoded.get("sid")
+        except Exception:
+            return None
+
+    def _refresh_token(self) -> bool:
+        if not self.session_id:
+            return False
+        try:
+            resp = httpx.post(
+                f"https://clerk.accounts.dev/v1/client/sessions/"
+                f"{self.session_id}/tokens",
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=REQUEST_TIMEOUT,
+            )
+            if resp.status_code == 200:
+                new_token = resp.json().get("jwt")
+                if new_token:
+                    self.token = new_token
+                    self._client.headers["Authorization"] = f"Bearer {new_token}"
+                    return True
+        except Exception:
+            pass
+        return False
 
     def _log(self, method: str, path: str, status: str, preview: str) -> None:
         AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -63,14 +97,20 @@ class OmadaObserver:
             self._log(method, path, "ERR", repr(e))
             return None
 
+        if response.status_code == 401:
+            if self._refresh_token():
+                try:
+                    response = self._client.request(method, url, **kwargs)
+                except Exception as e:
+                    self._log(method, path, "ERR", repr(e))
+                    return None
+            elif not self._token_expired_warned:
+                print(
+                    "[omada] Token refresh failed — subsequent calls will fail"
+                )
+                self._token_expired_warned = True
+
         body_text = response.text or ""
-        if response.status_code == 401 and not self._token_expired_warned:
-            print("[omada] Token expired. Re-run with a fresh --token value.")
-            print(
-                "[omada] Get a fresh token: browser console → "
-                "window.Clerk.session.getToken()"
-            )
-            self._token_expired_warned = True
         if response.status_code >= 400:
             self._log(method, path, str(response.status_code), body_text)
             return None

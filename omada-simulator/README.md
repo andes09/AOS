@@ -1,21 +1,22 @@
 # omada-simulator
 
-Foundational, environment-aware configuration for the Omada simulator.
+Stage 1: drives a fake engineering team through 3 sprints in a real
+Jira Cloud sandbox while Omada observes through its normal sync flow.
+The goal is to surface integration bugs and produce a written report.
 
-## What this is
+## What's in this package
 
-This package is the **config infrastructure** the Omada simulator's
-behavioral logic will build on top of. It provides:
+- `--check-env` — load env YAML, validate safety, probe Omada `/health` + `/api/me`
+- `--setup` — create Jira `SIM` project, generate a 100-ticket pool, add Blocks links
+- `--simulate` — run 3 sprints concurrently with 4 simulated developers
+- `--reset` — delete the Jira SIM project and remove local state
+- `--dry-run` — preview any of `--setup`/`--simulate`/`--reset` without API calls
 
-- A `--env` flag that selects a YAML config from `config/environments/`
-- Pydantic-validated environment models (Omada URL, Jira coordinates, safety rules)
-- Connectivity checks against the Omada API (`/health` + `/api/me`)
-- A deliberate refusal mechanism for production
-- A team config under `config/teams/`
-
-The simulator's behavior — Jira driver, the developer loop, the
-orchestrator, audit logging — is **not in this package**. Those land in
-a follow-up task.
+All Jira and Omada calls are audited to `output/jira_audit.log` and
+`output/omada_audit.log`. The Omada observer never raises — every
+non-2xx, timeout, or decode error is logged and returned as `None`, so
+broken endpoints surface in the final bug report rather than crashing
+the simulator.
 
 ## Prerequisites
 
@@ -167,6 +168,89 @@ configs means there's no path where pointing at production is plausible.
 To run against the real production environment, you'd need to author a
 new YAML that explicitly sets `allow_production: true` — a deliberate,
 reviewable act.
+
+## Running the Stage 1 simulator
+
+Once `--check-env --env local` passes, the simulator runs in three
+phases. The first two are gated so you can't run them out of order, and
+both support `--dry-run` so you can preview what would happen without
+calling Jira or Omada.
+
+### 1. Setup — create the Jira project and ticket pool
+
+```bash
+python -m src.main --setup --env local --dry-run    # preview only
+python -m src.main --setup --env local              # actually create SIM project
+python -m src.main --setup --env local --force      # overwrite existing state
+```
+
+This creates a Jira Scrum project keyed `SIM`, generates 100 tickets
+according to `config/teams/stage1_team.yaml`'s distribution, and adds
+~10% "Blocks" issue links between random pairs. The created ticket keys
+and pool state are persisted to `output/setup_state.json`. The simulator
+refuses to overwrite an existing state file without `--force`.
+
+### 2. Simulate — run 3 sprints
+
+```bash
+python -m src.main --simulate --env local --dry-run    # show plan only
+python -m src.main --simulate --env local              # run for real
+```
+
+For each sprint the simulator:
+1. Picks 5–8 tickets per developer from the unused pool.
+2. Creates a Jira sprint, adds the picked issues, activates it.
+3. Triggers an Omada sync (`POST /api/integrations/jira/sync`).
+4. Generates a Sprint Brain plan (`POST /api/sprint-brain/plan`).
+5. Pushes the plan to Jira (`POST /api/sprint-brain/push-to-jira`).
+6. Runs 4 developer coroutines concurrently via `asyncio.gather`, each
+   transitioning their assigned tickets to "In Progress" then "Done"
+   based on per-dev completion rate and speed.
+7. Closes the sprint, triggers another sync, fetches retro, velocity
+   health, and dependency-radar snapshots into `output/sprint_{N}_*.json`.
+
+After all sprints land, the simulator writes
+`output/simulation_results.json` and `output/BUGS_INTEGRATION.md` — a
+human-readable report categorising bugs as Critical / High / Medium with
+pointers to the raw response files for follow-up.
+
+### 3. Reset — tear down
+
+```bash
+python -m src.main --reset --env local --confirm
+python -m src.main --reset --env local --dry-run --confirm   # preview
+```
+
+Deletes the Jira `SIM` project and removes `output/setup_state.json`.
+The simulator refuses to delete any Jira project whose key does not
+start with `SIM`.
+
+## Safety rails
+
+1. The Jira project key must start with `SIM`. Anything else and
+   `--setup` / `--reset` refuse.
+2. `--reset` requires `--confirm` — there is no implicit deletion.
+3. `--setup` requires `--force` to overwrite an existing state file.
+4. Every environment's `safety.required_url_substrings` /
+   `block_url_substrings` are enforced before any HTTP call.
+5. Jira calls are rate-limited to ≤10 req/sec with exponential backoff
+   on 429 and 5xx.
+
+## Output files
+
+```
+output/
+├── setup_state.json            ← Jira project + ticket pool snapshot
+├── simulation_results.json     ← per-sprint committed/completed/spillover
+├── BUGS_INTEGRATION.md         ← the human-readable bug report
+├── sprint_{N}_plan.json        ← Sprint Brain plan response
+├── sprint_{N}_push.json        ← push-to-jira response
+├── sprint_{N}_retro.json       ← retro response
+├── sprint_{N}_health.json      ← velocity / health response
+├── sprint_{N}_deps.json        ← dependency-radar response
+├── jira_audit.log              ← every Jira call: method | path | status | ms
+└── omada_audit.log             ← every Omada call: method | path | status | preview
+```
 
 ## Tests
 

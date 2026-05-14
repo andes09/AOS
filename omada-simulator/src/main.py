@@ -10,7 +10,7 @@ from src.config import (
     load_secrets,
     load_team,
     print_environment_banner,
-    sign_in_clerk,
+    resolve_clerk_token,
     validate_safety,
     verify_connectivity,
 )
@@ -87,6 +87,13 @@ def _build_parser() -> argparse.ArgumentParser:
              "Useful when the default SIM key is still in Jira's "
              "post-deletion reservation window.",
     )
+    parser.add_argument(
+        "--token",
+        default=None,
+        help="Fresh Clerk session JWT to use for this run. Overrides "
+             "OMADA_CLERK_TOKEN from .env. Get one in the browser console "
+             "with: await window.Clerk.session.getToken()",
+    )
     return parser
 
 
@@ -118,9 +125,7 @@ def main() -> None:
         class _StubSecrets:
             jira_email = ""
             jira_api_token = ""
-            omada_email = ""
-            omada_password = ""
-            clerk_publishable_key = ""
+            omada_clerk_token = ""
 
         stub = _StubSecrets()
         if args.setup:
@@ -135,7 +140,7 @@ def main() -> None:
             asyncio.run(
                 run_simulation(
                     env, stub, team_config,
-                    auth=None,
+                    clerk_token=args.token or "dry-run-token",
                     dry_run=True,
                     project_key_override=args.project_key,
                 )
@@ -164,43 +169,40 @@ def main() -> None:
     print_environment_banner(env, secrets)
 
     # --setup, --reset and --clean only touch Jira; --check-env and
-    # --simulate need a live Clerk session.
+    # --simulate need a Clerk token.
     needs_clerk = args.check_env or args.simulate
-    auth = sign_in_clerk(secrets) if needs_clerk else None
-    try:
-        if args.check_env:
-            asyncio.run(verify_connectivity(env, auth))
-            print("✓ All checks passed")
-            return
+    clerk_token = resolve_clerk_token(args.token, secrets) if needs_clerk else ""
 
-        team_config = load_team(args.team)
+    if args.check_env:
+        asyncio.run(verify_connectivity(env, clerk_token))
+        print("✓ All checks passed")
+        return
 
-        if args.setup:
-            asyncio.run(run_setup(
-                env, secrets, team_config,
-                force=args.force,
-                project_key_override=args.project_key,
-            ))
-        elif args.simulate:
-            asyncio.run(run_simulation(
-                env, secrets, team_config,
-                auth=auth,
-                project_key_override=args.project_key,
-            ))
-        elif args.reset:
-            asyncio.run(run_reset(
-                env, secrets,
-                confirm=args.confirm,
-                project_key_override=args.project_key,
-            ))
-        elif args.clean:
-            asyncio.run(run_clean(
-                env, secrets,
-                project_key_override=args.project_key,
-            ))
-    finally:
-        if auth is not None:
-            auth.close()
+    team_config = load_team(args.team)
+
+    if args.setup:
+        asyncio.run(run_setup(
+            env, secrets, team_config,
+            force=args.force,
+            project_key_override=args.project_key,
+        ))
+    elif args.simulate:
+        asyncio.run(run_simulation(
+            env, secrets, team_config,
+            clerk_token=clerk_token,
+            project_key_override=args.project_key,
+        ))
+    elif args.reset:
+        asyncio.run(run_reset(
+            env, secrets,
+            confirm=args.confirm,
+            project_key_override=args.project_key,
+        ))
+    elif args.clean:
+        asyncio.run(run_clean(
+            env, secrets,
+            project_key_override=args.project_key,
+        ))
 
 
 if __name__ == "__main__":

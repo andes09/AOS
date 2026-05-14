@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from src.clerk_auth import ClerkAuth
 from src.config import EnvironmentConfig, Secrets
 from src.developer import run_developer
 from src.jira_driver import JiraDriver, JiraDriverError
@@ -147,7 +146,7 @@ async def run_simulation(
     secrets: Secrets,
     team_config: dict,
     *,
-    auth: ClerkAuth | None = None,
+    clerk_token: str = "",
     dry_run: bool = False,
     project_key_override: str | None = None,
 ) -> None:
@@ -196,10 +195,10 @@ async def run_simulation(
         print("[DRY RUN] Would write simulation_results.json and BUGS_INTEGRATION.md")
         return
 
-    if auth is None:
+    if not clerk_token:
         raise SystemExit(
-            "run_simulation requires a signed-in ClerkAuth — call "
-            "config.sign_in_clerk(secrets) before invoking."
+            "run_simulation requires a Clerk token — pass --token at the CLI, "
+            "or set OMADA_CLERK_TOKEN in .env."
         )
 
     sprint_results: list[dict] = []
@@ -207,7 +206,7 @@ async def run_simulation(
 
     with (
         JiraDriver(env.jira.url, secrets.jira_email, secrets.jira_api_token) as jira,
-        OmadaObserver(env.omada.api_url, auth) as omada,
+        OmadaObserver(env.omada.api_url, clerk_token) as omada,
     ):
         resolved = omada.resolve_team_id()
         if resolved:

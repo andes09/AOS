@@ -38,19 +38,26 @@ cp .env.example .env
 # Edit .env with real values (see below).
 ```
 
-### Omada sign-in credentials
+### Omada Clerk token
 
-The simulator signs in to Clerk with email + password at startup and
-auto-refreshes the session token throughout the run, so static cookies
-are out of the picture.
+The simulator needs a Clerk session JWT to call Omada. These tokens
+expire ~60 s after they're issued, and we can't sign in programmatically
+when the account uses Google OAuth. So the workflow is:
 
-1. Set `OMADA_EMAIL` and `OMADA_PASSWORD` in `.env` to a valid Omada
-   account (use a dedicated service account if you can — MFA on the
-   account will cause sign-in to fail since the simulator can't satisfy
-   a second factor).
-2. Set `CLERK_PUBLISHABLE_KEY` in `.env` to the same value used by the
-   web app (`apps/web/.env` → `VITE_CLERK_PUBLISHABLE_KEY`). The
-   simulator decodes the Frontend API host from this key.
+1. Open the Omada web app (e.g. http://localhost:5173) and sign in.
+2. In the browser console, run:
+   ```js
+   await window.Clerk.session.getToken()
+   ```
+3. Pass the resulting JWT to the simulator via `--token`:
+   ```bash
+   python -m src.main --simulate --env local --token "eyJ..."
+   ```
+
+`OMADA_CLERK_TOKEN` in `.env` is still honoured as a fallback (handy for
+one-shot calls that complete in under a minute), but `--token` is the
+practical path. If a request 401s mid-run, the observer prints a
+reminder to grab a fresh token and re-run.
 
 ## How environments work
 
@@ -90,8 +97,8 @@ The validator will tell you if the URL fails the substring rules.
 
 Strict boundary:
 
-- **`.env`** (gitignored) — `JIRA_EMAIL`, `JIRA_API_TOKEN`, `OMADA_EMAIL`,
-  `OMADA_PASSWORD`, `CLERK_PUBLISHABLE_KEY`
+- **`.env`** (gitignored) — `JIRA_EMAIL`, `JIRA_API_TOKEN`, optional
+  `OMADA_CLERK_TOKEN` (prefer `--token` at the CLI)
 - **YAML files** (committed) — every other piece of config
 
 If a value would cause a security incident if it leaked, it goes in
@@ -115,11 +122,12 @@ What it does, in order:
    enforce `required_url_substrings`, `block_url_substrings`, and the
    `allow_production` gate.
 4. `print_environment_banner(env, secrets)` — show what's about to run.
-5. `sign_in_clerk(secrets)` — signs in to Clerk's Frontend API with
-   `OMADA_EMAIL` / `OMADA_PASSWORD` and caches the session for refresh.
-6. `verify_connectivity(env, auth)`:
+5. `resolve_clerk_token(args.token, secrets)` — picks the token: `--token`
+   wins over `OMADA_CLERK_TOKEN` from `.env`; errors with guidance if
+   neither is set.
+6. `verify_connectivity(env, clerk_token)`:
    - `GET {api_url}/health` — confirms Omada is reachable.
-   - `GET {api_url}/api/me` with a freshly-minted Clerk JWT — confirms
+   - `GET {api_url}/api/me` with the supplied Clerk JWT — confirms
      the signed-in account is recognised by Omada.
 7. Prints `✓ All checks passed`.
 

@@ -1,5 +1,6 @@
 team_name: "Stage1 Test Team"
-sprint_length_minutes: 30
+# 3 min for smoke testing, increase to 30+ for realistic simulation
+sprint_length_minutes: .333333333
 total_sprints: 3
 ticket_pool_size: 100
 

@@ -40,8 +40,8 @@ def generate_bug_report(simulation_results: dict) -> None:
     summary_table = [
         "## Per-sprint summary",
         "",
-        "| Sprint | Committed | Completed | Spillover | Sync | Plan | Push | Retro | Health | Deps |",
-        "|--------|-----------|-----------|-----------|------|------|------|-------|--------|------|",
+        "| Sprint | Committed | Completed | Spillover | Sync | Plan | Push | Retro | Health | Deps | Features |",
+        "|--------|-----------|-----------|-----------|------|------|------|-------|--------|------|----------|",
     ]
     for s in sprints:
         summary_table.append(
@@ -54,7 +54,8 @@ def generate_bug_report(simulation_results: dict) -> None:
             f"| {_ok(s.get('push_ok', False))} "
             f"| {_ok(s.get('retro_ok', False))} "
             f"| {_ok(s.get('health_ok', False))} "
-            f"| {_ok(s.get('deps_ok', False))} |"
+            f"| {_ok(s.get('deps_ok', False))} "
+            f"| {_ok(s.get('features_ok', False))} |"
         )
 
     critical: list[str] = []
@@ -93,6 +94,11 @@ def generate_bug_report(simulation_results: dict) -> None:
         if not s.get("deps_ok"):
             medium.append(
                 f"Sprint {sn}: dependency-radar returned None."
+            )
+        if not s.get("features_ok"):
+            high.append(
+                f"Sprint {sn}: GET /api/features returned None — "
+                f"basic connectivity/auth may be broken."
             )
         committed = s.get("committed", 0)
         completed = s.get("completed", 0)

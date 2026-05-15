@@ -27,6 +27,10 @@ class CurrentSprintResponse(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
     id: str
     name: str
+    # jira_sprint_id exposed so integrations (e.g. the Stage 1 simulator) can
+    # join Omada sprints to their originating Jira sprint id without scraping
+    # by name. Optional because not every sprint has a Jira origin.
+    jira_sprint_id: str | None
     start_date: date | None
     end_date: date | None
     sprint_length: int
@@ -57,6 +61,7 @@ async def get_completed_sprints(
             CurrentSprintResponse(
                 id=str(s.id),
                 name=s.name,
+                jira_sprint_id=s.jira_sprint_id,
                 start_date=s.start_date,
                 end_date=s.end_date,
                 sprint_length=team.sprint_length_days,

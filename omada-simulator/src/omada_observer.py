@@ -193,18 +193,71 @@ class OmadaObserver:
     def get_dependency_radar(self, team_id: str) -> Optional[dict]:
         return self._request("GET", f"/api/dependency-radar/team/{team_id}")
 
-    def get_retro(self, sprint_id: str) -> Optional[dict]:
-        return self._request("GET", f"/api/retro/{sprint_id}")
+    def get_omada_sprint_id(self, jira_sprint_id: int) -> Optional[str]:
+        """Look up an Omada sprint UUID by Jira sprint ID.
 
-    def generate_retro(self, sprint_id: str) -> Optional[dict]:
-        # /api/retro/generate/{sprint_id} requires team_id as a query param;
-        # the API resolves the retro under that team's organisation.
+        The simulator only knows the integer Jira sprint id returned by
+        ``JiraDriver.create_sprint``, but every Omada-side endpoint that
+        operates on sprints (retro, etc.) keys on the Omada sprint UUID.
+        We resolve the join via ``GET /api/sprints/completed``, which now
+        exposes ``jiraSprintId`` for exactly this reason. Returns the
+        Omada UUID (string) or None if not found.
+        """
+        resp = self._request("GET", "/api/sprints/completed")
+        if not resp:
+            self._log("LOOKUP", "/api/sprints/completed", "MISS",
+                      f"no response for jira_sprint_id={jira_sprint_id}")
+            return None
+
+        sprints = resp.get("sprints") or resp.get("data") or []
+        target = str(jira_sprint_id)
+        for s in sprints:
+            # camelCase from the API; tolerate snake_case too.
+            jsid = s.get("jiraSprintId") or s.get("jira_sprint_id")
+            if jsid is not None and str(jsid) == target:
+                omada_id = s.get("id")
+                if omada_id:
+                    return str(omada_id)
+
+        self._log(
+            "LOOKUP",
+            "/api/sprints/completed",
+            "MISS",
+            f"jira_sprint_id={jira_sprint_id} not found in {len(sprints)} sprints",
+        )
+        return None
+
+    def get_retro(self, jira_sprint_id: int) -> Optional[dict]:
+        """Generate (POST) and then fetch (GET) the retro for a Jira sprint.
+
+        Accepts the Jira sprint id (integer) the simulator already has, looks
+        up the corresponding Omada sprint UUID, then:
+          1. POSTs /api/retro/generate/{omada_uuid}?team_id=...
+          2. GETs  /api/retro/{omada_uuid}
+
+        Returns the POST payload (which is the full retro body) on success.
+        Falls back to the GET payload if POST returns nothing (e.g. retro
+        was already generated and POST short-circuited). Returns None if
+        we can't resolve the Omada sprint id at all.
+        """
+        omada_uuid = self.get_omada_sprint_id(jira_sprint_id)
+        if not omada_uuid:
+            self._log(
+                "WARN",
+                "get_retro",
+                "SKIP",
+                f"no Omada sprint UUID for jira_sprint_id={jira_sprint_id}",
+            )
+            return None
+
         params = {"team_id": self.team_id} if self.team_id else None
-        return self._request(
+        generated = self._request(
             "POST",
-            f"/api/retro/generate/{sprint_id}",
+            f"/api/retro/generate/{omada_uuid}",
             params=params,
         )
+        fetched = self._request("GET", f"/api/retro/{omada_uuid}")
+        return generated or fetched
 
     def get_features(self) -> Optional[dict]:
         return self._request("GET", "/api/features")

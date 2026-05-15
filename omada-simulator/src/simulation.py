@@ -40,6 +40,42 @@ def _write_json(path: Path, payload: Any) -> None:
         print(f"[output] ERROR writing {path}: {e}")
 
 
+def _render_progress_line(
+    sprint_num: int,
+    total_sprints: int,
+    total_tickets: int,
+    results: dict,
+    in_progress: set[str],
+    elapsed: float,
+    total_duration: float,
+    *,
+    force_full: bool = False,
+) -> str:
+    """Build a single progress-bar line for the current sprint state.
+
+    Progress percent is wall-clock driven (elapsed / total_duration) so the
+    bar tracks the sprint timer rather than how many tickets devs happen to
+    have closed. Ticket counts are shown separately for context.
+    """
+    bar_width = 16
+    if force_full or total_duration <= 0:
+        pct = 1.0
+    else:
+        pct = max(0.0, min(1.0, elapsed / total_duration))
+    filled = int(round(pct * bar_width))
+    bar = "█" * filled + "░" * (bar_width - filled)
+    done = sum(1 for r in results.values() if r == "completed")
+    ip = len(in_progress)
+    shown_elapsed = total_duration if force_full else min(elapsed, total_duration)
+    mm = int(shown_elapsed) // 60
+    ss = int(shown_elapsed) % 60
+    return (
+        f"\r[Sprint {sprint_num}/{total_sprints}] {bar} "
+        f"{int(round(pct * 100))}% | {mm:02d}:{ss:02d} elapsed | "
+        f"{done}/{total_tickets} tickets done | {ip} in progress"
+    )
+
+
 async def _print_sprint_progress(
     sprint_num: int,
     total_sprints: int,
@@ -47,34 +83,52 @@ async def _print_sprint_progress(
     results: dict,
     in_progress: set[str],
     started_at: float,
-    interval: float = 15.0,
+    total_duration: float,
+    interval: float = 0.5,
 ) -> None:
-    """Print a single-line live progress indicator every ``interval`` seconds.
+    """Print a single-line live progress indicator driven by wall-clock time.
 
-    Cancelled by the caller when the sprint ends. Uses ``\\r`` so the line
-    updates in place; on cancel we emit a newline so subsequent output isn't
-    glued to the bar.
+    The loop is governed by ``time.monotonic()`` against the sprint start +
+    ``total_duration`` — it does NOT depend on developer task completion. When
+    devs finish their queues early the bar keeps ticking until the sprint
+    clock runs out. The caller cancels the task only when the sprint ends.
+    Uses ``\\r`` so the line updates in place; on exit we emit a newline so
+    subsequent output isn't glued to the bar.
     """
-    bar_width = 16
     try:
         while True:
             elapsed = time.monotonic() - started_at
-            done = sum(1 for r in results.values() if r == "completed")
-            ip = len(in_progress)
-            pct = (done / total_tickets) if total_tickets else 0.0
-            filled = int(round(pct * bar_width))
-            bar = "█" * filled + "░" * (bar_width - filled)
-            mm = int(elapsed) // 60
-            ss = int(elapsed) % 60
-            line = (
-                f"\r[Sprint {sprint_num}/{total_sprints}] {bar} "
-                f"{int(pct * 100)}% | {mm:02d}:{ss:02d} elapsed | "
-                f"{done}/{total_tickets} tickets done | {ip} in progress"
+            line = _render_progress_line(
+                sprint_num,
+                total_sprints,
+                total_tickets,
+                results,
+                in_progress,
+                elapsed,
+                total_duration,
             )
             sys.stdout.write(line)
             sys.stdout.flush()
+            if elapsed >= total_duration:
+                # Sprint clock has expired — the orchestrator will cancel us
+                # imminently. Sleep briefly so we don't hot-spin in the gap.
+                await asyncio.sleep(interval)
+                continue
             await asyncio.sleep(interval)
     except asyncio.CancelledError:
+        # Force a final 100% tick so the bar always lands full before the
+        # sprint-summary line prints.
+        line = _render_progress_line(
+            sprint_num,
+            total_sprints,
+            total_tickets,
+            results,
+            in_progress,
+            total_duration,
+            total_duration,
+            force_full=True,
+        )
+        sys.stdout.write(line)
         sys.stdout.write("\n")
         sys.stdout.flush()
         raise
@@ -342,6 +396,8 @@ async def run_simulation(
             print(
                 f"Running {len(developers)} developers for {duration_min} minutes..."
             )
+            sprint_total_seconds = duration_min * 60
+            sprint_started_at = time.monotonic()
             progress_task = asyncio.create_task(
                 _print_sprint_progress(
                     sprint_num,
@@ -349,11 +405,34 @@ async def run_simulation(
                     len(committed_keys),
                     results,
                     in_progress_keys,
-                    time.monotonic(),
+                    sprint_started_at,
+                    float(sprint_total_seconds),
                 )
             )
+            devs_task = asyncio.gather(*coros)
             try:
-                await asyncio.gather(*coros)
+                # Wait for the sprint wall-clock to elapse. Developers
+                # self-limit to the same budget, so they'll naturally settle
+                # before or at the deadline. If they finish early we still
+                # let the sprint clock run out so the progress bar can reach
+                # 100% — devs finishing early must NOT terminate the sprint.
+                remaining = sprint_total_seconds - (time.monotonic() - sprint_started_at)
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+                # Drain any developer tasks that haven't returned yet
+                # (they should be done because they share the same deadline).
+                if not devs_task.done():
+                    try:
+                        await asyncio.wait_for(devs_task, timeout=5.0)
+                    except asyncio.TimeoutError:
+                        devs_task.cancel()
+                        try:
+                            await devs_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                else:
+                    # Surface any developer exceptions.
+                    await devs_task
             finally:
                 progress_task.cancel()
                 try:
@@ -369,18 +448,14 @@ async def run_simulation(
             if omada_team_id:
                 omada.trigger_sync(omada_team_id)
 
-            retro_gen = (
-                omada.generate_retro(str(sprint_id))
-                if omada_team_id
-                else None
+            # get_retro() now takes the Jira sprint id (int) and internally
+            # resolves the Omada sprint UUID + POSTs generate + GETs the retro.
+            retro = (
+                omada.get_retro(int(sprint_id)) if omada_team_id else None
             )
-            retro_get = (
-                omada.get_retro(str(sprint_id)) if omada_team_id else None
-            )
-            retro = retro_gen or retro_get
             _write_json(
                 OUTPUT_DIR / f"sprint_{sprint_num}_retro.json",
-                {"generate": retro_gen or {}, "get": retro_get or {}},
+                retro or {},
             )
 
             health = (
@@ -410,7 +485,6 @@ async def run_simulation(
                 "plan_ok": plan is not None,
                 "push_ok": push_resp is not None,
                 "retro_ok": retro is not None,
-                "retro_get_ok": retro_get is not None,
                 "health_ok": health is not None,
                 "deps_ok": deps is not None,
                 "features_ok": features is not None,

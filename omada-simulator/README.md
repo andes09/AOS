@@ -159,6 +159,14 @@ Available environments: ['local', 'prod_blocked', 'sims']
 | `Safety violation: ... contains 'production'`    | URL has `production` and `allow_production=false`       |
 | `Environment config not found: .../locall.yaml`  | Typo in `--env` argument                                |
 | Wrong Jira URL in banner                         | Edit `jira.url` in `config/environments/{env}.yaml`     |
+| Sprint Brain 422 `No candidate tickets found`    | Celery worker not running, or queue has stale tasks. Purge the queue (`celery -A src.worker purge -f`) and confirm Terminal 5 is up, then retry |
+
+### Interpreting bugs in `output/BUGS_INTEGRATION.md`
+
+A Sprint Brain 422 `No candidate tickets found` almost always means the
+Celery worker wasn't running or the queue had stale tasks at simulation
+time — Jira sync was enqueued but never executed, so Omada had nothing
+to plan against. Purge the queue and retry before filing it as a real bug.
 
 ## Why prod_blocked.yaml exists
 
@@ -171,6 +179,51 @@ configs means there's no path where pointing at production is plausible.
 To run against the real production environment, you'd need to author a
 new YAML that explicitly sets `allow_production: true` — a deliberate,
 reviewable act.
+
+## Before each simulation run
+
+### Purge stale Celery tasks
+
+Always run this before `--simulate`:
+
+```bash
+cd ~/Code/AOS/apps/api
+celery -A src.worker purge -f
+```
+
+Stale tasks from previous runs pile up in Redis and cause duplicate sync
+attempts that fail with constraint violations. Purge the queue before
+every new simulation.
+
+### Five processes required to run simultaneously
+
+| Terminal | Command                                                       |
+| -------- | ------------------------------------------------------------- |
+| 1        | `cd apps/api && uvicorn src.main:app --reload`                |
+| 2        | `cd apps/web && pnpm dev`                                     |
+| 3        | `brew services start redis` (stays running)                   |
+| 4        | `brew services start postgresql@18` (stays running)           |
+| 5        | `cd apps/api && celery -A src.worker worker --loglevel=info`  |
+
+Without Terminal 5 (Celery), Jira syncs queue but never execute. Sprint
+Brain will always return "No candidate tickets found."
+
+### Full simulation workflow
+
+```bash
+# Purge stale tasks
+cd ~/Code/AOS/apps/api && celery -A src.worker purge -f
+
+# Clean previous run
+cd ~/Code/AOS/omada-simulator
+python -m src.main --clean --env local --project-key SIMx
+
+# Setup new project
+python -m src.main --setup --env local --project-key SIMy
+
+# Run simulation
+python -m src.main --simulate --env local --project-key SIMy
+```
 
 ## Running the Stage 1 simulator
 

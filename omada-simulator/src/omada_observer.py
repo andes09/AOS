@@ -11,6 +11,7 @@ the caller to the first admin user without checking any token.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -30,6 +31,9 @@ class OmadaObserver:
             timeout=REQUEST_TIMEOUT,
             headers={"Content-Type": "application/json"},
         )
+        # Set by resolve_team_id() so endpoints that need team_id (e.g. the
+        # retro generate query param) don't have to thread it through every call.
+        self.team_id: Optional[str] = None
 
     def close(self) -> None:
         self._client.close()
@@ -105,11 +109,15 @@ class OmadaObserver:
             if t.get("isPrimary") or t.get("is_primary"):
                 tid = t.get("teamId") or t.get("team_id")
                 if tid:
-                    return str(tid)
+                    self.team_id = str(tid)
+                    return self.team_id
 
         first = teams[0]
         tid = first.get("teamId") or first.get("team_id")
-        return str(tid) if tid else None
+        if not tid:
+            return None
+        self.team_id = str(tid)
+        return self.team_id
 
     def trigger_sync(self, team_id: str) -> Optional[dict]:
         return self._request(
@@ -117,6 +125,40 @@ class OmadaObserver:
             "/api/integrations/jira/sync",
             params={"team_id": team_id},
         )
+
+    def get_sync_status(self) -> Optional[dict]:
+        """Return the current Jira-integration status dict (or None on failure).
+
+        Used as a "did the last sync finish?" probe via the ``last_synced_at``
+        timestamp. Endpoint shape: ``{connected, cloud_url, last_synced_at}``.
+        """
+        return self._request("GET", "/api/integrations/jira/status")
+
+    def wait_for_sync(
+        self,
+        *,
+        before: Optional[str] = None,
+        timeout: float = 60.0,
+        interval: float = 2.0,
+    ) -> bool:
+        """Poll the Jira-integration status until ``last_synced_at`` advances.
+
+        ``before`` is the ``last_synced_at`` value captured immediately before
+        ``trigger_sync`` was called (``None`` if the org had never synced). We
+        consider the sync "completed" when the endpoint reports a newer value.
+
+        Returns True if completion was observed, False on timeout. Callers
+        should fall back to a fixed sleep when this returns False.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            status = self.get_sync_status()
+            if status:
+                last = status.get("last_synced_at")
+                if last and (before is None or last > before):
+                    return True
+            time.sleep(interval)
+        return False
 
     def generate_sprint_plan(
         self,
@@ -155,7 +197,14 @@ class OmadaObserver:
         return self._request("GET", f"/api/retro/{sprint_id}")
 
     def generate_retro(self, sprint_id: str) -> Optional[dict]:
-        return self._request("POST", f"/api/retro/generate/{sprint_id}")
+        # /api/retro/generate/{sprint_id} requires team_id as a query param;
+        # the API resolves the retro under that team's organisation.
+        params = {"team_id": self.team_id} if self.team_id else None
+        return self._request(
+            "POST",
+            f"/api/retro/generate/{sprint_id}",
+            params=params,
+        )
 
     def get_features(self) -> Optional[dict]:
         return self._request("GET", "/api/features")

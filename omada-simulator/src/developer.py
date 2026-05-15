@@ -19,11 +19,15 @@ async def run_developer(
     sprint_duration_minutes: int,
     jira: JiraDriver,
     results: dict,
+    in_progress: set[str] | None = None,
 ) -> None:
     """Drive one developer through their assigned tickets in real time.
 
     See module docstring / Stage 1 spec for behaviour. All progress is reported
     via the shared ``results`` dict so callers can ``asyncio.gather`` many devs.
+    ``in_progress``, if supplied, is a shared set the developer adds a ticket
+    to on the In-Progress transition and removes when the ticket settles —
+    used by the live sprint progress indicator.
     """
     if not assigned_tickets:
         return
@@ -59,10 +63,15 @@ async def run_developer(
             results[key] = "missed"
             continue
 
+        if in_progress is not None:
+            in_progress.add(key)
+
         remaining = deadline - time.monotonic()
         if remaining <= 1:
             # Out of time — leave ticket In Progress and move on.
             results[key] = "missed"
+            if in_progress is not None:
+                in_progress.discard(key)
             continue
 
         work_duration = per_ticket_budget * (1.0 / speed) * rng.uniform(0.6, 1.0)
@@ -79,3 +88,6 @@ async def run_developer(
         else:
             results[key] = "missed"
             logger.info("%s left %s in In Progress (missed)", name, key)
+
+        if in_progress is not None:
+            in_progress.discard(key)

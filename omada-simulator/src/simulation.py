@@ -6,6 +6,8 @@ import asyncio
 import json
 import logging
 import random
+import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,46 @@ def _write_json(path: Path, payload: Any) -> None:
         print(f"[output] Wrote {path}")
     except Exception as e:
         print(f"[output] ERROR writing {path}: {e}")
+
+
+async def _print_sprint_progress(
+    sprint_num: int,
+    total_sprints: int,
+    total_tickets: int,
+    results: dict,
+    in_progress: set[str],
+    started_at: float,
+    interval: float = 15.0,
+) -> None:
+    """Print a single-line live progress indicator every ``interval`` seconds.
+
+    Cancelled by the caller when the sprint ends. Uses ``\\r`` so the line
+    updates in place; on cancel we emit a newline so subsequent output isn't
+    glued to the bar.
+    """
+    bar_width = 16
+    try:
+        while True:
+            elapsed = time.monotonic() - started_at
+            done = sum(1 for r in results.values() if r == "completed")
+            ip = len(in_progress)
+            pct = (done / total_tickets) if total_tickets else 0.0
+            filled = int(round(pct * bar_width))
+            bar = "█" * filled + "░" * (bar_width - filled)
+            mm = int(elapsed) // 60
+            ss = int(elapsed) % 60
+            line = (
+                f"\r[Sprint {sprint_num}/{total_sprints}] {bar} "
+                f"{int(pct * 100)}% | {mm:02d}:{ss:02d} elapsed | "
+                f"{done}/{total_tickets} tickets done | {ip} in progress"
+            )
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        raise
 
 
 def _safety_check_project_key(project_key: str) -> None:
@@ -244,8 +286,27 @@ async def run_simulation(
                 })
                 continue
 
+            # Capture the pre-sync timestamp so we can detect when the Celery
+            # task finishes by watching last_synced_at advance.
+            pre_status = omada.get_sync_status() if omada_team_id else None
+            baseline_synced_at = (pre_status or {}).get("last_synced_at")
+
             sync_resp = omada.trigger_sync(omada_team_id) if omada_team_id else None
-            await asyncio.sleep(10)
+            if omada_team_id and sync_resp:
+                confirmed = await asyncio.to_thread(
+                    omada.wait_for_sync,
+                    before=baseline_synced_at,
+                    timeout=60.0,
+                    interval=2.0,
+                )
+                if not confirmed:
+                    logger.warning(
+                        "Jira sync did not confirm within 60s; "
+                        "falling back to 30s fixed wait before /plan"
+                    )
+                    await asyncio.sleep(30)
+            else:
+                await asyncio.sleep(10)
 
             plan = (
                 omada.generate_sprint_plan(omada_team_id, sprint_length_days=1)
@@ -266,14 +327,39 @@ async def run_simulation(
                 by_dev.setdefault(t["assigned_dev"], []).append(t["jira_key"])
 
             results: dict[str, str] = {}
+            in_progress_keys: set[str] = set()
             coros = [
-                run_developer(d, by_dev[d["name"]], duration_min, jira, results)
+                run_developer(
+                    d,
+                    by_dev[d["name"]],
+                    duration_min,
+                    jira,
+                    results,
+                    in_progress_keys,
+                )
                 for d in developers
             ]
             print(
                 f"Running {len(developers)} developers for {duration_min} minutes..."
             )
-            await asyncio.gather(*coros)
+            progress_task = asyncio.create_task(
+                _print_sprint_progress(
+                    sprint_num,
+                    total_sprints,
+                    len(committed_keys),
+                    results,
+                    in_progress_keys,
+                    time.monotonic(),
+                )
+            )
+            try:
+                await asyncio.gather(*coros)
+            finally:
+                progress_task.cancel()
+                try:
+                    await progress_task
+                except asyncio.CancelledError:
+                    pass
 
             try:
                 jira.close_sprint(sprint_id)

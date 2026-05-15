@@ -146,7 +146,7 @@ async def run_simulation(
     secrets: Secrets,
     team_config: dict,
     *,
-    clerk_token: str = "",
+    simulator_key: str = "",
     dry_run: bool = False,
     project_key_override: str | None = None,
 ) -> None:
@@ -195,10 +195,10 @@ async def run_simulation(
         print("[DRY RUN] Would write simulation_results.json and BUGS_INTEGRATION.md")
         return
 
-    if not clerk_token:
+    if not simulator_key:
         raise SystemExit(
-            "run_simulation requires a Clerk token — pass --token at the CLI, "
-            "or set OMADA_CLERK_TOKEN in .env."
+            "run_simulation requires a simulator key — set "
+            "OMADA_SIMULATOR_KEY in omada-simulator/.env."
         )
 
     sprint_results: list[dict] = []
@@ -206,7 +206,7 @@ async def run_simulation(
 
     with (
         JiraDriver(env.jira.url, secrets.jira_email, secrets.jira_api_token) as jira,
-        OmadaObserver(env.omada.api_url, clerk_token) as omada,
+        OmadaObserver(env.omada.api_url, simulator_key) as omada,
     ):
         resolved = omada.resolve_team_id()
         if resolved:

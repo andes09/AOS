@@ -44,10 +44,9 @@ class EnvironmentConfig(BaseModel):
 class Secrets(BaseModel):
     jira_email: str
     jira_api_token: str
-    # Clerk token in .env is optional — the recommended path is to pass a
-    # fresh value via --token at runtime, since Clerk session JWTs expire
-    # within ~60 seconds. Kept here as a fallback for one-shot calls.
-    omada_clerk_token: str = ""
+    # Static key that pairs with SIMULATOR_API_KEY on the Omada side.
+    # No refresh, no expiry — the API only honours it when ENVIRONMENT=local.
+    omada_simulator_key: str = ""
 
 
 def _available_envs() -> list[str]:
@@ -75,9 +74,9 @@ def load_environment(env_name: str) -> EnvironmentConfig:
 def load_secrets() -> Secrets:
     """Load .env and return a validated Secrets object.
 
-    Jira creds are required; the Clerk token is optional because the
-    practical workflow is ``--token "$(...)"`` at the CLI. Empty strings
-    are treated the same as missing.
+    Jira creds are required; the simulator key is optional at load time
+    so dry-runs can proceed without it. Empty strings are treated the
+    same as missing.
     """
     load_dotenv(PACKAGE_ROOT / ".env")
     required = {
@@ -93,25 +92,7 @@ def load_secrets() -> Secrets:
     return Secrets(
         jira_email=required["JIRA_EMAIL"],
         jira_api_token=required["JIRA_API_TOKEN"],
-        omada_clerk_token=os.getenv("OMADA_CLERK_TOKEN", "") or "",
-    )
-
-
-def resolve_clerk_token(cli_token: Optional[str], secrets: Secrets) -> str:
-    """Pick the Clerk token to use: CLI flag wins over .env.
-
-    Returns the resolved token. Raises SystemExit with a guiding message
-    if neither source provided one — the user is expected to read it,
-    grab a fresh token from the browser, and re-run with ``--token``.
-    """
-    if cli_token:
-        return cli_token
-    if secrets.omada_clerk_token:
-        return secrets.omada_clerk_token
-    raise SystemExit(
-        "No Clerk token. Pass --token \"$(...)\" or set OMADA_CLERK_TOKEN in .env.\n"
-        "Get a fresh token: open http://localhost:5173, browser console:\n"
-        "  await window.Clerk.session.getToken()"
+        omada_simulator_key=os.getenv("OMADA_SIMULATOR_KEY", "") or "",
     )
 
 
@@ -171,22 +152,22 @@ def validate_safety(env: EnvironmentConfig) -> None:
 
 async def verify_connectivity(
     env: EnvironmentConfig,
-    clerk_token: str,
+    simulator_key: str,
     *,
     transport: Optional[httpx.AsyncBaseTransport] = None,
 ) -> None:
     """Probe Omada for liveness and auth.
 
     Step 1 — GET /health (expects 200).
-    Step 2 — GET /api/me with Bearer {clerk_token} (expects 200; a 401
-             means the token has already expired — usual case — or the
-             account isn't recognised by Omada).
+    Step 2 — GET /api/me with X-Simulator-Key (expects 200; a 401 means
+             the key doesn't match the API's SIMULATOR_API_KEY, or the
+             API isn't running in local mode).
 
     The ``transport`` parameter exists for tests using
     ``httpx.MockTransport``; production callers pass nothing.
     """
     base = env.omada.api_url.rstrip("/")
-    headers = {"Authorization": f"Bearer {clerk_token}"}
+    headers = {"X-Simulator-Key": simulator_key}
 
     client_kwargs: dict = {"timeout": httpx.Timeout(10.0)}
     if transport is not None:
@@ -214,9 +195,10 @@ async def verify_connectivity(
 
         if me.status_code == 401:
             raise SystemExit(
-                "Clerk token expired or invalid. Re-run with a fresh --token.\n"
-                "Get a fresh token: open http://localhost:5173, browser console:\n"
-                "  await window.Clerk.session.getToken()"
+                "Simulator key rejected. Check OMADA_SIMULATOR_KEY in "
+                "omada-simulator/.env matches SIMULATOR_API_KEY in "
+                "apps/api/.env, and that the API is running with "
+                "ENVIRONMENT=local."
             )
         if me.status_code >= 400:
             raise SystemExit(

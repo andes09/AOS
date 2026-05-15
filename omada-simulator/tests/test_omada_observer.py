@@ -1,9 +1,8 @@
-"""Tests for src/omada_observer.py — specifically the 401 user-facing message."""
+"""Tests for src/omada_observer.py — header wiring and defensive _request."""
 
 from __future__ import annotations
 
 import httpx
-import pytest
 
 from src.omada_observer import OmadaObserver
 
@@ -23,36 +22,47 @@ def _install_mock_transport(monkeypatch, handler) -> None:
     monkeypatch.setattr("src.omada_observer.httpx.Client", factory)
 
 
-def test_401_prints_token_guidance_once(monkeypatch, capsys):
-    """Every endpoint will 401 once the token expires. We should print the
-    'get a fresh token' guidance the FIRST time we see a 401, and stay
-    quiet on subsequent ones so the run isn't flooded with the same lines.
-    """
+def test_request_sends_x_simulator_key_header(monkeypatch):
+    """Every Omada call must carry X-Simulator-Key with the configured value."""
+    seen: dict[str, str] = {}
+
     def handler(req: httpx.Request) -> httpx.Response:
-        return httpx.Response(401, text="unauthorized")
+        seen["key"] = req.headers.get("X-Simulator-Key", "")
+        seen["auth"] = req.headers.get("Authorization", "")
+        return httpx.Response(200, json={"ok": True})
 
     _install_mock_transport(monkeypatch, handler)
 
-    with OmadaObserver("http://localhost:8000", "stale-token") as obs:
-        assert obs._request("GET", "/api/me") is None
-        assert obs._request("GET", "/api/features") is None
-        assert obs._request("GET", "/api/teams") is None
+    with OmadaObserver("http://localhost:8000", "sim-key-abc") as obs:
+        assert obs._request("GET", "/api/me") == {"ok": True}
 
-    out = capsys.readouterr().out
-    # Exactly one "Token expired" line, regardless of how many 401s flew.
-    assert out.count("Token expired. Re-run with a fresh --token value.") == 1
-    assert "window.Clerk.session.getToken()" in out
+    assert seen["key"] == "sim-key-abc"
+    assert seen["auth"] == ""  # no Bearer token any more
 
 
-def test_non_401_errors_do_not_emit_token_guidance(monkeypatch, capsys):
-    """A 500 / network error shouldn't tell the user to refresh their token."""
+def test_non_2xx_returns_none_and_does_not_raise(monkeypatch):
+    """A 500 (or any >=400) is logged and returned as None — the simulator
+    never raises so broken endpoints surface in the bug report."""
     def handler(req):
         return httpx.Response(500, text="boom")
 
     _install_mock_transport(monkeypatch, handler)
 
-    with OmadaObserver("http://localhost:8000", "fresh-token") as obs:
+    with OmadaObserver("http://localhost:8000", "sim-key") as obs:
         assert obs._request("GET", "/api/me") is None
 
-    out = capsys.readouterr().out
-    assert "Token expired" not in out
+
+def test_401_returns_none_without_retry(monkeypatch):
+    """With the static key, 401 just means the key is wrong — no refresh path."""
+    calls: list[str] = []
+
+    def handler(req):
+        calls.append(req.url.path)
+        return httpx.Response(401, text="unauthorized")
+
+    _install_mock_transport(monkeypatch, handler)
+
+    with OmadaObserver("http://localhost:8000", "sim-key") as obs:
+        assert obs._request("GET", "/api/me") is None
+
+    assert calls == ["/api/me"]  # exactly one attempt, no retry

@@ -1,4 +1,4 @@
-"""Tests for src/config.py — loading, safety, secrets, connectivity, token resolution."""
+"""Tests for src/config.py — loading, safety, secrets, connectivity."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from src.config import (
     load_secrets,
     load_team,
     print_environment_banner,
-    resolve_clerk_token,
     validate_safety,
     verify_connectivity,
 )
@@ -46,11 +45,11 @@ def _make_env(
     )
 
 
-def _secrets(token: str = "clerk-from-env") -> Secrets:
+def _secrets(key: str = "sim-key-from-env") -> Secrets:
     return Secrets(
         jira_email="x@y.com",
         jira_api_token="t",
-        omada_clerk_token=token,
+        omada_simulator_key=key,
     )
 
 
@@ -109,10 +108,10 @@ def test_safety_requires_substring_match():
 # ---------- secret loading ----------
 
 def test_missing_jira_secrets_raises_system_exit(monkeypatch, tmp_path):
-    """Jira creds are required; Clerk token is optional now since the
-    practical workflow is --token at the CLI."""
+    """Jira creds are required; the simulator key is optional at load time
+    so dry-runs can proceed without it."""
     monkeypatch.setattr("src.config.PACKAGE_ROOT", tmp_path)
-    for key in ("JIRA_EMAIL", "JIRA_API_TOKEN", "OMADA_CLERK_TOKEN"):
+    for key in ("JIRA_EMAIL", "JIRA_API_TOKEN", "OMADA_SIMULATOR_KEY"):
         monkeypatch.delenv(key, raising=False)
     with pytest.raises(SystemExit) as exc:
         load_secrets()
@@ -121,22 +120,22 @@ def test_missing_jira_secrets_raises_system_exit(monkeypatch, tmp_path):
     assert "JIRA_API_TOKEN" in msg
 
 
-def test_missing_only_clerk_token_loads_successfully(monkeypatch, tmp_path):
-    """Without a Clerk token in .env, load_secrets must still succeed —
-    the user will pass --token at the CLI."""
+def test_missing_only_simulator_key_loads_successfully(monkeypatch, tmp_path):
+    """Without a simulator key in .env, load_secrets must still succeed —
+    main.py enforces presence only for commands that talk to Omada."""
     monkeypatch.setattr("src.config.PACKAGE_ROOT", tmp_path)
     monkeypatch.setenv("JIRA_EMAIL", "ok@example.com")
     monkeypatch.setenv("JIRA_API_TOKEN", "tok")
-    monkeypatch.delenv("OMADA_CLERK_TOKEN", raising=False)
+    monkeypatch.delenv("OMADA_SIMULATOR_KEY", raising=False)
     s = load_secrets()
-    assert s.omada_clerk_token == ""
+    assert s.omada_simulator_key == ""
 
 
 def test_empty_jira_secret_treated_as_missing(monkeypatch, tmp_path):
     monkeypatch.setattr("src.config.PACKAGE_ROOT", tmp_path)
     monkeypatch.setenv("JIRA_EMAIL", "ok@example.com")
     monkeypatch.setenv("JIRA_API_TOKEN", "")
-    monkeypatch.setenv("OMADA_CLERK_TOKEN", "clerk")
+    monkeypatch.setenv("OMADA_SIMULATOR_KEY", "sim-key")
     with pytest.raises(SystemExit) as exc:
         load_secrets()
     assert "JIRA_API_TOKEN" in str(exc.value)
@@ -146,37 +145,11 @@ def test_secrets_loaded_from_env(monkeypatch, tmp_path):
     monkeypatch.setattr("src.config.PACKAGE_ROOT", tmp_path)
     monkeypatch.setenv("JIRA_EMAIL", "test@example.com")
     monkeypatch.setenv("JIRA_API_TOKEN", "tok-123")
-    monkeypatch.setenv("OMADA_CLERK_TOKEN", "clerk-456")
+    monkeypatch.setenv("OMADA_SIMULATOR_KEY", "sim-456")
     s = load_secrets()
     assert s.jira_email == "test@example.com"
     assert s.jira_api_token == "tok-123"
-    assert s.omada_clerk_token == "clerk-456"
-
-
-# ---------- resolve_clerk_token ----------
-
-def test_resolve_clerk_token_prefers_cli_over_env():
-    s = _secrets(token="from-env")
-    assert resolve_clerk_token("from-cli", s) == "from-cli"
-
-
-def test_resolve_clerk_token_falls_back_to_env():
-    s = _secrets(token="from-env")
-    assert resolve_clerk_token(None, s) == "from-env"
-
-
-def test_resolve_clerk_token_empty_cli_uses_env():
-    s = _secrets(token="from-env")
-    assert resolve_clerk_token("", s) == "from-env"
-
-
-def test_resolve_clerk_token_errors_when_neither_set():
-    s = _secrets(token="")
-    with pytest.raises(SystemExit) as exc:
-        resolve_clerk_token(None, s)
-    msg = str(exc.value)
-    assert "--token" in msg
-    assert "window.Clerk.session.getToken" in msg
+    assert s.omada_simulator_key == "sim-456"
 
 
 # ---------- team loading & safety supplemental ----------
@@ -238,12 +211,12 @@ async def test_verify_connectivity_succeeds():
         if req.url.path == "/health":
             return httpx.Response(200, json={"ok": True})
         if req.url.path == "/api/me":
-            assert req.headers.get("Authorization") == "Bearer clerk"
-            return httpx.Response(200, json={"id": "user_123"})
+            assert req.headers.get("X-Simulator-Key") == "sim-key"
+            return httpx.Response(200, json={"user_id": "user_123"})
         return httpx.Response(404)
 
     env = _make_env(api_url="http://localhost:8000")
-    await verify_connectivity(env, "clerk", transport=_transport(handler))
+    await verify_connectivity(env, "sim-key", transport=_transport(handler))
 
 
 @pytest.mark.asyncio
@@ -253,7 +226,7 @@ async def test_verify_connectivity_health_unreachable():
 
     env = _make_env()
     with pytest.raises(SystemExit) as exc:
-        await verify_connectivity(env, "clerk", transport=_transport(handler))
+        await verify_connectivity(env, "sim-key", transport=_transport(handler))
     assert "Omada not running" in str(exc.value)
 
 
@@ -264,12 +237,12 @@ async def test_verify_connectivity_health_5xx():
 
     env = _make_env()
     with pytest.raises(SystemExit) as exc:
-        await verify_connectivity(env, "clerk", transport=_transport(handler))
+        await verify_connectivity(env, "sim-key", transport=_transport(handler))
     assert "/health returned 500" in str(exc.value)
 
 
 @pytest.mark.asyncio
-async def test_verify_connectivity_me_401_guides_to_fresh_token():
+async def test_verify_connectivity_me_401_guides_to_simulator_key():
     def handler(req):
         if req.url.path == "/health":
             return httpx.Response(200)
@@ -277,11 +250,11 @@ async def test_verify_connectivity_me_401_guides_to_fresh_token():
 
     env = _make_env()
     with pytest.raises(SystemExit) as exc:
-        await verify_connectivity(env, "stale", transport=_transport(handler))
+        await verify_connectivity(env, "wrong-key", transport=_transport(handler))
     msg = str(exc.value)
-    assert "expired" in msg
-    assert "--token" in msg
-    assert "window.Clerk.session.getToken" in msg
+    assert "Simulator key rejected" in msg
+    assert "OMADA_SIMULATOR_KEY" in msg
+    assert "SIMULATOR_API_KEY" in msg
 
 
 @pytest.mark.asyncio
@@ -293,6 +266,6 @@ async def test_verify_connectivity_me_5xx_shows_body():
 
     env = _make_env()
     with pytest.raises(SystemExit) as exc:
-        await verify_connectivity(env, "clerk", transport=_transport(handler))
+        await verify_connectivity(env, "sim-key", transport=_transport(handler))
     assert "/api/me returned 500" in str(exc.value)
     assert "db down" in str(exc.value)

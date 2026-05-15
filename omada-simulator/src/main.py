@@ -10,7 +10,6 @@ from src.config import (
     load_secrets,
     load_team,
     print_environment_banner,
-    resolve_clerk_token,
     validate_safety,
     verify_connectivity,
 )
@@ -87,13 +86,6 @@ def _build_parser() -> argparse.ArgumentParser:
              "Useful when the default SIM key is still in Jira's "
              "post-deletion reservation window.",
     )
-    parser.add_argument(
-        "--token",
-        default=None,
-        help="Fresh Clerk session JWT to use for this run. Overrides "
-             "OMADA_CLERK_TOKEN from .env. Get one in the browser console "
-             "with: await window.Clerk.session.getToken()",
-    )
     return parser
 
 
@@ -125,7 +117,7 @@ def main() -> None:
         class _StubSecrets:
             jira_email = ""
             jira_api_token = ""
-            omada_clerk_token = ""
+            omada_simulator_key = ""
 
         stub = _StubSecrets()
         if args.setup:
@@ -140,7 +132,7 @@ def main() -> None:
             asyncio.run(
                 run_simulation(
                     env, stub, team_config,
-                    clerk_token=args.token or "dry-run-token",
+                    simulator_key="dry-run-key",
                     dry_run=True,
                     project_key_override=args.project_key,
                 )
@@ -169,12 +161,17 @@ def main() -> None:
     print_environment_banner(env, secrets)
 
     # --setup, --reset and --clean only touch Jira; --check-env and
-    # --simulate need a Clerk token.
-    needs_clerk = args.check_env or args.simulate
-    clerk_token = resolve_clerk_token(args.token, secrets) if needs_clerk else ""
+    # --simulate need the Omada simulator key.
+    needs_omada = args.check_env or args.simulate
+    if needs_omada and not secrets.omada_simulator_key:
+        raise SystemExit(
+            "OMADA_SIMULATOR_KEY is not set in omada-simulator/.env. "
+            "Copy .env.example and set it to the same value as "
+            "SIMULATOR_API_KEY in apps/api/.env."
+        )
 
     if args.check_env:
-        asyncio.run(verify_connectivity(env, clerk_token))
+        asyncio.run(verify_connectivity(env, secrets.omada_simulator_key))
         print("✓ All checks passed")
         return
 
@@ -189,7 +186,7 @@ def main() -> None:
     elif args.simulate:
         asyncio.run(run_simulation(
             env, secrets, team_config,
-            clerk_token=clerk_token,
+            simulator_key=secrets.omada_simulator_key,
             project_key_override=args.project_key,
         ))
     elif args.reset:

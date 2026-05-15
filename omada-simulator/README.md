@@ -23,9 +23,11 @@ the simulator.
 - Python 3.11+
 - A running Omada API (locally via `uvicorn src.main:app --reload` from
   `apps/api/`, or a Railway deployment such as the Sims env)
-- A Clerk session token for the Omada user you've signed in as
-- (Optional) An Atlassian API token and email for the Jira account that
-  will receive simulator-generated tickets
+- Local Omada must have `clerk_auth: false` in
+  `apps/api/config/features/local.yaml` (this is the default for the
+  local env, so usually nothing to do)
+- An Atlassian API token and email for the Jira account that will
+  receive simulator-generated tickets
 
 ## Setup
 
@@ -38,26 +40,14 @@ cp .env.example .env
 # Edit .env with real values (see below).
 ```
 
-### Omada Clerk token
+### Auth model
 
-The simulator needs a Clerk session JWT to call Omada. These tokens
-expire ~60 s after they're issued, and we can't sign in programmatically
-when the account uses Google OAuth. So the workflow is:
-
-1. Open the Omada web app (e.g. http://localhost:5173) and sign in.
-2. In the browser console, run:
-   ```js
-   await window.Clerk.session.getToken()
-   ```
-3. Pass the resulting JWT to the simulator via `--token`:
-   ```bash
-   python -m src.main --simulate --env local --token "eyJ..."
-   ```
-
-`OMADA_CLERK_TOKEN` in `.env` is still honoured as a fallback (handy for
-one-shot calls that complete in under a minute), but `--token` is the
-practical path. If a request 401s mid-run, the observer prints a
-reminder to grab a fresh token and re-run.
+The simulator sends **no** auth header to Omada. The local Omada API has
+its `clerk_auth` feature flag disabled, so `/api/me` and every other
+authenticated endpoint resolves to the first admin Developer in the DB
+without checking any token. In production the flag is `true` and the
+normal Clerk JWT verification runs — the simulator is therefore only
+safe against local/sims envs.
 
 ## How environments work
 
@@ -97,8 +87,8 @@ The validator will tell you if the URL fails the substring rules.
 
 Strict boundary:
 
-- **`.env`** (gitignored) — `JIRA_EMAIL`, `JIRA_API_TOKEN`, optional
-  `OMADA_CLERK_TOKEN` (prefer `--token` at the CLI)
+- **`.env`** (gitignored) — `JIRA_EMAIL`, `JIRA_API_TOKEN`. Nothing
+  Omada-related; the local API doesn't require a token from the simulator.
 - **YAML files** (committed) — every other piece of config
 
 If a value would cause a security incident if it leaked, it goes in
@@ -122,14 +112,12 @@ What it does, in order:
    enforce `required_url_substrings`, `block_url_substrings`, and the
    `allow_production` gate.
 4. `print_environment_banner(env, secrets)` — show what's about to run.
-5. `resolve_clerk_token(args.token, secrets)` — picks the token: `--token`
-   wins over `OMADA_CLERK_TOKEN` from `.env`; errors with guidance if
-   neither is set.
-6. `verify_connectivity(env, clerk_token)`:
+5. `verify_connectivity(env)`:
    - `GET {api_url}/health` — confirms Omada is reachable.
-   - `GET {api_url}/api/me` with the supplied Clerk JWT — confirms
-     the signed-in account is recognised by Omada.
-7. Prints `✓ All checks passed`.
+   - `GET {api_url}/api/me` with no auth header — confirms `clerk_auth`
+     is disabled on the target API and the first-admin fallback returns
+     a user.
+6. Prints `✓ All checks passed`.
 
 ### Expected output for `--env local` (Omada running locally)
 
@@ -166,7 +154,7 @@ Available environments: ['local', 'prod_blocked', 'sims']
 | Symptom                                          | Likely cause                                            |
 | ------------------------------------------------ | ------------------------------------------------------- |
 | `Omada not running at http://localhost:8000`     | Local Omada API isn't running — start it from `apps/api/` |
-| `Clerk token expired. Re-grab from DevTools...`  | Session expired — copy a fresh `__session` cookie       |
+| `Omada /api/me returned 401`                     | Target API has `clerk_auth: true` — only run against an env where it's `false` |
 | `Missing required secret(s): ...`                | `.env` not created or missing a key                     |
 | `Safety violation: ... contains 'production'`    | URL has `production` and `allow_production=false`       |
 | `Environment config not found: .../locall.yaml`  | Typo in `--env` argument                                |

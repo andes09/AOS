@@ -30,8 +30,6 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5174"
     api_url: str = "http://localhost:8000"
 
-    simulator_api_key: str = ""
-
     @property
     def is_production(self) -> bool:
         return self.environment == "production"

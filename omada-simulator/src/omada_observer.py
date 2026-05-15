@@ -3,6 +3,10 @@
 Every call is defensive: any failure (network, non-2xx, JSON decode) is
 captured to omada-simulator/output/omada_audit.log and the method returns
 None. Surfacing bugs is the point of the simulator, so we never raise.
+
+No auth header is sent. The simulator only ever runs against a local
+Omada whose ``clerk_auth`` feature flag is disabled — the API resolves
+the caller to the first admin user without checking any token.
 """
 
 from __future__ import annotations
@@ -20,14 +24,11 @@ REQUEST_TIMEOUT = 30.0
 
 
 class OmadaObserver:
-    def __init__(self, omada_url: str, simulator_key: str) -> None:
+    def __init__(self, omada_url: str) -> None:
         self._base_url = omada_url.rstrip("/")
         self._client = httpx.Client(
             timeout=REQUEST_TIMEOUT,
-            headers={
-                "X-Simulator-Key": simulator_key,
-                "Content-Type": "application/json",
-            },
+            headers={"Content-Type": "application/json"},
         )
 
     def close(self) -> None:

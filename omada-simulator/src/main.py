@@ -117,7 +117,6 @@ def main() -> None:
         class _StubSecrets:
             jira_email = ""
             jira_api_token = ""
-            omada_simulator_key = ""
 
         stub = _StubSecrets()
         if args.setup:
@@ -132,7 +131,6 @@ def main() -> None:
             asyncio.run(
                 run_simulation(
                     env, stub, team_config,
-                    simulator_key="dry-run-key",
                     dry_run=True,
                     project_key_override=args.project_key,
                 )
@@ -160,18 +158,11 @@ def main() -> None:
     secrets = load_secrets()
     print_environment_banner(env, secrets)
 
-    # --setup, --reset and --clean only touch Jira; --check-env and
-    # --simulate need the Omada simulator key.
-    needs_omada = args.check_env or args.simulate
-    if needs_omada and not secrets.omada_simulator_key:
-        raise SystemExit(
-            "OMADA_SIMULATOR_KEY is not set in omada-simulator/.env. "
-            "Copy .env.example and set it to the same value as "
-            "SIMULATOR_API_KEY in apps/api/.env."
-        )
+    # No Omada-side secrets needed: the simulator runs against a local API
+    # with clerk_auth=false, so /api/me succeeds without any auth header.
 
     if args.check_env:
-        asyncio.run(verify_connectivity(env, secrets.omada_simulator_key))
+        asyncio.run(verify_connectivity(env))
         print("✓ All checks passed")
         return
 
@@ -186,7 +177,6 @@ def main() -> None:
     elif args.simulate:
         asyncio.run(run_simulation(
             env, secrets, team_config,
-            simulator_key=secrets.omada_simulator_key,
             project_key_override=args.project_key,
         ))
     elif args.reset:

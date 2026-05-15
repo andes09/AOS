@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,15 +35,12 @@ async def _verify_token(credentials: HTTPAuthorizationCredentials) -> dict:
     return state.payload
 
 
-def _simulator_bypass_active(request: Request) -> bool:
-    """True when env=local, a simulator key is configured, and the caller presented the matching header."""
-    if settings.environment != "local" or not settings.simulator_api_key:
-        return False
-    return request.headers.get("X-Simulator-Key", "") == settings.simulator_api_key
+async def _get_first_admin_ids(db: AsyncSession) -> tuple[str, str]:
+    """Return (clerk_user_id, clerk_org_id) for the first admin Developer.
 
-
-async def _get_first_admin_user(db: AsyncSession) -> tuple[str, str]:
-    """Return (clerk_user_id, clerk_org_id) for the first admin Developer. Raises 401 if none exists."""
+    Used when the clerk_auth feature flag is disabled (local dev / simulator).
+    Raises 401 if no admin exists, which is a configuration error.
+    """
     result = await db.execute(
         select(Developer.clerk_user_id, Organization.clerk_org_id)
         .join(Team, Developer.team_id == Team.id)
@@ -58,19 +55,22 @@ async def _get_first_admin_user(db: AsyncSession) -> tuple[str, str]:
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Simulator bypass: no admin user found in database",
+            detail="clerk_auth is disabled but no admin user found in database",
         )
     return row[0], row[1]
 
 
 async def get_current_user_id(
-    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     db: AsyncSession = Depends(get_db),
 ) -> str:
-    """Verify Clerk JWT and return the user ID (sub claim). Honours the simulator bypass in local env."""
-    if _simulator_bypass_active(request):
-        user_id, _ = await _get_first_admin_user(db)
+    """Verify Clerk JWT and return the user ID (sub claim).
+
+    When the clerk_auth feature flag is disabled, short-circuits and returns
+    the first admin Developer's clerk_user_id without checking any token.
+    """
+    if not settings.is_feature_enabled("clerk_auth"):
+        user_id, _ = await _get_first_admin_ids(db)
         return user_id
     if credentials is None:
         raise HTTPException(
@@ -88,13 +88,16 @@ async def get_current_user_id(
 
 
 async def get_current_org_id(
-    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     db: AsyncSession = Depends(get_db),
 ) -> str:
-    """Verify Clerk JWT and return the Clerk organisation ID (org_id claim). Honours the simulator bypass in local env."""
-    if _simulator_bypass_active(request):
-        _, org_id = await _get_first_admin_user(db)
+    """Verify Clerk JWT and return the Clerk organisation ID (org_id claim).
+
+    When the clerk_auth feature flag is disabled, short-circuits and returns
+    the first admin Developer's clerk_org_id without checking any token.
+    """
+    if not settings.is_feature_enabled("clerk_auth"):
+        _, org_id = await _get_first_admin_ids(db)
         return org_id
     if credentials is None:
         raise HTTPException(

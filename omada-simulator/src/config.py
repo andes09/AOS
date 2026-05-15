@@ -44,9 +44,6 @@ class EnvironmentConfig(BaseModel):
 class Secrets(BaseModel):
     jira_email: str
     jira_api_token: str
-    # Static key that pairs with SIMULATOR_API_KEY on the Omada side.
-    # No refresh, no expiry — the API only honours it when ENVIRONMENT=local.
-    omada_simulator_key: str = ""
 
 
 def _available_envs() -> list[str]:
@@ -74,9 +71,9 @@ def load_environment(env_name: str) -> EnvironmentConfig:
 def load_secrets() -> Secrets:
     """Load .env and return a validated Secrets object.
 
-    Jira creds are required; the simulator key is optional at load time
-    so dry-runs can proceed without it. Empty strings are treated the
-    same as missing.
+    Only Jira creds are required. Omada needs no token from the simulator —
+    the local API resolves the caller via the disabled clerk_auth flag.
+    Empty strings are treated the same as missing.
     """
     load_dotenv(PACKAGE_ROOT / ".env")
     required = {
@@ -92,7 +89,6 @@ def load_secrets() -> Secrets:
     return Secrets(
         jira_email=required["JIRA_EMAIL"],
         jira_api_token=required["JIRA_API_TOKEN"],
-        omada_simulator_key=os.getenv("OMADA_SIMULATOR_KEY", "") or "",
     )
 
 
@@ -152,22 +148,20 @@ def validate_safety(env: EnvironmentConfig) -> None:
 
 async def verify_connectivity(
     env: EnvironmentConfig,
-    simulator_key: str,
     *,
     transport: Optional[httpx.AsyncBaseTransport] = None,
 ) -> None:
     """Probe Omada for liveness and auth.
 
     Step 1 — GET /health (expects 200).
-    Step 2 — GET /api/me with X-Simulator-Key (expects 200; a 401 means
-             the key doesn't match the API's SIMULATOR_API_KEY, or the
-             API isn't running in local mode).
+    Step 2 — GET /api/me with no auth header (expects 200; a 401 means
+             the API's clerk_auth flag is enabled, so the simulator can't
+             talk to it — only run against an env that has clerk_auth=false).
 
     The ``transport`` parameter exists for tests using
     ``httpx.MockTransport``; production callers pass nothing.
     """
     base = env.omada.api_url.rstrip("/")
-    headers = {"X-Simulator-Key": simulator_key}
 
     client_kwargs: dict = {"timeout": httpx.Timeout(10.0)}
     if transport is not None:
@@ -189,16 +183,16 @@ async def verify_connectivity(
             )
 
         try:
-            me = await client.get(f"{base}/api/me", headers=headers)
+            me = await client.get(f"{base}/api/me")
         except httpx.HTTPError as e:
             raise SystemExit(f"Cannot reach Omada /api/me: {e}")
 
         if me.status_code == 401:
             raise SystemExit(
-                "Simulator key rejected. Check OMADA_SIMULATOR_KEY in "
-                "omada-simulator/.env matches SIMULATOR_API_KEY in "
-                "apps/api/.env, and that the API is running with "
-                "ENVIRONMENT=local."
+                "Omada /api/me returned 401. The simulator only runs "
+                "against an Omada with clerk_auth=false in "
+                "apps/api/config/features/{environment}.yaml. Confirm the "
+                "API is running with ENVIRONMENT=local."
             )
         if me.status_code >= 400:
             raise SystemExit(

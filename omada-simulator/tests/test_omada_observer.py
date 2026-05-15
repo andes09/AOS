@@ -22,22 +22,23 @@ def _install_mock_transport(monkeypatch, handler) -> None:
     monkeypatch.setattr("src.omada_observer.httpx.Client", factory)
 
 
-def test_request_sends_x_simulator_key_header(monkeypatch):
-    """Every Omada call must carry X-Simulator-Key with the configured value."""
+def test_request_sends_no_auth_header(monkeypatch):
+    """The simulator runs against a local API with clerk_auth=false, so
+    no Authorization or simulator-key header should be sent."""
     seen: dict[str, str] = {}
 
     def handler(req: httpx.Request) -> httpx.Response:
-        seen["key"] = req.headers.get("X-Simulator-Key", "")
         seen["auth"] = req.headers.get("Authorization", "")
+        seen["sim_key"] = req.headers.get("X-Simulator-Key", "")
         return httpx.Response(200, json={"ok": True})
 
     _install_mock_transport(monkeypatch, handler)
 
-    with OmadaObserver("http://localhost:8000", "sim-key-abc") as obs:
+    with OmadaObserver("http://localhost:8000") as obs:
         assert obs._request("GET", "/api/me") == {"ok": True}
 
-    assert seen["key"] == "sim-key-abc"
-    assert seen["auth"] == ""  # no Bearer token any more
+    assert seen["auth"] == ""
+    assert seen["sim_key"] == ""
 
 
 def test_non_2xx_returns_none_and_does_not_raise(monkeypatch):
@@ -48,12 +49,13 @@ def test_non_2xx_returns_none_and_does_not_raise(monkeypatch):
 
     _install_mock_transport(monkeypatch, handler)
 
-    with OmadaObserver("http://localhost:8000", "sim-key") as obs:
+    with OmadaObserver("http://localhost:8000") as obs:
         assert obs._request("GET", "/api/me") is None
 
 
 def test_401_returns_none_without_retry(monkeypatch):
-    """With the static key, 401 just means the key is wrong — no refresh path."""
+    """A 401 means clerk_auth is enabled on the target API. No retry path
+    exists — the call is logged and surfaced as a bug."""
     calls: list[str] = []
 
     def handler(req):
@@ -62,7 +64,7 @@ def test_401_returns_none_without_retry(monkeypatch):
 
     _install_mock_transport(monkeypatch, handler)
 
-    with OmadaObserver("http://localhost:8000", "sim-key") as obs:
+    with OmadaObserver("http://localhost:8000") as obs:
         assert obs._request("GET", "/api/me") is None
 
     assert calls == ["/api/me"]  # exactly one attempt, no retry

@@ -10,6 +10,7 @@ import logging
 from datetime import datetime, date
 
 from sqlalchemy import select, create_engine
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from src.worker import celery_app
@@ -213,23 +214,24 @@ def _upsert_team_members(db: Session, team, jira_users: list[dict]):
         account_id = user.get("accountId")
         if not account_id:
             continue
-        member = db.execute(
-            select(TeamMember).where(
-                TeamMember.team_id == team.id,
-                TeamMember.jira_account_id == account_id,
-            )
-        ).scalar_one_or_none()
-        if member is None:
-            member = TeamMember(
-                team_id=team.id,
-                jira_account_id=account_id,
-                display_name=user.get("displayName", account_id),
-                email=user.get("emailAddress"),
-            )
-            db.add(member)
-        else:
-            member.display_name = user.get("displayName", member.display_name)
-            member.email = user.get("emailAddress", member.email)
+        display_name = user.get("displayName", account_id)
+        email = user.get("emailAddress")
+        # Use ON CONFLICT DO UPDATE so concurrent Celery workers syncing the
+        # same team don't race on the unique (team_id, jira_account_id) index.
+        stmt = pg_insert(TeamMember).values(
+            id=uuid.uuid4(),
+            team_id=team.id,
+            jira_account_id=account_id,
+            display_name=display_name,
+            email=email,
+        ).on_conflict_do_update(
+            index_elements=["team_id", "jira_account_id"],
+            set_={
+                "display_name": display_name,
+                "email": email,
+            },
+        )
+        db.execute(stmt)
 
 
 def _upsert_sprint(db: Session, team, jira_sprint: dict):

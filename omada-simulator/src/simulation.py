@@ -555,6 +555,129 @@ async def run_reset(
         print("No setup_state.json to remove.")
 
 
+async def run_reset_sprints(
+    env: EnvironmentConfig,
+    secrets: Secrets,
+    *,
+    project_key_override: str,
+    dry_run: bool = False,
+) -> None:
+    """Reset sprints/ticket states while preserving the Jira project.
+
+    Unlike --clean, this keeps the Jira project, board, and ticket pool
+    intact so Omada can stay connected to the same board across runs.
+    Closes any active/future sprints, moves all tickets back to the
+    backlog, transitions each ticket to "To Do", deletes per-sprint
+    JSON outputs, and truncates audit logs. setup_state.json is
+    preserved because --simulate depends on it.
+    """
+    _ensure_output_dir()
+
+    _safety_check_project_key(project_key_override)
+
+    if not SETUP_STATE_PATH.exists():
+        raise SystemExit(
+            f"{SETUP_STATE_PATH} not found. Run --setup first, or use "
+            f"--clean if you want a full teardown."
+        )
+
+    state = json.loads(SETUP_STATE_PATH.read_text())
+    state_project_key = state.get("project_key")
+    if state_project_key != project_key_override:
+        raise SystemExit(
+            f"--project-key {project_key_override!r} does not match "
+            f"setup_state.json project_key {state_project_key!r}. Refusing "
+            f"to reset the wrong project."
+        )
+    board_id = state["board_id"]
+    ticket_keys: list[str] = state.get("ticket_keys") or []
+
+    if dry_run:
+        print(
+            f"[DRY RUN] Would close active/future sprints on board {board_id}"
+        )
+        print(
+            f"[DRY RUN] Would move {len(ticket_keys)} tickets back to backlog"
+        )
+        print(
+            f"[DRY RUN] Would transition {len(ticket_keys)} tickets to 'To Do'"
+        )
+        sprint_json_files = sorted(
+            p for p in OUTPUT_DIR.glob("*.json") if p.name != "setup_state.json"
+        )
+        for path in sprint_json_files:
+            print(f"[DRY RUN] Would delete {path}")
+        for path in (
+            OUTPUT_DIR / "jira_audit.log",
+            OUTPUT_DIR / "omada_audit.log",
+        ):
+            if path.exists():
+                print(f"[DRY RUN] Would truncate {path}")
+        print(
+            f"[DRY RUN] Sprints reset. Project {project_key_override} "
+            f"preserved. Ready for --simulate."
+        )
+        return
+
+    with JiraDriver(env.jira.url, secrets.jira_email, secrets.jira_api_token) as jira:
+        try:
+            sprints = jira.list_sprints(board_id, state="active,future")
+        except JiraDriverError as e:
+            print(f"Listing sprints failed (continuing): {e}")
+            sprints = []
+
+        for sprint in sprints:
+            sid = int(sprint["id"])
+            sname = sprint.get("name", f"sprint {sid}")
+            try:
+                jira.close_sprint(sid)
+                print(f"Closed sprint {sid} ({sname})")
+            except JiraDriverError as e:
+                print(f"Closing sprint {sid} failed (continuing): {e}")
+
+        if ticket_keys:
+            try:
+                jira.move_issues_to_backlog(ticket_keys)
+                print(f"Moved {len(ticket_keys)} tickets to backlog")
+            except JiraDriverError as e:
+                print(f"Backlog move failed (continuing): {e}")
+
+            try:
+                from tqdm import tqdm
+
+                iterator = tqdm(
+                    ticket_keys, desc="Resetting status", unit="ticket"
+                )
+            except ImportError:
+                iterator = ticket_keys
+
+            for key in iterator:
+                try:
+                    jira.transition_issue(key, "To Do")
+                except JiraDriverError as e:
+                    print(f"Status reset failed for {key} (continuing): {e}")
+
+    sprint_json_files = sorted(
+        p for p in OUTPUT_DIR.glob("*.json") if p.name != "setup_state.json"
+    )
+    for path in sprint_json_files:
+        path.unlink()
+        print(f"Removed {path}")
+
+    for path in (
+        OUTPUT_DIR / "jira_audit.log",
+        OUTPUT_DIR / "omada_audit.log",
+    ):
+        if path.exists():
+            path.write_text("")
+            print(f"Truncated {path}")
+
+    print(
+        f"Sprints reset. Project {project_key_override} preserved. "
+        f"Ready for --simulate."
+    )
+
+
 async def run_clean(
     env: EnvironmentConfig,
     secrets: Secrets,

@@ -231,6 +231,41 @@ class JiraDriver:
             json={"state": "closed"},
         )
 
+    def list_sprints(
+        self, board_id: int, state: str | None = None
+    ) -> list[dict]:
+        """List sprints on a board, optionally filtered by state.
+
+        state: comma-separated subset of "future,active,closed". When None,
+        Jira returns sprints in all states.
+        """
+        sprints: list[dict] = []
+        start_at = 0
+        while True:
+            path = (
+                f"/rest/agile/1.0/board/{board_id}/sprint"
+                f"?startAt={start_at}&maxResults=50"
+            )
+            if state:
+                path += f"&state={state}"
+            resp = self._request("GET", path)
+            data = resp.json()
+            sprints.extend(data.get("values") or [])
+            if data.get("isLast", True):
+                break
+            start_at += len(data.get("values") or [])
+        return sprints
+
+    def move_issues_to_backlog(self, issue_keys: list[str]) -> None:
+        """Move issues out of any sprint and back to the project backlog."""
+        for i in range(0, len(issue_keys), 50):
+            chunk = issue_keys[i : i + 50]
+            self._request(
+                "POST",
+                "/rest/agile/1.0/backlog/issue",
+                json={"issues": chunk},
+            )
+
     def create_issue_link(self, outward_key: str, inward_key: str) -> None:
         try:
             self._request(

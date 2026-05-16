@@ -13,7 +13,13 @@ from src.config import (
     validate_safety,
     verify_connectivity,
 )
-from src.simulation import run_clean, run_reset, run_setup, run_simulation
+from src.simulation import (
+    run_clean,
+    run_reset,
+    run_reset_sprints,
+    run_setup,
+    run_simulation,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -64,6 +70,15 @@ def _build_parser() -> argparse.ArgumentParser:
              "--project-key.",
     )
     parser.add_argument(
+        "--reset-sprints",
+        action="store_true",
+        help="Reset sprints/ticket states while PRESERVING the Jira "
+             "project, board, and ticket pool. Closes any active sprints, "
+             "moves tickets back to backlog, resets statuses to 'To Do', "
+             "deletes per-sprint output JSONs, truncates audit logs. "
+             "Requires --project-key.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print what would happen without making API calls. "
@@ -93,16 +108,26 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    cmds = [args.check_env, args.setup, args.simulate, args.reset, args.clean]
+    cmds = [
+        args.check_env,
+        args.setup,
+        args.simulate,
+        args.reset,
+        args.clean,
+        args.reset_sprints,
+    ]
     if sum(cmds) == 0:
         parser.error(
-            "Specify one of --check-env, --setup, --simulate, --reset, --clean."
+            "Specify one of --check-env, --setup, --simulate, --reset, "
+            "--clean, --reset-sprints."
         )
     if sum(cmds) > 1:
         parser.error("Specify only one command at a time.")
 
     if args.clean and not args.project_key:
         parser.error("--clean requires --project-key.")
+    if args.reset_sprints and not args.project_key:
+        parser.error("--reset-sprints requires --project-key.")
 
     env = load_environment(args.env)
     validate_safety(env)
@@ -151,6 +176,14 @@ def main() -> None:
                     dry_run=True,
                 )
             )
+        elif args.reset_sprints:
+            asyncio.run(
+                run_reset_sprints(
+                    env, stub,
+                    project_key_override=args.project_key,
+                    dry_run=True,
+                )
+            )
         else:
             parser.error("--dry-run is not supported with --check-env.")
         return
@@ -187,6 +220,11 @@ def main() -> None:
         ))
     elif args.clean:
         asyncio.run(run_clean(
+            env, secrets,
+            project_key_override=args.project_key,
+        ))
+    elif args.reset_sprints:
+        asyncio.run(run_reset_sprints(
             env, secrets,
             project_key_override=args.project_key,
         ))

@@ -9,8 +9,11 @@ The goal is to surface integration bugs and produce a written report.
 - `--check-env` — load env YAML, validate safety, probe Omada `/health` + `/api/me`
 - `--setup` — create Jira `SIM` project, generate a 100-ticket pool, add Blocks links
 - `--simulate` — run 3 sprints concurrently with 4 simulated developers
+- `--reset-sprints` — reset sprints/ticket states but **keep** the Jira project
+  and ticket pool (so Omada stays connected to the same board)
 - `--reset` — delete the Jira SIM project and remove local state
-- `--dry-run` — preview any of `--setup`/`--simulate`/`--reset` without API calls
+- `--clean` — full teardown: delete the project, wipe output JSON, truncate logs
+- `--dry-run` — preview any of `--setup`/`--simulate`/`--reset`/`--clean`/`--reset-sprints` without API calls
 
 All Jira and Omada calls are audited to `output/jira_audit.log` and
 `output/omada_audit.log`. The Omada observer never raises — every
@@ -208,20 +211,49 @@ every new simulation.
 Without Terminal 5 (Celery), Jira syncs queue but never execute. Sprint
 Brain will always return "No candidate tickets found."
 
-### Full simulation workflow
+### Recommended workflow (keeps Omada connected to one board)
+
+Setting up a fresh Jira project each run means re-connecting Omada to a new
+board in the UI every time. `--reset-sprints` avoids that: it resets sprint
+state in place while preserving the project, board, and ticket pool. Connect
+Omada to the SIM project once, then reuse it forever.
 
 ```bash
-# Purge stale tasks
+# First-time setup
+python -m src.main --setup --env local --project-key SIM15
+# → then manually connect Omada to the SIM15 board in Settings (once)
+
+# Every subsequent run
 cd ~/Code/AOS/apps/api && celery -A src.worker purge -f
-
-# Clean previous run
 cd ~/Code/AOS/omada-simulator
-python -m src.main --clean --env local --project-key SIMx
+python -m src.main --reset-sprints --env local --project-key SIM15
+python -m src.main --simulate     --env local --project-key SIM15
+```
 
-# Setup new project
-python -m src.main --setup --env local --project-key SIMy
+`--reset-sprints`:
 
-# Run simulation
+1. Closes any open/future sprints on the board (Jira API).
+2. Moves all pool tickets back to the backlog.
+3. Transitions every ticket back to **To Do**.
+4. Deletes every `output/*.json` file **except** `setup_state.json` —
+   `--simulate` reads that file for the board id and ticket pool, so it's
+   preserved on purpose. `BUGS_INTEGRATION.md` from a prior run is left
+   alone (it gets overwritten by the next `--simulate`).
+5. Truncates `jira_audit.log` and `omada_audit.log`.
+
+Prints `Sprints reset. Project SIM15 preserved. Ready for --simulate.`
+
+### Legacy: full teardown workflow
+
+Use this only when you actually want to throw away the project (e.g. testing
+`--setup` itself). After this you'll have to reconnect Omada to the new
+board manually.
+
+```bash
+cd ~/Code/AOS/apps/api && celery -A src.worker purge -f
+cd ~/Code/AOS/omada-simulator
+python -m src.main --clean   --env local --project-key SIMx
+python -m src.main --setup   --env local --project-key SIMy
 python -m src.main --simulate --env local --project-key SIMy
 ```
 

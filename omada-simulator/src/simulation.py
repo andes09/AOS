@@ -194,6 +194,19 @@ async def run_setup(
         jira.get_or_create_project(project_key, project_name)
         board_id = jira.get_board_id(project_key)
 
+        # Repoint Omada at the new board/project so the user doesn't have to
+        # manually disconnect+reconnect via the UI between simulator runs.
+        with OmadaObserver(env.omada.api_url) as observer:
+            if observer.switch_board(board_id, project_key):
+                print(
+                    f"[omada] Switched board to {project_key} (board_id={board_id})"
+                )
+            else:
+                print(
+                    "[omada] switch_board failed — Omada may still be pointing at "
+                    "the previous board. Check omada_audit.log."
+                )
+
         try:
             from tqdm import tqdm  # optional, fallback below
 

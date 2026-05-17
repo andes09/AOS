@@ -56,10 +56,16 @@ class OmadaObserver:
             # Logging itself must never break the caller.
             pass
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> Optional[dict]:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        timeout: float = REQUEST_TIMEOUT,
+        **kwargs: Any,
+    ) -> Optional[dict]:
         url = f"{self._base_url}{path}"
         try:
-            response = self._client.request(method, url, **kwargs)
+            response = self._client.request(method, url, timeout=timeout, **kwargs)
         except Exception as e:  # httpx.HTTPError and anything else
             self._log(method, path, "ERR", repr(e))
             return None
@@ -126,6 +132,20 @@ class OmadaObserver:
             params={"team_id": team_id},
         )
 
+    def switch_board(self, board_id: int, project_key: str) -> bool:
+        """Point Omada at a new Jira board/project without re-running OAuth.
+
+        Called by `run_setup` after the simulator creates a fresh SIM project,
+        so the existing connection credentials are reused and the user doesn't
+        have to manually disconnect/reconnect in the UI. Returns True on success.
+        """
+        resp = self._request(
+            "PUT",
+            "/api/integrations/jira/board",
+            json={"board_id": board_id, "project_key": project_key},
+        )
+        return resp is not None
+
     def get_sync_status(self) -> Optional[dict]:
         """Return the current Jira-integration status dict (or None on failure).
 
@@ -172,7 +192,9 @@ class OmadaObserver:
         }
         if sprint_start_date is not None:
             body["sprint_start_date"] = sprint_start_date
-        return self._request("POST", "/api/sprint-brain/plan", json=body)
+        return self._request(
+            "POST", "/api/sprint-brain/plan", json=body, timeout=120.0
+        )
 
     def push_plan_to_jira(
         self, team_id: str, sprint_name: str, plan: dict

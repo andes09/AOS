@@ -7,6 +7,7 @@ GET    /api/integrations/jira/status        → returns connection status for th
 DELETE /api/integrations/jira/disconnect    → deactivates the connection
 GET    /api/integrations/jira/boards        → lists scrum boards for a connection
 POST   /api/integrations/jira/board-selection → saves the selected board to the team
+PUT    /api/integrations/jira/board         → switch the active board/project (no re-OAuth)
 POST   /api/integrations/jira/sync          → triggers a manual background sync for a team
 """
 
@@ -266,6 +267,65 @@ async def save_board_selection(
         pass  # Celery/broker not available; sync will run on next scheduled beat
 
     return {"saved": True}
+
+
+class BoardSwitchRequest(BaseModel):
+    board_id: int
+    project_key: str
+
+
+@router.put("/board")
+async def switch_board(
+    body: BoardSwitchRequest,
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Switch the team's active Jira board/project without re-OAuth.
+
+    The connection credentials stay the same — only the board/project
+    being synced changes. Used by the simulator after creating a fresh
+    SIM project so the manual disconnect+reconnect flow can be skipped.
+    Triggers an initial sync against the new board.
+    """
+    org = await db.scalar(
+        select(Organization).where(Organization.clerk_org_id == clerk_org_id)
+    )
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+
+    connection = await db.scalar(
+        select(JiraConnection).where(
+            JiraConnection.organization_id == org.id,
+            JiraConnection.is_active == True,
+        )
+    )
+    if not connection:
+        raise HTTPException(
+            status_code=404,
+            detail="No active Jira connection — connect via OAuth first",
+        )
+
+    team = await db.scalar(
+        select(Team).where(Team.organization_id == org.id)
+    )
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found for this organisation")
+
+    team.jira_board_id = str(body.board_id)
+    team.jira_project_key = body.project_key
+    await db.commit()
+
+    try:
+        from src.integrations.jira.sync import sync_jira_team
+        sync_jira_team.delay(str(team.id))
+    except Exception:
+        pass  # Celery/broker not available; next scheduled beat will pick it up
+
+    return {
+        "team_id": str(team.id),
+        "board_id": body.board_id,
+        "project_key": body.project_key,
+    }
 
 
 @router.post("/sync")

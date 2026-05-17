@@ -9,7 +9,7 @@ import uuid
 import logging
 from datetime import datetime, date
 
-from sqlalchemy import select, create_engine
+from sqlalchemy import select, create_engine, update as sa_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -138,7 +138,17 @@ def sync_jira_team(self, team_id: str):
             if sprint_obj:
                 _upsert_issues(db, team, sprint_obj, issues)
 
-        connection.last_synced_at = datetime.utcnow()
+        db.commit()
+
+        # Bookkeeping write done via explicit UPDATE: _get_fresh_client may
+        # have committed a token refresh mid-task, expiring `connection`, and
+        # setting an attribute on an expired instance has been unreliable here
+        # (the UPDATE sometimes didn't reach the DB, leaving /status stale).
+        db.execute(
+            sa_update(JiraConnection)
+            .where(JiraConnection.id == connection.id)
+            .values(last_synced_at=datetime.utcnow())
+        )
         db.commit()
         logger.info("Full Jira sync complete for team %s", team_id)
 

@@ -182,7 +182,11 @@ class JiraDriver:
         self._request(
             "POST",
             f"/rest/agile/1.0/sprint/{sprint_id}",
-            json={"state": "active"},
+            json={
+                "state": "active",
+                "startDate": start_date,
+                "endDate": end_date,
+            },
         )
         return sprint_id
 

@@ -311,15 +311,20 @@ def _extract_complexity(response: anthropic.types.Message) -> list[dict]:
             "Claude did not return a complexity analysis tool call. "
             "Please try again."
         )
-    analyses = tool_block.input.get("ticket_analyses") or []
+    raw = tool_block.input
+    # Anthropic SDK occasionally hands back the raw list rather than the
+    # wrapped {"ticket_analyses": [...]} shape — accept either.
+    if isinstance(raw, list):
+        return raw
+    analyses = raw.get("ticket_analyses") or []
     if not analyses:
-        # Tool was called but with an empty/malformed payload — most likely
-        # Claude hit max_tokens mid-serialisation. Don't 500; the planner can
-        # still produce assignments without per-ticket complexity context.
+        # Empty / missing key → most likely Claude hit max_tokens
+        # mid-serialisation. Don't 500; the planner can still produce
+        # assignments without per-ticket complexity context.
         logger.warning(
             "analyse_tickets tool returned no ticket_analyses; "
             "tool_block.input=%r stop_reason=%r",
-            tool_block.input, getattr(response, "stop_reason", None),
+            raw, getattr(response, "stop_reason", None),
         )
     return analyses
 

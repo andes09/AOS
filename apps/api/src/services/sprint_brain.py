@@ -1,5 +1,5 @@
 """
-Sprint Brain AI service — Claude Opus 4.6 powered sprint planning.
+Sprint Brain AI service — Claude Opus 4.7 powered sprint planning.
 
 Implements generate_sprint_plan() and simulate_what_if() using the Anthropic
 API with adaptive thinking and tool_use for structured output.
@@ -8,6 +8,7 @@ BYOK model: the Anthropic API key is always supplied by the caller (fetched
 from the Organisation record), never from environment.
 """
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 
@@ -20,7 +21,9 @@ from src.models.team import Team
 from src.models.sprint import Sprint, SprintStatus
 from src.models.capacity import DeveloperCapacityOverride
 
-_MODEL = "claude-opus-4-6"
+logger = logging.getLogger(__name__)
+
+_MODEL = "claude-opus-4-7"
 
 # ---------------------------------------------------------------------------
 # Tool schema — forces Claude to return structured sprint plan output
@@ -308,7 +311,17 @@ def _extract_complexity(response: anthropic.types.Message) -> list[dict]:
             "Claude did not return a complexity analysis tool call. "
             "Please try again."
         )
-    return tool_block.input["ticket_analyses"]
+    analyses = tool_block.input.get("ticket_analyses") or []
+    if not analyses:
+        # Tool was called but with an empty/malformed payload — most likely
+        # Claude hit max_tokens mid-serialisation. Don't 500; the planner can
+        # still produce assignments without per-ticket complexity context.
+        logger.warning(
+            "analyse_tickets tool returned no ticket_analyses; "
+            "tool_block.input=%r stop_reason=%r",
+            tool_block.input, getattr(response, "stop_reason", None),
+        )
+    return analyses
 
 
 async def _analyse_ticket_complexity(
@@ -321,7 +334,7 @@ async def _analyse_ticket_complexity(
     """
     response = await client.messages.create(
         model=_MODEL,
-        max_tokens=4096,
+        max_tokens=8192,
         system=_COMPLEXITY_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": _build_complexity_message(tickets)}],
         tools=[_COMPLEXITY_TOOL],

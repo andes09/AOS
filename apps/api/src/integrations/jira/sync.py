@@ -61,13 +61,26 @@ def _get_fresh_client(connection, db: Session) -> JiraClient:
     return JiraClient(cloud_id=connection.jira_cloud_id, access_token=access_token)
 
 
+class JiraReauthRequired(Exception):
+    """Raised when Jira refresh fails with a non-recoverable auth error
+    (400/401/403). The connection has been deactivated; the user must
+    reconnect via OAuth before any further Jira call will succeed.
+    """
+
+
 async def _get_fresh_client_async(connection, db: AsyncSession) -> JiraClient:
     """Async sibling of :func:`_get_fresh_client` for use from FastAPI routes.
 
     Same rotation semantics as the sync variant: token updates are committed
     immediately so that a later rollback on the request transaction cannot
     discard the rotated refresh token.
+
+    Raises :class:`JiraReauthRequired` if Atlassian rejects the refresh token
+    (typically because a prior request consumed it but didn't persist the
+    rotated value). The connection row is deactivated before re-raising.
     """
+    import httpx
+
     access_token = decrypt(connection.encrypted_access_token)
 
     if connection.token_expires_at and connection.token_expires_at <= datetime.utcnow():
@@ -75,7 +88,21 @@ async def _get_fresh_client_async(connection, db: AsyncSession) -> JiraClient:
         from src.services.encryption import encrypt
 
         refresh_tok = decrypt(connection.encrypted_refresh_token)
-        tokens = await refresh_access_token(refresh_tok)
+        try:
+            tokens = await refresh_access_token(refresh_tok)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (400, 401, 403):
+                logger.warning(
+                    "Jira refresh rejected (%s) — deactivating connection %s",
+                    exc.response.status_code, connection.id,
+                )
+                connection.is_active = False
+                await db.commit()
+                raise JiraReauthRequired(
+                    f"Jira refresh token rejected ({exc.response.status_code}). "
+                    "Please reconnect Jira in Settings."
+                ) from exc
+            raise
         access_token = tokens["access_token"]
         connection.encrypted_access_token = encrypt(access_token)
         if "refresh_token" in tokens:

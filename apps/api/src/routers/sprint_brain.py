@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 
 from src.auth import get_current_user_id, get_current_org_id
 from src.auth_roles import require_role
@@ -181,12 +181,31 @@ async def _get_developer_profiles(team_id: str, db: AsyncSession) -> list[dict]:
 
 
 async def _get_candidate_tickets(team_id: str, db: AsyncSession) -> list[dict]:
-    """Fetch unassigned/backlog tickets for sprint planning."""
+    """Fetch unassigned/backlog tickets for sprint planning.
+
+    Includes both tickets with no sprint (true backlog) and tickets that
+    remained in a completed sprint (carryover) — the latter must flow back
+    into the candidate pool for the next sprint.
+    """
+    import uuid as _uuid
+    try:
+        team_uuid = _uuid.UUID(team_id)
+    except ValueError:
+        team_uuid = team_id
+
     tickets = (await db.scalars(
         select(Ticket)
         .where(
             Ticket.team_id == team_id,
-            Ticket.sprint_id.is_(None),
+            or_(
+                Ticket.sprint_id.is_(None),
+                Ticket.sprint_id.in_(
+                    select(Sprint.id).where(
+                        Sprint.team_id == team_uuid,
+                        Sprint.status == SprintStatus.COMPLETED,
+                    )
+                ),
+            ),
             Ticket.status.notin_([TicketStatus.DONE, TicketStatus.CANCELLED]),
         )
         .order_by(Ticket.story_points_estimated.desc().nulls_last())

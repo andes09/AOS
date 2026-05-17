@@ -11,6 +11,7 @@ from datetime import datetime, date
 
 from sqlalchemy import select, create_engine, update as sa_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from src.worker import celery_app
@@ -56,6 +57,32 @@ def _get_fresh_client(connection, db: Session) -> JiraClient:
             connection.token_expires_at = datetime.utcnow() + timedelta(seconds=tokens["expires_in"])
         # Commit immediately — token rotation must survive a sync failure/rollback
         db.commit()
+
+    return JiraClient(cloud_id=connection.jira_cloud_id, access_token=access_token)
+
+
+async def _get_fresh_client_async(connection, db: AsyncSession) -> JiraClient:
+    """Async sibling of :func:`_get_fresh_client` for use from FastAPI routes.
+
+    Same rotation semantics as the sync variant: token updates are committed
+    immediately so that a later rollback on the request transaction cannot
+    discard the rotated refresh token.
+    """
+    access_token = decrypt(connection.encrypted_access_token)
+
+    if connection.token_expires_at and connection.token_expires_at <= datetime.utcnow():
+        from datetime import timedelta
+        from src.services.encryption import encrypt
+
+        refresh_tok = decrypt(connection.encrypted_refresh_token)
+        tokens = await refresh_access_token(refresh_tok)
+        access_token = tokens["access_token"]
+        connection.encrypted_access_token = encrypt(access_token)
+        if "refresh_token" in tokens:
+            connection.encrypted_refresh_token = encrypt(tokens["refresh_token"])
+        if "expires_in" in tokens:
+            connection.token_expires_at = datetime.utcnow() + timedelta(seconds=tokens["expires_in"])
+        await db.commit()
 
     return JiraClient(cloud_id=connection.jira_cloud_id, access_token=access_token)
 

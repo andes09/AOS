@@ -37,7 +37,7 @@ from src.auth_roles import require_role
 from src.config import settings
 from src.database import get_db
 from src.integrations.jira.push import resolve_jira_account_id
-from src.integrations.jira.sync import _get_fresh_client
+from src.integrations.jira.sync import _get_fresh_client_async
 from src.models.developer import Developer
 from src.models.jira_connection import JiraConnection
 from src.models.organization import Organization
@@ -651,7 +651,7 @@ async def push_to_jira(
         )
 
     # 4. Get board_id; 5. Build client
-    client = _get_fresh_client(connection, db)
+    client = await _get_fresh_client_async(connection, db)
 
     # 6. Create sprint in Jira
     sprint_data = await client.create_sprint(

@@ -4,7 +4,19 @@ from src.config import settings
 
 JIRA_AUTH_URL = "https://auth.atlassian.com/authorize"
 JIRA_TOKEN_URL = "https://auth.atlassian.com/oauth/token"
-JIRA_SCOPES = "read:jira-work read:jira-user write:jira-work offline_access"
+JIRA_SCOPES = " ".join([
+    # Classic Jira scopes — issues, users, projects
+    "read:jira-work",
+    "read:jira-user",
+    "write:jira-work",
+    # Granular Jira Software scopes — required for the Agile API
+    # (sprints, boards). Classic scopes alone return 401 on /rest/agile/*.
+    "read:sprint:jira-software",
+    "write:sprint:jira-software",
+    "read:board-scope:jira-software",
+    # Refresh-token rotation
+    "offline_access",
+])
 JIRA_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
 
 

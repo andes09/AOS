@@ -674,15 +674,25 @@ async def push_to_jira(
         a.ticketId for a in request.assignments
         if _re.match(r"^[A-Z][A-Z0-9_]+-\d+$", a.ticketId or "")
     ]
+    move_warnings: list[str] = []
     if issue_keys:
-        await client.move_issues_to_sprint(jira_sprint_id, issue_keys)
+        try:
+            await client.move_issues_to_sprint(jira_sprint_id, issue_keys)
+        except Exception as exc:
+            # Non-fatal: sprint was created; tickets may not exist in this Jira instance
+            move_warnings = issue_keys
+            import logging as _log
+            _log.getLogger(__name__).warning("move_issues_to_sprint skipped: %s", exc)
 
     # 9. Assign each ticket; collect warnings for unresolved developers
-    unassigned_warnings: list[str] = []
+    unassigned_warnings: list[str] = move_warnings
     for assignment in request.assignments:
         account_id = await resolve_jira_account_id(assignment.developerId, str(team.id), db)
         if account_id:
-            await client.assign_issue(assignment.ticketId, account_id)
+            try:
+                await client.assign_issue(assignment.ticketId, account_id)
+            except Exception:
+                unassigned_warnings.append(assignment.ticketId)
         else:
             unassigned_warnings.append(assignment.ticketId)
 

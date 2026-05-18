@@ -668,9 +668,14 @@ async def push_to_jira(
     jira_sprint_id: int = sprint_data["id"]
     sprint_url: str = sprint_data["self"]
 
-    # 8. Move issues into the new sprint
-    issue_keys = [a.ticketId for a in request.assignments]
-    await client.move_issues_to_sprint(jira_sprint_id, issue_keys)
+    # 8. Move issues into the new sprint — only pass valid Jira issue keys (e.g. PROJ-123)
+    import re as _re
+    issue_keys = [
+        a.ticketId for a in request.assignments
+        if _re.match(r"^[A-Z][A-Z0-9_]+-\d+$", a.ticketId or "")
+    ]
+    if issue_keys:
+        await client.move_issues_to_sprint(jira_sprint_id, issue_keys)
 
     # 9. Assign each ticket; collect warnings for unresolved developers
     unassigned_warnings: list[str] = []

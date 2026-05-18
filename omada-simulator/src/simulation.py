@@ -385,7 +385,7 @@ async def run_simulation(
             push_resp = None
             if plan and omada_team_id:
                 push_resp = omada.push_plan_to_jira(
-                    omada_team_id, f"Sim Sprint {sprint_num}", plan
+                    omada_team_id, f"Sim Sprint {sprint_num}", plan, sprint_length_days=1
                 )
             _write_json(OUTPUT_DIR / f"sprint_{sprint_num}_push.json", push_resp or {})
 

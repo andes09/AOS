@@ -22,7 +22,7 @@ class JiraClient:
         """Execute a JQL search with full pagination using the /search/jql endpoint.
 
         Uses cursor-based pagination (nextPageToken) required by the new API.
-        Works with read:jira-work scope only.
+        Requires the granular read:jql:jira + read:issue-details:jira scopes.
         """
         issues = []
         next_page_token: str | None = None
@@ -60,6 +60,30 @@ class JiraClient:
             )
             r.raise_for_status()
             return r.json().get("values", [])
+
+    async def get_boards(self) -> list[dict]:
+        """GET /agile/1.0/board — returns all boards visible to the token.
+
+        Uses the Agile API (read:board-scope:jira-software) which is more
+        reliable than the Platform API project/search for board selection.
+        """
+        boards = []
+        start_at = 0
+        while True:
+            async with httpx.AsyncClient() as c:
+                r = await c.get(
+                    f"{self.agile_base_url}/board",
+                    headers=self._headers(),
+                    params={"maxResults": 50, "startAt": start_at},
+                )
+                r.raise_for_status()
+                data = r.json()
+            batch = data.get("values", [])
+            boards.extend(batch)
+            if data.get("isLast", True) or not batch:
+                break
+            start_at += len(batch)
+        return boards
 
     async def get_sprints(self, board_id: str = None) -> list[dict]:
         """
@@ -132,6 +156,11 @@ class JiraClient:
                 headers={**self._headers(), "Content-Type": "application/json"},
                 json={"issues": issue_keys},
             )
+            if not r.is_success:
+                logger.error(
+                    "move_issues_to_sprint %s — keys=%s body: %s",
+                    r.status_code, issue_keys, r.text[:500],
+                )
             r.raise_for_status()
 
     async def assign_issue(self, issue_key: str, jira_account_id: str) -> None:

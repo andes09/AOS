@@ -210,15 +210,20 @@ async def get_jira_boards(
         await db.commit()
 
     client = JiraClient(cloud_id=connection.jira_cloud_id, access_token=access_token)
-    projects = await client.get_projects()
+    try:
+        boards = await client.get_boards()
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).error("get_boards failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Jira API error: {exc}")
 
     return [
         {
-            "id": str(p["id"]),
-            "name": p["name"],
-            "project_key": p.get("key", ""),
+            "id": str(b["id"]),
+            "name": b["name"],
+            "project_key": b.get("location", {}).get("projectKey", ""),
         }
-        for p in projects
+        for b in boards
     ]
 
 

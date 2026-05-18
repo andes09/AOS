@@ -197,12 +197,22 @@ class OmadaObserver:
         )
 
     def push_plan_to_jira(
-        self, team_id: str, sprint_name: str, plan: dict
+        self, team_id: str, sprint_name: str, plan: dict, sprint_length_days: int = 14
     ) -> Optional[dict]:
+        from datetime import date, timedelta
+        sprint_start_str = plan.get("sprint_start") or date.today().isoformat()
+        sprint_start = date.fromisoformat(sprint_start_str)
+        sprint_end = sprint_start + timedelta(days=sprint_length_days)
+        assignments = [
+            {"ticketId": a["ticket_id"], "developerId": a["developer_id"]}
+            for a in plan.get("assignments", [])
+        ]
         body = {
             "teamId": team_id,
             "sprintName": sprint_name,
-            "plan": plan,
+            "sprintStartDate": sprint_start_str,
+            "sprintEndDate": sprint_end.isoformat(),
+            "assignments": assignments,
         }
         return self._request("POST", "/api/sprint-brain/push-to-jira", json=body)
 

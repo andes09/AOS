@@ -90,7 +90,7 @@ async def test_jira_callback_stores_real_org_id(tmp_db):
         "access_token": "at_test",
         "refresh_token": "rt_test",
         "expires_in": 3600,
-        "scope": "read:jira-work",
+        "scope": "read:issue:jira write:sprint:jira-software offline_access",
     }
     mock_resources = [{"id": "cloud_abc", "url": "https://mysite.atlassian.net"}]
 

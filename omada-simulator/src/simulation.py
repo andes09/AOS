@@ -459,7 +459,21 @@ async def run_simulation(
                 logger.warning("close_sprint failed for %s: %s", sprint_id, e)
 
             if omada_team_id:
+                pre_status = omada.get_sync_status()
+                baseline_synced_at = (pre_status or {}).get("last_synced_at")
                 omada.trigger_sync(omada_team_id)
+                confirmed = await asyncio.to_thread(
+                    omada.wait_for_sync,
+                    before=baseline_synced_at,
+                    timeout=60.0,
+                    interval=2.0,
+                )
+                if not confirmed:
+                    logger.warning(
+                        "Post-sprint Jira sync did not confirm within 60s; "
+                        "retro lookup may miss newly closed sprint"
+                    )
+                    await asyncio.sleep(10)
 
             # get_retro() now takes the Jira sprint id (int) and internally
             # resolves the Omada sprint UUID + POSTs generate + GETs the retro.

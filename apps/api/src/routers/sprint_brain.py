@@ -668,6 +668,28 @@ async def push_to_jira(
     jira_sprint_id: int = sprint_data["id"]
     sprint_url: str = sprint_data["self"]
 
+    # 7b. Persist Omada Sprint so GET /api/sprints/completed can resolve it
+    # immediately (e.g. for retro lookup) without waiting for the Celery sync.
+    from src.models.sprint import Sprint as _Sprint, SprintStatus as _SprintStatus
+    from datetime import date as _date
+    _existing = await db.scalar(
+        select(_Sprint).where(
+            _Sprint.team_id == team.id,
+            _Sprint.jira_sprint_id == str(jira_sprint_id),
+        )
+    )
+    if _existing is None:
+        _new_sprint = _Sprint(
+            team_id=team.id,
+            jira_sprint_id=str(jira_sprint_id),
+            name=request.sprintName,
+            status=_SprintStatus.ACTIVE,
+            start_date=_date.fromisoformat(request.sprintStartDate) if request.sprintStartDate else None,
+            end_date=_date.fromisoformat(request.sprintEndDate) if request.sprintEndDate else None,
+        )
+        db.add(_new_sprint)
+        await db.flush()
+
     # 8. Move issues into the new sprint — only pass valid Jira issue keys (e.g. PROJ-123)
     import re as _re
     issue_keys = [

@@ -79,8 +79,11 @@ def _weighted_type(distribution: dict[str, float], rng: random.Random) -> str:
     return rng.choices(types, weights=weights, k=1)[0]
 
 
-def generate_ticket_pool(team_config: dict) -> list[dict]:
-    rng = random.Random()  # unseeded → varies across runs
+def generate_ticket_pool(team_config: dict, *, seed: int | None = None) -> list[dict]:
+    # Stage 1 calls without seed → unseeded RNG, pools vary per run.
+    # Stage 2's matrix passes a seed derived from (archetype, run_idx) so
+    # the 3 strategies for one (archetype, run) face the same pool.
+    rng = random.Random(seed) if seed is not None else random.Random()
     pool_size = int(team_config["ticket_pool_size"])
     type_dist = team_config["ticket_distribution"]["type"]
     point_choices = team_config["ticket_distribution"]["story_points"]

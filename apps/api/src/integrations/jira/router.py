@@ -277,6 +277,7 @@ async def save_board_selection(
 class BoardSwitchRequest(BaseModel):
     board_id: int
     project_key: str
+    team_id: str | None = None
 
 
 @router.put("/board")
@@ -285,12 +286,17 @@ async def switch_board(
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Switch the team's active Jira board/project without re-OAuth.
+    """Switch a team's active Jira board/project without re-OAuth.
 
     The connection credentials stay the same — only the board/project
     being synced changes. Used by the simulator after creating a fresh
     SIM project so the manual disconnect+reconnect flow can be skipped.
     Triggers an initial sync against the new board.
+
+    If ``team_id`` is omitted, the org's primary team is updated
+    (backward-compatible stage-1 behaviour). If ``team_id`` is provided,
+    that specific team is targeted — but only if it belongs to the
+    caller's current organisation (404 otherwise).
     """
     org = await db.scalar(
         select(Organization).where(Organization.clerk_org_id == clerk_org_id)
@@ -310,9 +316,21 @@ async def switch_board(
             detail="No active Jira connection — connect via OAuth first",
         )
 
-    team = await db.scalar(
-        select(Team).where(Team.organization_id == org.id)
-    )
+    if body.team_id is not None:
+        try:
+            target_team_id = uuid.UUID(body.team_id)
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=404, detail="Team not found for this organisation")
+        team = await db.scalar(
+            select(Team).where(
+                Team.id == target_team_id,
+                Team.organization_id == org.id,
+            )
+        )
+    else:
+        team = await db.scalar(
+            select(Team).where(Team.organization_id == org.id)
+        )
     if not team:
         raise HTTPException(status_code=404, detail="Team not found for this organisation")
 

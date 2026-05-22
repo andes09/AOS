@@ -25,7 +25,12 @@ REQUEST_TIMEOUT = 30.0
 
 
 class OmadaObserver:
-    def __init__(self, omada_url: str) -> None:
+    def __init__(
+        self,
+        omada_url: str,
+        *,
+        audit_log_dir: Optional[Path] = None,
+    ) -> None:
         self._base_url = omada_url.rstrip("/")
         self._client = httpx.Client(
             timeout=REQUEST_TIMEOUT,
@@ -34,6 +39,12 @@ class OmadaObserver:
         # Set by resolve_team_id() so endpoints that need team_id (e.g. the
         # retro generate query param) don't have to thread it through every call.
         self.team_id: Optional[str] = None
+        # Per-team audit log dir (M6); falls back to module-level shared path
+        # so stage-1 callers continue to write to output/omada_audit.log.
+        if audit_log_dir is not None:
+            self._audit_log_path = audit_log_dir / "omada_audit.log"
+        else:
+            self._audit_log_path = AUDIT_LOG_PATH
 
     def close(self) -> None:
         self._client.close()
@@ -45,12 +56,12 @@ class OmadaObserver:
         self.close()
 
     def _log(self, method: str, path: str, status: str, preview: str) -> None:
-        AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self._audit_log_path.parent.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).isoformat()
         safe_preview = (preview or "").replace("\n", " ").replace("\r", " ")[:200]
         line = f"{ts} | {method} | {path} | {status} | {safe_preview}\n"
         try:
-            with AUDIT_LOG_PATH.open("a") as f:
+            with self._audit_log_path.open("a") as f:
                 f.write(line)
         except OSError:
             # Logging itself must never break the caller.
@@ -132,19 +143,79 @@ class OmadaObserver:
             params={"team_id": team_id},
         )
 
-    def switch_board(self, board_id: int, project_key: str) -> bool:
+    def switch_board(
+        self,
+        board_id: int,
+        project_key: str,
+        team_id: Optional[str] = None,
+    ) -> bool:
         """Point Omada at a new Jira board/project without re-running OAuth.
 
         Called by `run_setup` after the simulator creates a fresh SIM project,
         so the existing connection credentials are reused and the user doesn't
         have to manually disconnect/reconnect in the UI. Returns True on success.
+
+        When ``team_id`` is provided (M5+), the API switches the board for
+        that specific team. When omitted, the API falls back to the org's
+        primary team — preserving stage-1 behaviour.
         """
+        payload: dict[str, Any] = {"board_id": board_id, "project_key": project_key}
+        if team_id is not None:
+            payload["team_id"] = team_id
         resp = self._request(
             "PUT",
             "/api/integrations/jira/board",
-            json={"board_id": board_id, "project_key": project_key},
+            json=payload,
         )
         return resp is not None
+
+    def create_team(
+        self,
+        name: str,
+        developers: Optional[list[dict]] = None,
+    ) -> Optional[dict]:
+        """POST /api/teams to create a per-team Omada team (M5).
+
+        ``developers`` is a list of ``{"name": str, "role": str | None}``
+        dicts — matches the frozen contract in plan §6.
+
+        Returns the response dict on success (with ``teamId``, ``isNew``,
+        and a ``developers`` list of ``{developerId, name}``). Returns
+        ``None`` on any failure — most notably a 403 when the apps/api
+        feature flag isn't enabled (production), or a 404 when the
+        endpoint doesn't exist yet (callers should treat both as "fall
+        back to the org's primary team", matching the M2-M4 path).
+        """
+        body = {
+            "name": name,
+            "developers": developers or [],
+        }
+        return self._request("POST", "/api/teams", json=body)
+
+    def seed_tickets(
+        self,
+        team_id: str,
+        tickets: list[dict],
+    ) -> Optional[dict]:
+        """POST /api/teams/{team_id}/seed-tickets — bulk-insert backlog
+        Ticket rows directly, bypassing Jira sync.
+
+        Used when the Jira OAuth connection's access token lacks the
+        granular JQL scope (``read:jql:jira``) so ``sync_jira_team``
+        401s on ``/search/jql`` — or simply when no Celery worker is
+        running. Without this, a fresh per-team Omada team has no
+        candidate pool and ``/api/sprint-brain/plan`` returns 422.
+
+        ``tickets`` is a list of dicts with at minimum ``jira_issue_key``
+        and ``title``; ``story_points``, ``ticket_type``, ``labels``
+        are optional.
+
+        Returns the response dict on success (``{"created": N,
+        "updated": M}``). Returns None on failure (403 when the feature
+        flag is off, 404 when the team doesn't exist, network errors).
+        """
+        body = {"tickets": tickets}
+        return self._request("POST", f"/api/teams/{team_id}/seed-tickets", json=body)
 
     def get_sync_status(self) -> Optional[dict]:
         """Return the current Jira-integration status dict (or None on failure).

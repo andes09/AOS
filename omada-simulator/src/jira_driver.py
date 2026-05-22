@@ -27,7 +27,14 @@ class JiraDriverError(Exception):
 
 
 class JiraDriver:
-    def __init__(self, jira_url: str, email: str, token: str) -> None:
+    def __init__(
+        self,
+        jira_url: str,
+        email: str,
+        token: str,
+        *,
+        audit_log_dir: Path | None = None,
+    ) -> None:
         self.base_url = jira_url.rstrip("/")
         self._auth = httpx.BasicAuth(email, token)
         self._client = httpx.Client(
@@ -37,12 +44,19 @@ class JiraDriver:
         )
         self._last_request_time: float = 0.0
         self._account_id: str | None = None
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        # Per-team audit log dir (M6); falls back to module-level shared path
+        # so stage-1 callers continue to write to output/jira_audit.log.
+        if audit_log_dir is not None:
+            audit_log_dir.mkdir(parents=True, exist_ok=True)
+            self._audit_log_path = audit_log_dir / "jira_audit.log"
+        else:
+            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            self._audit_log_path = AUDIT_LOG_PATH
 
     def _audit(self, method: str, path: str, status: Any, duration_ms: int) -> None:
         ts = datetime.now(timezone.utc).isoformat()
         line = f"{ts} | {method} | {path} | {status} | {duration_ms}ms\n"
-        with AUDIT_LOG_PATH.open("a") as f:
+        with self._audit_log_path.open("a") as f:
             f.write(line)
 
     def _throttle(self) -> None:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 
+from pathlib import Path
+
 from src.config import (
     load_environment,
     load_secrets,
@@ -101,6 +103,44 @@ def _build_parser() -> argparse.ArgumentParser:
              "Useful when the default SIM key is still in Jira's "
              "post-deletion reservation window.",
     )
+
+    # ----- Stage 2 flags -----
+    parser.add_argument(
+        "--stage",
+        type=int,
+        choices=[1, 2],
+        default=1,
+        help="Simulator stage. 1 = single team (default), 2 = matrix.",
+    )
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=1,
+        help="Stage 2 only: how many full matrix runs to execute.",
+    )
+    parser.add_argument(
+        "--smoke-test",
+        action="store_true",
+        help="Stage 2 only: 1 archetype (balanced) x 3 strategies x 1 "
+             "sprint x 1 run. Fastest end-to-end validation.",
+    )
+    parser.add_argument(
+        "--aggregate",
+        action="store_true",
+        help="Stage 2 only: aggregate output/run_*/ into output/aggregate/ "
+             "(implemented in M3).",
+    )
+    parser.add_argument(
+        "--archetype",
+        default=None,
+        help="Stage 2 only: restrict matrix to one archetype name.",
+    )
+    parser.add_argument(
+        "--strategy",
+        default=None,
+        choices=["random", "omada", "algorithm"],
+        help="Stage 2 only: restrict matrix to one strategy.",
+    )
     return parser
 
 
@@ -115,14 +155,31 @@ def main() -> None:
         args.reset,
         args.clean,
         args.reset_sprints,
+        args.smoke_test,
+        args.aggregate,
     ]
     if sum(cmds) == 0:
         parser.error(
             "Specify one of --check-env, --setup, --simulate, --reset, "
-            "--clean, --reset-sprints."
+            "--clean, --reset-sprints, --smoke-test, --aggregate."
         )
     if sum(cmds) > 1:
         parser.error("Specify only one command at a time.")
+
+    # Stage-2-only flags should never be used with --stage 1.
+    if args.stage == 1 and (args.smoke_test or args.aggregate
+                            or args.archetype or args.strategy):
+        parser.error(
+            "--smoke-test, --aggregate, --archetype, --strategy require "
+            "--stage 2."
+        )
+    if args.stage == 2:
+        if args.setup or args.reset or args.reset_sprints or args.clean:
+            parser.error(
+                f"--stage 2 only supports --simulate, --smoke-test, "
+                f"--aggregate, --check-env. Setup/reset are handled "
+                f"inside --simulate for the matrix."
+            )
 
     if args.clean and not args.project_key:
         parser.error("--clean requires --project-key.")
@@ -136,14 +193,20 @@ def main() -> None:
     # whole point — the integration-verification step in the orchestrator
     # spec runs --setup --dry-run without any creds configured.
     if args.dry_run:
-        print(f"[DRY RUN] env={env.name}  team={args.team}")
-        team_config = load_team(args.team)
+        print(f"[DRY RUN] env={env.name}")
 
         class _StubSecrets:
             jira_email = ""
             jira_api_token = ""
 
         stub = _StubSecrets()
+
+        if args.stage == 2:
+            _run_stage2(env, stub, args, dry_run=True)
+            return
+
+        print(f"[DRY RUN] team={args.team}")
+        team_config = load_team(args.team)
         if args.setup:
             asyncio.run(
                 run_setup(
@@ -199,6 +262,10 @@ def main() -> None:
         print("✓ All checks passed")
         return
 
+    if args.stage == 2:
+        _run_stage2(env, secrets, args)
+        return
+
     team_config = load_team(args.team)
 
     if args.setup:
@@ -228,6 +295,72 @@ def main() -> None:
             env, secrets,
             project_key_override=args.project_key,
         ))
+
+
+def _run_stage2(env, secrets, args, *, dry_run: bool = False) -> None:
+    """Stage-2 dispatch — routes --simulate / --smoke-test / --aggregate
+    through src.matrix."""
+    from src.matrix import run_matrix
+    from src.stage2_config import load_stage2_config
+
+    stage2_cfg = load_stage2_config()
+    base_output = Path(__file__).resolve().parent.parent / "output"
+
+    if args.aggregate:
+        from src.aggregator import aggregate
+
+        if not base_output.exists() or not any(base_output.glob("run_*")):
+            print(
+                f"[aggregate] no run_* subdirs under {base_output} — "
+                "nothing to aggregate. Run --simulate first."
+            )
+            return
+
+        summary = aggregate(base_output)
+        cells = summary.get("cells", [])
+        print(f"\n[aggregate] {len(cells)} cells aggregated")
+        print(f"  CSV: {base_output}/aggregate/summary.csv")
+        print(f"  MD:  {base_output}/aggregate/summary.md")
+        print(f"  HTML: {base_output}/aggregate/summary.html")
+        print(f"  (run `.venv/bin/python -m src.report_html` to render)")
+        return
+
+    if args.smoke_test:
+        # 1 archetype x 3 strategies x 1 sprint x 1 run — the M2 success signal.
+        print("=== Stage 2 smoke test ===")
+        print("1 archetype (balanced) x 3 strategies x 1 sprint x 1 run")
+        asyncio.run(run_matrix(
+            env, secrets, stage2_cfg,
+            runs=1,
+            base_output=base_output,
+            archetype_filter="balanced",
+            strategy_filter=None,
+            sprint_length_override=1,
+            total_sprints_override=1,
+            dry_run=dry_run,
+        ))
+        if not dry_run:
+            print("\n✓ Smoke test complete")
+            print(
+                f"  Inspect: {base_output}/run_001/"
+                "balanced_*/simulation_results.json"
+            )
+        return
+
+    if args.simulate:
+        asyncio.run(run_matrix(
+            env, secrets, stage2_cfg,
+            runs=args.runs,
+            base_output=base_output,
+            archetype_filter=args.archetype,
+            strategy_filter=args.strategy,
+            dry_run=dry_run,
+        ))
+        return
+
+    raise SystemExit(
+        "Stage 2 needs one of --simulate, --smoke-test, --aggregate."
+    )
 
 
 if __name__ == "__main__":

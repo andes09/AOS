@@ -11,3 +11,4 @@ features:
   dependency_radar: false
   omada_simulator: false
   onboarding: false
+  allow_team_creation_via_api: false

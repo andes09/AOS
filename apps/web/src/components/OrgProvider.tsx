@@ -18,7 +18,7 @@ export function OrgProvider({ children }: Props) {
 
   useEffect(() => {
     if (provisioned && isNew) {
-      navigate('/onboarding', { replace: true })
+      navigate('/onboarding/team-setup', { replace: true })
     }
   }, [provisioned, isNew])
 

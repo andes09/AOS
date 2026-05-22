@@ -274,6 +274,69 @@
 
 ---
 
+## Subagent that lowers shared config for fast iteration must restore it before reporting back
+
+**Pattern:** Spawned a validation subagent that needed a fast smoke. It lowered `omada-simulator/config/archetypes/balanced.yaml` `total_sprints: 5 → 2`, then ran out of token budget before restoring it. The next full matrix run would have silently produced a 2-sprint balanced cell mixed with 5-sprint everything-else cells.
+
+**Root cause:** "Restore at end" is a verbal contract that breaks the moment the agent is interrupted. Anything the agent edits but doesn't commit is a landmine.
+
+**Rules:**
+1. After every subagent that touches shared config, re-read every file it might have modified before continuing — don't rely on the agent's self-reported "restored to original".
+2. Better: have the subagent operate against a copy or stash the original, so any premature exit leaves clean state automatically.
+3. Set the system-reminder hook to flag external file modifications so the parent agent is forced to notice.
+
+---
+
+## A fresh per-team Omada team is useless until Jira backlog is synced into its candidate pool
+
+**Pattern:** Fixed the simulator clobber of `omada_team_id` so each archetype cell got its own M5 Omada team. SprintBrain plan endpoint then 422'd ("No candidate tickets found") because `sync_jira_team` only iterates *sprints* — it never pulls backlog issues. The shared org-primary team only worked because earlier runs had left tickets in completed-sprint state, which `_get_candidate_tickets` accepts. Fresh teams have nothing.
+
+**Root cause:** Two-track sync design: sprints are first-class, backlog is invisible. The same hole exists for real first-time customers — they can't plan their first sprint until tickets exit a completed sprint.
+
+**Rules:**
+1. When relying on a sync, verify what kind of data it actually pulls. "Synced" is not the same as "all the data you'd reasonably expect".
+2. `sync_jira_team` now has `_upsert_backlog_issues` that runs after the sprint loop with JQL `sprint is EMPTY`. Don't remove it — first-time team setup depends on it.
+3. If you add a new sync surface (e.g. issues by assignee, by epic, etc.), audit `_get_candidate_tickets` and similar SELECTs to confirm the new data type is reachable.
+
+---
+
+## Celery silently dropping tasks looks identical to "sync works"
+
+**Pattern:** Redis queue had 153 unprocessed `sync_jira_team` tasks. The simulator's `trigger_sync` returned `task_id` and `status: queued` (200), then `wait_for_sync` polled `/api/integrations/jira/status` whose `last_synced_at` is connection-scoped — and that timestamp never updated. After 60s timeout the sim fell back to a fixed sleep and continued. To the simulator, sync looked fine. To the DB, no rows changed.
+
+**Root cause:** The `trigger_sync` endpoint enqueues via `.delay()`. With no Celery worker running, the task sits in Redis forever. The /status endpoint reads `connection.last_synced_at` (org-scoped), so even a successful sync on a different team would mask the failure.
+
+**Rules:**
+1. Before relying on a Celery task, verify a worker is consuming. `redis-cli LLEN celery` should be near 0. Persistent backlog means the worker is down or stuck.
+2. Start the worker via `cd apps/api && .venv/bin/celery -A src.worker worker --loglevel=info --pool=solo > /tmp/celery.log 2>&1 &`. Don't pipe stdout to `| head -N` — Celery's stdout pipe failing will silently break the worker.
+3. The "did the sync finish?" probe (`last_synced_at`) is connection-level, not team-level. A team-scoped success check would have to compare ticket-count before/after, not poll the connection timestamp.
+
+---
+
+## Construct the same observer twice and only one gets the audit log
+
+**Pattern:** `omada-simulator/src/simulation.py:610` constructed `OmadaObserver(env.omada.api_url)` without `audit_log_dir`. The matrix orchestrator's `_simulate_team` constructed it correctly *with* the log dir for the setup phase, but the sim-loop reconstructed it bare. Result: setup-time team creation/board switch were logged; per-sprint plan/push/sync/retro HTTP calls were not. Diagnosis of the team_id clobber required reading source instead of grep'ing logs.
+
+**Rules:**
+1. If a class accepts a debug/log argument, every construction site should pass it. Don't half-instrument.
+2. When two layers each construct the same observer, prefer dependency injection — pass the configured instance down instead of letting each layer construct its own.
+3. After any audit log surprise ("why aren't these calls showing up?"), grep for every `ClassName(` callsite — the missing one is the culprit.
+
+---
+
+## Don't trust passed-in IDs to flow through unconditionally
+
+**Pattern:** `run_team_simulation` accepted `omada_team_id` as a parameter, then immediately called `omada.resolve_team_id()` and overwrote it. The M5 matrix orchestrator was correctly creating per-team Omada teams via `POST /api/teams` and threading the UUID down — but the sim layer silently discarded it, sending every cell back to the shared org primary team. The "Omada underperforms on large" result was a downstream artifact of this single line.
+
+**Root cause:** A defensive "resolve if not given" pattern, written as "resolve, then maybe respect the override" — the wrong order. Coupling a fallback to an unconditional resolve always loses.
+
+**Rules:**
+1. Defensive fallbacks belong inside `if not param:` blocks, not as the first thing the function does.
+2. When wiring multi-layer code (orchestrator → driver → API client), trace every parameter from the top of the call stack to its eventual use. Any layer that re-resolves the same concept is suspect.
+3. Logging "Using X" vs "Resolved fallback to X" at the seam makes this kind of bug visible in audit logs without needing to read code.
+
+---
+
 ## Any column added to a SQLAlchemy model must exist in production Postgres before the code deploys
 
 **Pattern:** Migration `0015` added `organizations.is_simulated` and `tickets.is_carryover` as alembic files AND as SQLAlchemy model fields, but was never added to `apps/api/migrate.py`'s `MIGRATIONS` list. Production deploy ran `migrate.py` (which stops at `0014`), so the columns were never created in prod Postgres — but the code shipped with the columns declared on the model. Every `SELECT` against `organizations` or `tickets` crashed with `column ... does not exist` because SQLAlchemy expands `Organization` into `SELECT id, ..., is_simulated, ... FROM organizations`.

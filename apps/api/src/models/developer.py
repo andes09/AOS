@@ -1,7 +1,7 @@
 import enum
 import uuid
 from datetime import datetime
-from sqlalchemy import Enum as SAEnum, String, DateTime, ForeignKey, Boolean
+from sqlalchemy import Enum as SAEnum, String, DateTime, ForeignKey, Boolean, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from src.database import Base
@@ -44,6 +44,10 @@ class Developer(Base):
         server_default="developer",
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    seniority: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    capacity_hours_per_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    domain_strengths: Mapped[str | None] = mapped_column(String, nullable=True)
+    meeting_hours_bucket: Mapped[str | None] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     team: Mapped["Team"] = relationship(back_populates="developers")

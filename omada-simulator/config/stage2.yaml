@@ -1,0 +1,34 @@
+# Stage-2 matrix top-level config. Lists the archetypes and strategies that
+# `python -m src.run_stage2` will cross-product into runs. Only `balanced`
+# exists under config/archetypes/ today; the other four will land in M3.
+# Schema is loaded and validated by src/stage2_config.py.
+archetypes:
+  - {name: "balanced"}
+  - {name: "small"}
+  - {name: "large"}
+  - {name: "struggling"}
+  - {name: "meeting_heavy"}
+
+strategies: ["random", "omada", "algorithm"]
+
+defaults:
+  runs: 1
+  sprint_length_minutes: 1
+  total_sprints: 3
+
+# Project-key naming scheme. build_project_key() composes
+# "{prefix}_{archetype_code}_{strategy_code}", e.g. SIM_BAL_RAND.
+project_key:
+  prefix: "SIM"
+  archetype_codes:
+    balanced: BAL
+    small: SML
+    large: LRG
+    struggling: STR
+    meeting_heavy: MTG
+  strategy_codes:
+    random: RAND
+    omada: OMAD
+    algorithm: ALGO
+
+parallel_teams: true

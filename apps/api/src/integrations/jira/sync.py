@@ -192,6 +192,28 @@ def sync_jira_team(self, team_id: str):
             if sprint_obj:
                 _upsert_issues(db, team, sprint_obj, issues)
 
+        # Sync backlog issues (not in any sprint). SprintBrain's candidate
+        # query in _get_candidate_tickets returns Tickets with sprint_id IS
+        # NULL or in completed sprints, so without this step a fresh team
+        # board (one that's never had a completed sprint) yields an empty
+        # candidate pool and /api/sprint-brain/plan 422s.
+        if team.jira_project_key:
+            backlog_issues = asyncio.get_event_loop().run_until_complete(
+                client.search_issues(
+                    jql=(
+                        f"project = {team.jira_project_key} "
+                        f"AND sprint is EMPTY ORDER BY created ASC"
+                    ),
+                    fields=[
+                        "summary", "status", "assignee", "issuetype", "labels",
+                        "components", "timespent", "timeoriginalestimate",
+                        "created", "updated", "resolutiondate",
+                        "customfield_10016", "customfield_10028",
+                    ],
+                )
+            )
+            _upsert_backlog_issues(db, team, backlog_issues)
+
         db.commit()
 
         # Bookkeeping write done via explicit UPDATE: _get_fresh_client may
@@ -400,6 +422,86 @@ def _upsert_issues(db: Session, team, sprint, jira_issues: list[dict]):
             db.add(ticket)
         else:
             ticket.sprint_id = sprint.id
+            ticket.assignee_id = assignee_id
+            ticket.status = ticket_status
+            ticket.story_points_estimated = float(story_points) if story_points is not None else ticket.story_points_estimated
+            ticket.time_estimate_hours = time_estimate_seconds / 3600 if time_estimate_seconds else ticket.time_estimate_hours
+            ticket.time_actual_hours = time_spent_seconds / 3600 if time_spent_seconds else ticket.time_actual_hours
+            ticket.jira_updated_at = _parse_datetime(fields.get("updated"))
+
+        if ticket_status == TicketStatus.DONE and not ticket.completed_at:
+            ticket.completed_at = _parse_datetime(fields.get("resolutiondate")) or datetime.utcnow()
+
+
+def _upsert_backlog_issues(db: Session, team, jira_issues: list[dict]):
+    """Upsert backlog tickets (sprint_id = None) into Ticket.
+
+    Same field extraction as _upsert_issues but for issues that are NOT in any
+    sprint. These rows become candidates for /api/sprint-brain/plan via
+    _get_candidate_tickets, which looks for sprint_id IS NULL OR sprint in
+    completed sprints. A ticket that previously lived in a sprint and is now
+    in backlog (spillover) gets its sprint_id nulled out by this path.
+    """
+    from src.models.ticket import Ticket, TicketStatus
+    from src.models.developer import TeamMember
+
+    for issue in jira_issues:
+        jira_issue_id = issue["id"]
+        fields = issue.get("fields", {})
+
+        assignee_id = None
+        assignee_data = fields.get("assignee")
+        if assignee_data:
+            member = db.execute(
+                select(TeamMember).where(
+                    TeamMember.team_id == team.id,
+                    TeamMember.jira_account_id == assignee_data.get("accountId"),
+                )
+            ).scalar_one_or_none()
+            if member:
+                assignee_id = member.id
+
+        status_name = fields.get("status", {}).get("name", "To Do")
+        ticket_status_str = _map_jira_status(status_name)
+        try:
+            ticket_status = TicketStatus(ticket_status_str)
+        except ValueError:
+            ticket_status = TicketStatus.TODO
+
+        story_points = (
+            fields.get("story_points")
+            or fields.get("customfield_10016")
+            or fields.get("customfield_10028")
+        )
+
+        time_estimate_seconds = fields.get("timeoriginalestimate")
+        time_spent_seconds = fields.get("timespent")
+
+        ticket = db.execute(
+            select(Ticket).where(Ticket.jira_issue_id == jira_issue_id)
+        ).scalar_one_or_none()
+
+        if ticket is None:
+            ticket = Ticket(
+                sprint_id=None,
+                team_id=team.id,
+                assignee_id=assignee_id,
+                jira_issue_id=jira_issue_id,
+                jira_issue_key=issue.get("key"),
+                title=fields.get("summary", ""),
+                status=ticket_status,
+                ticket_type=fields.get("issuetype", {}).get("name"),
+                story_points_estimated=float(story_points) if story_points is not None else None,
+                time_estimate_hours=time_estimate_seconds / 3600 if time_estimate_seconds else None,
+                time_actual_hours=time_spent_seconds / 3600 if time_spent_seconds else None,
+                labels=fields.get("labels"),
+                components=[c.get("name") for c in fields.get("components", [])],
+                created_at=_parse_datetime(fields.get("created")) or datetime.utcnow(),
+                jira_updated_at=_parse_datetime(fields.get("updated")),
+            )
+            db.add(ticket)
+        else:
+            ticket.sprint_id = None
             ticket.assignee_id = assignee_id
             ticket.status = ticket_status
             ticket.story_points_estimated = float(story_points) if story_points is not None else ticket.story_points_estimated

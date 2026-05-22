@@ -10,8 +10,9 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
+from src.assigners.base import BaseAssigner, SprintContext
 from src.config import EnvironmentConfig, Secrets
 from src.developer import run_developer
 from src.jira_driver import JiraDriver, JiraDriverError
@@ -544,6 +545,336 @@ async def run_simulation(
 
     generate_bug_report(simulation_results)
     print("\nSimulation complete. See output/BUGS_INTEGRATION.md")
+
+
+async def run_team_simulation(
+    env: EnvironmentConfig,
+    secrets: Secrets,
+    team_config: dict,
+    *,
+    project_key: str,
+    board_id: int,
+    ticket_pool: list[dict],
+    omada_team_id: Optional[str],
+    run_seed: int,
+    output_dir: Path,
+    assigner: "BaseAssigner",
+    archetype: str,
+    strategy: str,
+    dry_run: bool = False,
+) -> dict:
+    """Stage-2 per-team simulation. Drives N sprints for a single team
+    against a pre-existing Jira project. Returns the simulation_results dict
+    (same shape as stage 1's, with archetype/strategy added).
+
+    Unlike run_simulation, this function does NOT load setup_state.json —
+    the matrix orchestrator handles project/ticket setup separately and
+    passes the already-populated ticket_pool here.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _safety_check_project_key(project_key)
+
+    total_sprints = int(team_config.get("total_sprints", 3))
+    duration_min = int(team_config.get("sprint_length_minutes", 30))
+    developers = team_config["developers"]
+    # Normalise to None so downstream truthiness checks behave consistently
+    # whether the caller passed "" or None.
+    omada_team_id = (omada_team_id or "").strip() or None
+
+    if dry_run:
+        print(f"[DRY RUN] Project: {project_key}  Board: {board_id}")
+        print(f"[DRY RUN] Archetype: {archetype}  Strategy: {strategy}")
+        print(f"[DRY RUN] {total_sprints} sprints × {duration_min} min each")
+        print(f"[DRY RUN] Pool: {len(ticket_pool)} tickets")
+        print(f"[DRY RUN] Developers: {[d['name'] for d in developers]}")
+        print(f"[DRY RUN] Assigner: {type(assigner).__name__}  seed={run_seed}")
+        if not omada_team_id:
+            print(
+                "[DRY RUN] omada_team_id not set — team-scoped Omada calls "
+                "(plan, push, retro, health, deps) will be skipped or fail."
+            )
+        for sn in range(1, total_sprints + 1):
+            print(
+                f"[DRY RUN] Sprint {sn}: select tickets, create Jira sprint, "
+                f"trigger Omada sync, assigner.assign(), run devs, "
+                f"close sprint, fetch retro/health/deps"
+            )
+        print(f"[DRY RUN] Would write per-sprint JSONs to {output_dir}")
+        return {}
+
+    sprint_results: list[dict] = []
+    inter_sprint_wait = 10
+
+    with (
+        JiraDriver(env.jira.url, secrets.jira_email, secrets.jira_api_token) as jira,
+        OmadaObserver(env.omada.api_url, audit_log_dir=output_dir) as omada,
+    ):
+        # M5: the matrix orchestrator creates a per-team Omada team and passes
+        # its UUID in via ``omada_team_id``. Only fall back to the org's primary
+        # team when no id was supplied — otherwise SprintBrain plans against the
+        # wrong roster and large/struggling archetypes look artificially worse.
+        if omada_team_id:
+            print(f"[omada] Using per-team ID from matrix: {omada_team_id}")
+        else:
+            resolved = omada.resolve_team_id()
+            if resolved:
+                print(
+                    f"[omada] Resolved team ID (org primary fallback): {resolved}"
+                )
+                omada_team_id = resolved
+            else:
+                print(
+                    "[warning] Could not resolve Omada team ID — "
+                    "Omada-side calls will be skipped"
+                )
+
+        for sprint_num in range(1, total_sprints + 1):
+            print(f"\n=== Sprint {sprint_num}/{total_sprints} "
+                  f"[{archetype}/{strategy}] ===")
+
+            # Phase 1: select tickets (no per-dev assignment yet)
+            picked = assigner.select_tickets(
+                ticket_pool,
+                developers,
+                sprint_num,
+                rng=random.Random(run_seed ^ sprint_num),
+            )
+            committed_keys = [t["jira_key"] for t in picked]
+            print(f"Picked {len(committed_keys)} tickets for this sprint")
+
+            # Phase 2: create Jira sprint, add tickets
+            sprint_start = datetime.now(timezone.utc)
+            sprint_end = sprint_start + timedelta(minutes=duration_min)
+            try:
+                sprint_id = jira.create_sprint(
+                    board_id,
+                    f"Sim Sprint {sprint_num}",
+                    sprint_start.isoformat(),
+                    sprint_end.isoformat(),
+                )
+                jira.add_issues_to_sprint(sprint_id, committed_keys)
+            except JiraDriverError as e:
+                logger.error("Sprint %s setup failed: %s", sprint_num, e)
+                sprint_results.append({
+                    "sprint_num": sprint_num,
+                    "archetype": archetype,
+                    "strategy": strategy,
+                    "error": str(e),
+                    "committed": len(committed_keys),
+                    "completed": 0,
+                    "spillover": len(committed_keys),
+                    "sync_ok": False,
+                    "plan_ok": False,
+                    "push_ok": False,
+                    "retro_ok": False,
+                    "ticket_results": {},
+                })
+                continue
+
+            # Phase 3: (formerly Omada/Jira sync wait). seed_tickets at setup
+            # populates the Omada candidate pool directly, so we no longer
+            # need to wait for sync_jira_team to land — which is good because
+            # the local Jira OAuth token lacks JQL scope and sync 401s
+            # anyway. Skipping entirely shaves ~90s per sprint × 75 sprints
+            # off the matrix run.
+            sync_resp = {"skipped": True}
+
+            # Phase 4: assigner decides who works what. OmadaAssigner writes
+            # its own sprint_{n}_plan.json / sprint_{n}_push.json internally;
+            # other strategies leave plan_used / push_response as None.
+            ctx = SprintContext(
+                sprint_num=sprint_num,
+                sprint_id=int(sprint_id),
+                committed_keys=committed_keys,
+                picked_tickets=picked,
+                developers=developers,
+                jira=jira,
+                omada=omada,
+                omada_team_id=omada_team_id,
+                archetype=archetype,
+                strategy=strategy,
+                run_seed=run_seed,
+                output_dir=output_dir,
+            )
+            assignment_result = assigner.assign(ctx)
+            by_dev = assignment_result.by_dev
+            # Defensive: guarantee every dev has a list so run_developer
+            # never KeyErrors when an assigner returns a partial map.
+            for d in developers:
+                by_dev.setdefault(d["name"], [])
+
+            # Phase 5: run devs (same as today — asyncio.gather + progress bar)
+            results: dict[str, str] = {}
+            in_progress_keys: set[str] = set()
+            coros = [
+                run_developer(
+                    d,
+                    by_dev[d["name"]],
+                    duration_min,
+                    jira,
+                    results,
+                    in_progress_keys,
+                )
+                for d in developers
+            ]
+            print(
+                f"Running {len(developers)} developers for {duration_min} minutes..."
+            )
+            sprint_total_seconds = duration_min * 60
+            sprint_started_at = time.monotonic()
+            progress_task = asyncio.create_task(
+                _print_sprint_progress(
+                    sprint_num,
+                    total_sprints,
+                    len(committed_keys),
+                    results,
+                    in_progress_keys,
+                    sprint_started_at,
+                    float(sprint_total_seconds),
+                )
+            )
+            devs_task = asyncio.gather(*coros)
+            try:
+                remaining = sprint_total_seconds - (time.monotonic() - sprint_started_at)
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+                if not devs_task.done():
+                    try:
+                        await asyncio.wait_for(devs_task, timeout=5.0)
+                    except asyncio.TimeoutError:
+                        devs_task.cancel()
+                        try:
+                            await devs_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                else:
+                    await devs_task
+            finally:
+                progress_task.cancel()
+                try:
+                    await progress_task
+                except asyncio.CancelledError:
+                    pass
+
+            # Phase 6: close sprint, fetch retro/health/deps/features
+            try:
+                jira.close_sprint(sprint_id)
+            except JiraDriverError as e:
+                logger.warning("close_sprint failed for %s: %s", sprint_id, e)
+
+            # OmadaAssigner.push_plan_to_jira creates a *second* Jira sprint
+            # (the push handler in apps/api always calls client.create_sprint)
+            # in FUTURE state. Jira requires FUTURE → ACTIVE → CLOSED — a
+            # direct FUTURE→CLOSED transition returns 400. We start the
+            # sprint first so the close can succeed; otherwise the push's
+            # Omada Sprint row stays ACTIVE and sprint N+1's push 409s.
+            push_resp = assignment_result.push_response or {}
+            push_sprint_id = push_resp.get("jiraSprintId")
+            if push_sprint_id and str(push_sprint_id) != str(sprint_id):
+                psid = int(push_sprint_id)
+                try:
+                    jira._request(
+                        "POST",
+                        f"/rest/agile/1.0/sprint/{psid}",
+                        json={"state": "active"},
+                    )
+                except JiraDriverError as e:
+                    # If already ACTIVE this is a no-op error — keep going.
+                    logger.debug(
+                        "activate push sprint %s noop/failed: %s", psid, e
+                    )
+                try:
+                    jira.close_sprint(psid)
+                except JiraDriverError as e:
+                    logger.warning(
+                        "close push sprint %s failed: %s", psid, e
+                    )
+
+            # Mark the Omada-DB Sprint row as COMPLETED. Normally
+            # sync_jira_team propagates the close, but in this env the Jira
+            # OAuth token lacks the JQL scope, so sync 401s every time —
+            # leaving the row ACTIVE. seed_tickets(team, []) reuses the
+            # endpoint's existing "mark stale ACTIVE/PLANNING sprints
+            # COMPLETED" cleanup; passing an empty pool means no ticket
+            # rows are touched.
+            if omada_team_id:
+                omada.seed_tickets(omada_team_id, [])
+
+            # Post-sprint sync removed (see Phase 3 comment). The
+            # seed_tickets call above marks any lingering ACTIVE/PLANNING
+            # Omada Sprint rows as COMPLETED, which is what sync would
+            # have done for us if its 401s ever cleared.
+
+            retro = (
+                omada.get_retro(int(sprint_id)) if omada_team_id else None
+            )
+            _write_json(
+                output_dir / f"sprint_{sprint_num}_retro.json",
+                retro or {},
+            )
+
+            health = (
+                omada.get_health_score(omada_team_id) if omada_team_id else None
+            )
+            _write_json(output_dir / f"sprint_{sprint_num}_health.json", health or {})
+
+            deps = (
+                omada.get_dependency_radar(omada_team_id) if omada_team_id else None
+            )
+            _write_json(output_dir / f"sprint_{sprint_num}_deps.json", deps or {})
+
+            features = omada.get_features()
+            _write_json(
+                output_dir / f"sprint_{sprint_num}_features.json", features or {}
+            )
+
+            # Phase 7: append sprint_results entry with stage-2 fields
+            committed = len(committed_keys)
+            completed = sum(1 for r in results.values() if r == "completed")
+            sprint_results.append({
+                "sprint_num": sprint_num,
+                "archetype": archetype,
+                "strategy": strategy,
+                "jira_sprint_id": sprint_id,
+                "committed": committed,
+                "completed": completed,
+                "spillover": committed - completed,
+                "sync_ok": sync_resp is not None,
+                "plan_ok": assignment_result.plan_used is not None,
+                "push_ok": assignment_result.push_response is not None,
+                "retro_ok": retro is not None,
+                "health_ok": health is not None,
+                "deps_ok": deps is not None,
+                "features_ok": features is not None,
+                "ticket_results": results,
+            })
+
+            print(
+                f"Sprint {sprint_num} done: "
+                f"{completed}/{committed} completed "
+                f"(plan={'ok' if assignment_result.plan_used else 'n/a'} "
+                f"push={'ok' if assignment_result.push_response else 'n/a'} "
+                f"retro={'ok' if retro else 'fail'})"
+            )
+
+            if sprint_num < total_sprints:
+                await asyncio.sleep(inter_sprint_wait)
+
+    simulation_results = {
+        "env": env.name,
+        "team": team_config["team_name"],
+        "archetype": archetype,
+        "strategy": strategy,
+        "project_key": project_key,
+        "sprint_length_minutes": duration_min,
+        "total_sprints": total_sprints,
+        "omada_team_id": omada_team_id or None,
+        "run_seed": run_seed,
+        "sprints": sprint_results,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _write_json(output_dir / "simulation_results.json", simulation_results)
+    return simulation_results
 
 
 async def run_reset(

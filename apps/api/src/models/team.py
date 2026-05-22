@@ -18,6 +18,10 @@ class Team(Base):
     jira_import_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
     jira_import_sprints_imported: Mapped[int | None] = mapped_column(Integer, nullable=True)
     meeting_overhead_pct: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.0")
+    size_tier: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    methodology: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    tech_stack: Mapped[str | None] = mapped_column(String, nullable=True)
+    profile_setup_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     organization: Mapped["Organization"] = relationship(back_populates="teams")

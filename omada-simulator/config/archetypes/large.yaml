@@ -1,0 +1,54 @@
+# Stage-2 archetype: large team. Varies from balanced on team SIZE only —
+# 8 devs instead of 4. Per-dev completion/speed match balanced; the extra
+# 4 devs extend the Alex/Jordan/Sam/Riley roster with Morgan/Taylor/Jamie/Quinn.
+# ticket_pool_size scales to 200 to keep per-dev backlog density similar to
+# balanced (100 tickets / 4 devs = 25; 200 / 8 = 25).
+name: "large"
+description: "Eight-person team — more parallelism, same per-dev quality."
+
+sprint_length_minutes: 1
+total_sprints: 5
+ticket_pool_size: 200
+
+developers:
+  - name: "Alex"
+    completion_rate: 0.85
+    speed: 1.0
+    skills: ["backend"]
+  - name: "Jordan"
+    completion_rate: 0.70
+    speed: 0.9
+    skills: ["frontend"]
+  - name: "Sam"
+    completion_rate: 0.90
+    speed: 1.1
+    skills: ["backend", "infra"]
+  - name: "Riley"
+    completion_rate: 0.75
+    speed: 0.95
+    skills: ["frontend", "infra"]
+  - name: "Morgan"
+    completion_rate: 0.80
+    speed: 1.0
+    skills: ["backend"]
+  - name: "Taylor"
+    completion_rate: 0.85
+    speed: 0.95
+    skills: ["frontend", "infra"]
+  - name: "Jamie"
+    completion_rate: 0.75
+    speed: 1.05
+    skills: ["infra"]
+  - name: "Quinn"
+    completion_rate: 0.80
+    speed: 0.9
+    skills: ["frontend", "backend"]
+
+ticket_distribution:
+  type:
+    Story: 0.5
+    Bug: 0.3
+    Task: 0.2
+  story_points: [1, 2, 3, 5, 8]
+
+dependency_density: 0.1

@@ -147,13 +147,13 @@ def test_team_run_team_config_carries_archetype_strategy(tmp_path: Path) -> None
 
 # ---------- M6: parallel-by-archetype + per-team audit dirs ----------
 
-def test_parallel_teams_default_true() -> None:
-    """Stage-2 default flipped to parallel-by-archetype to keep --runs N
-    re-runs tractable (sequential = ~6h for 5x5; parallel = ~75 min).
-    Sequential remains supported by setting parallel_teams: false in
-    stage2.yaml."""
+def test_parallel_teams_default_false() -> None:
+    """Stage-2 default reverted to sequential after parallel mode caused
+    Jira/Anthropic API contention (5 archetypes hammering same endpoints
+    simultaneously) that disproportionately hurt the omada strategy and
+    distorted the head-to-head comparison."""
     cfg = load_stage2_config()
-    assert cfg.parallel_teams is True
+    assert cfg.parallel_teams is False
 
 
 def test_jira_driver_audit_log_dir_override(tmp_path: Path) -> None:

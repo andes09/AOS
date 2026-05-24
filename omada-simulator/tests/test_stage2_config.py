@@ -23,7 +23,7 @@ def test_load_stage2_config_shape():
         "meeting_heavy",
     }
     assert cfg.strategies == ["random", "omada", "algorithm"]
-    assert cfg.parallel_teams is True
+    assert cfg.parallel_teams is False
     assert cfg.defaults.runs == 1
     assert cfg.project_key.prefix == "SIM"
 

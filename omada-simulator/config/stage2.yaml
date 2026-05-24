@@ -31,4 +31,4 @@ project_key:
     omada: OMAD
     algorithm: ALGO
 
-parallel_teams: true
+parallel_teams: false

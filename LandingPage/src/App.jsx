@@ -25,6 +25,24 @@ const PROBLEMS = [
   },
 ]
 
+const PROOF_STATS = [
+  {
+    num: '+5%',
+    label: 'sprint completion on small teams',
+    context: 'Omada-planned sprints vs the rule-based planning baseline',
+  },
+  {
+    num: '100%',
+    label: 'plan-to-Jira integrity',
+    context: 'Plans that pushed end-to-end without a hand-fix. Rules-only baseline: 0%.',
+  },
+  {
+    num: '0 → 18%',
+    label: 'recovery on struggling teams',
+    context: 'Where rule-based planning stalled at zero completion, Omada moved the team forward.',
+  },
+]
+
 const MODULES = [
   {
     num: '01',
@@ -277,6 +295,40 @@ const { error } = await supabase
           </div>
         </section>
 
+        {/* Proof — simulation evidence */}
+        <section className="proof-section" aria-labelledby="proof-heading">
+          <div className="proof-inner">
+            <div className="section-label left">
+              <span className="label-line" aria-hidden="true" />
+              <span>Evidence</span>
+            </div>
+            <h2 className="proof-title" id="proof-heading">
+              Tested across 60 simulated sprints.<br />
+              Built to work <em>alongside your team.</em>
+            </h2>
+            <p className="proof-intro">
+              We put Omada's Sprint Brain head-to-head against rule-based planning baselines
+              across five team archetypes. The result: planning that matches expert-led rigor
+              on healthy teams, recovers struggling ones, and — for the first time — produces
+              sprint plans that actually integrate end-to-end with the tools you already use.
+            </p>
+
+            <div className="proof-stats-grid">
+              {PROOF_STATS.map((s) => (
+                <article key={s.label} className="proof-stat-card">
+                  <span className="proof-stat-num">{s.num}</span>
+                  <span className="proof-stat-label">{s.label}</span>
+                  <span className="proof-stat-context">{s.context}</span>
+                </article>
+              ))}
+            </div>
+
+            <p className="proof-closer">
+              Your scrum master runs the conversation.<br />
+              <strong>Omada runs the math.</strong> Same partnership, sharper signals.
+            </p>
+          </div>
+        </section>
 
         {/* Modules */}
         <section className="modules-section" id="modules" aria-labelledby="modules-heading">

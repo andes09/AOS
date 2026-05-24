@@ -23,7 +23,7 @@ from src.models.capacity import DeveloperCapacityOverride
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-opus-4-7"
+_MODEL = "claude-sonnet-4-6"
 
 # ---------------------------------------------------------------------------
 # Tool schema — forces Claude to return structured sprint plan output

@@ -6,7 +6,7 @@ name: "balanced"
 description: "Reference team: 4 devs, normal completion and speed."
 
 sprint_length_minutes: 1
-total_sprints: 2
+total_sprints: 5
 ticket_pool_size: 100
 
 developers:

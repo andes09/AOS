@@ -10,5 +10,5 @@ features:
   slack_alerts: false
   dependency_radar: false
   omada_simulator: false
-  onboarding: false
+  onboarding: true
   allow_team_creation_via_api: false

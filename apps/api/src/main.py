@@ -25,6 +25,7 @@ from src.routers.teams import teams_router
 from src.routers.slack import slack_router
 from src.routers.features import router as features_router
 from src.routers.identifiers import router as identifiers_router
+from src.routers.recalibration import router as recalibration_router
 
 app = FastAPI(
     title="Omada API",
@@ -68,6 +69,7 @@ app.include_router(teams_router, prefix="/api/teams")
 app.include_router(slack_router, prefix="/api/teams")
 app.include_router(features_router)
 app.include_router(identifiers_router, prefix="/api/identifiers")
+app.include_router(recalibration_router, prefix="/api/recalibration")
 
 
 @app.get("/health")

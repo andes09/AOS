@@ -516,6 +516,34 @@ export function SettingsPage() {
         </Card>
       )}
 
+      {/* Calibration Suggestions */}
+      {isLead && (
+        <Card style={sectionGap}>
+          <CardHeader>
+            <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
+              Calibration Suggestions
+            </span>
+          </CardHeader>
+          <CardBody>
+            <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: '0 0 12px' }}>
+              Sprint Brain learns from your overrides and proposes skill/identifier recalibrations.
+            </p>
+            <Link
+              to="/app/settings/calibration"
+              style={{
+                color: 'var(--color-accent)',
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--text-sm)',
+                fontWeight: 500,
+                textDecoration: 'none',
+              }}
+            >
+              Review suggestions →
+            </Link>
+          </CardBody>
+        </Card>
+      )}
+
       {/* Slack Alerts */}
       {showSlackAlerts && (
       <Card style={sectionGap}>

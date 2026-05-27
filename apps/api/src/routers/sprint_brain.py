@@ -562,7 +562,7 @@ async def create_sprint_plan(
         pass  # non-UUID team_id or DB error — proceed without patterns
 
     try:
-        plan = await generate_sprint_plan(brain_input, api_key)
+        plan = await generate_sprint_plan(brain_input, api_key, db=db)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except RuntimeError as exc:

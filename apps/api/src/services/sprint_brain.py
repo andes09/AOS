@@ -22,6 +22,7 @@ from src.models.sprint import Sprint, SprintStatus
 from src.models.capacity import DeveloperCapacityOverride
 from src.models.ticket import Ticket, TicketStatus
 from src.models.identifier import TicketSkillAnalysis
+from src.models.sprint_plan_override import SprintPlanOverride
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +206,12 @@ Skill matching:
   `reasoning`.
 - Always cite the matching skill name and the developer's numeric rating in
   `skill_match_reasoning` (e.g. "SQL=0.9 matched required SQL=0.8").
+
+PREVIOUS-SPRINT OVERRIDES
+If the message contains a "Previous Sprint Overrides" section, factor recurring
+patterns into your reasoning. If a developer is repeatedly reassigned AWAY from
+a skill area, prefer not to assign similar tickets to them again. Cite the
+pattern in your `reasoning` field when it influences a decision.
 
 Always respond by calling the create_sprint_plan tool with your complete \
 analysis. Do not respond in prose outside the tool call.\
@@ -401,10 +408,143 @@ def _format_skill_inline(skill_map: dict, threshold: float = 0.2) -> str:
     return ", ".join(f"{s}={w:g}" for s, w in items)
 
 
+_MAX_OVERRIDES_IN_PROMPT = 30
+
+
+async def _fetch_recent_overrides(
+    team_id: str,
+    db: AsyncSession,
+    n_sprints: int = 2,
+) -> list[dict]:
+    """
+    Return overrides from the most recent N completed sprints for this team.
+
+    Each item shape:
+      {
+        "ticket_key": "PROJ-123",
+        "action": "reassign",
+        "from_dev": "Alice" | None,
+        "to_dev": "Bob" | None,
+        "reason_code": "skill_fit" | None,
+      }
+
+    Ordered most-recent first. Returns [] when no overrides exist.
+    """
+    try:
+        team_uuid = uuid.UUID(team_id) if isinstance(team_id, str) else team_id
+    except (ValueError, TypeError):
+        return []
+
+    # Find the N most recent completed sprints for this team.
+    recent_sprints_stmt = (
+        select(Sprint.id)
+        .where(
+            Sprint.team_id == team_uuid,
+            Sprint.status == SprintStatus.COMPLETED,
+        )
+        .order_by(Sprint.end_date.desc())
+        .limit(n_sprints)
+    )
+    try:
+        sprint_ids_result = await db.execute(recent_sprints_stmt)
+        sprint_ids = [row[0] for row in sprint_ids_result.all()]
+    except Exception:
+        return []
+
+    if not sprint_ids:
+        return []
+
+    # Aliased joins onto Developer twice (original + new) and Ticket once.
+    from sqlalchemy.orm import aliased
+
+    OriginalDev = aliased(Developer)
+    NewDev = aliased(Developer)
+
+    stmt = (
+        select(
+            SprintPlanOverride.action,
+            SprintPlanOverride.reason_code,
+            SprintPlanOverride.created_at,
+            Ticket.jira_issue_key,
+            OriginalDev.name,
+            NewDev.name,
+        )
+        .join(Ticket, Ticket.id == SprintPlanOverride.ticket_id)
+        .outerjoin(OriginalDev, OriginalDev.id == SprintPlanOverride.original_developer_id)
+        .outerjoin(NewDev, NewDev.id == SprintPlanOverride.new_developer_id)
+        .where(SprintPlanOverride.sprint_id.in_(sprint_ids))
+        .order_by(SprintPlanOverride.created_at.desc())
+    )
+
+    try:
+        result = await db.execute(stmt)
+        rows = result.all()
+    except Exception:
+        return []
+
+    out: list[dict] = []
+    for action, reason_code, _created_at, ticket_key, original_name, new_name in rows:
+        out.append({
+            "ticket_key": ticket_key or "",
+            "action": action,
+            "from_dev": original_name,
+            "to_dev": new_name,
+            "reason_code": reason_code,
+        })
+    return out
+
+
+def _format_overrides_section(overrides: list[dict]) -> str:
+    """
+    Format a list of override dicts into a prompt section.
+
+    Returns '' for an empty list so callers can omit the section entirely.
+    Caps at _MAX_OVERRIDES_IN_PROMPT and appends a truncation note when exceeded.
+    """
+    if not overrides:
+        return ""
+
+    total = len(overrides)
+    truncated = overrides[:_MAX_OVERRIDES_IN_PROMPT]
+
+    lines = [f"## Previous Sprint Overrides (last 2 sprints)", ""]
+    for o in truncated:
+        action = o.get("action") or ""
+        ticket_key = o.get("ticket_key") or "?"
+        from_dev = o.get("from_dev")
+        to_dev = o.get("to_dev")
+        reason = o.get("reason_code") or "unspecified"
+
+        if action == "reassign":
+            lines.append(
+                f"- {ticket_key} reassigned {from_dev or '?'} → {to_dev or '?'} "
+                f"(reason: {reason})"
+            )
+        elif action == "remove":
+            lines.append(
+                f"- {ticket_key} removed from {from_dev or '?'} (reason: {reason})"
+            )
+        elif action == "add":
+            lines.append(
+                f"- {ticket_key} added to {to_dev or '?'} (reason: {reason})"
+            )
+        else:
+            # Unknown action — fall back to a generic line
+            lines.append(f"- {ticket_key} {action} (reason: {reason})")
+
+    if total > _MAX_OVERRIDES_IN_PROMPT:
+        lines.append(
+            f"... (+{total - _MAX_OVERRIDES_IN_PROMPT} more overrides omitted)"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _build_assignment_message(
     inp: SprintBrainInput,
     complexity_analysis: list[dict],
     eligible_profiles: list[dict],
+    overrides_section: str = "",
 ) -> str:
     # Index complexity by ticket_id for quick lookup
     complexity_map = {c["ticket_id"]: c for c in complexity_analysis}
@@ -454,6 +594,11 @@ def _build_assignment_message(
         if skill_ratings_line:
             lines.append(f"  Skill ratings: {skill_ratings_line}")
         lines.append("")
+
+    if overrides_section:
+        # Insert before the candidate-tickets list so Claude sees override
+        # patterns alongside developer + ticket context.
+        lines.append(overrides_section)
 
     lines += ["## Candidate Tickets (with complexity analysis)", ""]
     for i, ticket in enumerate(inp.candidate_tickets, 1):
@@ -691,6 +836,7 @@ async def _get_developer_profiles(
 async def generate_sprint_plan(
     inp: SprintBrainInput,
     anthropic_api_key: str,
+    db: AsyncSession | None = None,
 ) -> SprintBrainOutput:
     """
     Generate an AI-powered sprint plan using a two-step Claude Opus 4.6 pipeline.
@@ -720,12 +866,25 @@ async def generate_sprint_plan(
 
     client = anthropic.AsyncAnthropic(api_key=anthropic_api_key)
 
+    # Resolve override context (last-N completed sprints) when a DB session
+    # is available. Safe no-op for legacy callers / tests that don't pass db.
+    overrides_section = ""
+    if db is not None:
+        try:
+            recent_overrides = await _fetch_recent_overrides(inp.team_id, db, n_sprints=2)
+            overrides_section = _format_overrides_section(recent_overrides)
+        except Exception:
+            logger.warning("Failed to fetch sprint plan overrides; proceeding without.", exc_info=True)
+            overrides_section = ""
+
     try:
         # --- Call 1: ticket complexity analysis ---
         complexity_analysis = await _analyse_ticket_complexity(inp.candidate_tickets, client)
 
         # --- Call 2: assignment generation with historical citations ---
-        assignment_message = _build_assignment_message(inp, complexity_analysis, eligible_profiles)
+        assignment_message = _build_assignment_message(
+            inp, complexity_analysis, eligible_profiles, overrides_section=overrides_section,
+        )
         response = await client.messages.create(
             model=_MODEL,
             max_tokens=16384,
@@ -757,6 +916,7 @@ async def simulate_what_if(
     inp: SprintBrainInput,
     dropped_ticket_ids: list[str],
     anthropic_api_key: str,
+    db: AsyncSession | None = None,
 ) -> SprintBrainOutput:
     """
     Re-run sprint planning with the specified tickets removed from the
@@ -777,4 +937,6 @@ async def simulate_what_if(
         sprint_start_date=inp.sprint_start_date,
         pto_overrides=inp.pto_overrides,
     )
+    if db is not None:
+        return await generate_sprint_plan(modified_input, anthropic_api_key, db=db)
     return await generate_sprint_plan(modified_input, anthropic_api_key)

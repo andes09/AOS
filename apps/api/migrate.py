@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
 
 
-HEAD = "0018"
+HEAD = "0019"
 
 MIGRATIONS = [
     # (revision_id, sql_statements)
@@ -416,6 +416,28 @@ MIGRATIONS = [
         """CREATE INDEX IF NOT EXISTS ix_sprint_plan_overrides_ticket_new ON sprint_plan_overrides(ticket_id, new_developer_id)""",
         """ALTER TABLE sprints ADD COLUMN IF NOT EXISTS plan_override_rate FLOAT NULL""",
         """ALTER TABLE sprints ADD COLUMN IF NOT EXISTS plan_overrides_by_reason JSONB NULL""",
+    ]),
+    ("0019", [
+        """
+        CREATE TABLE IF NOT EXISTS recalibration_proposals (
+            id               UUID PRIMARY KEY,
+            team_id          UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+            kind             VARCHAR(20) NOT NULL,
+            developer_id     UUID NULL REFERENCES developers(id) ON DELETE CASCADE,
+            identifier_id    UUID NULL REFERENCES team_identifiers(id) ON DELETE CASCADE,
+            skill            VARCHAR(100) NULL,
+            current_value    FLOAT NULL,
+            suggested_value  FLOAT NULL,
+            suggested_skill  VARCHAR(100) NULL,
+            evidence         JSONB NOT NULL DEFAULT '[]'::jsonb,
+            status           VARCHAR(15) NOT NULL DEFAULT 'pending',
+            decided_at       TIMESTAMP NULL,
+            decided_by       UUID NULL,
+            created_at       TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        """CREATE INDEX IF NOT EXISTS ix_recalibration_proposals_team_status ON recalibration_proposals(team_id, status)""",
+        """CREATE INDEX IF NOT EXISTS ix_recalibration_proposals_target ON recalibration_proposals(developer_id, identifier_id, skill)""",
     ]),
 ]
 

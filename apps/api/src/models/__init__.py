@@ -15,6 +15,7 @@ from src.models.capacity import DeveloperCapacityOverride
 from src.models.team_access import TeamAccessGrant
 from src.models.slack_config import SlackConfig
 from src.models.sprint_plan_override import SprintPlanOverride, OverrideAction, OverrideReason
+from src.models.recalibration_proposal import RecalibrationProposal, ProposalKind, ProposalStatus
 
 __all__ = [
     "Organization",
@@ -51,4 +52,7 @@ __all__ = [
     "SprintPlanOverride",
     "OverrideAction",
     "OverrideReason",
+    "RecalibrationProposal",
+    "ProposalKind",
+    "ProposalStatus",
 ]

@@ -17,6 +17,8 @@ from src.services.sprint_brain import (
     _extract_complexity,
     _analyse_ticket_complexity,
     _CITATION_INSTRUCTION,
+    _SPRINT_PLAN_TOOL,
+    _compute_skill_velocity_breakdown,
     generate_sprint_plan,
     simulate_what_if,
 )
@@ -619,3 +621,145 @@ async def test_generate_sprint_plan_second_call_uses_assignment_tool():
 
     second_call_kwargs = instance.messages.create.call_args_list[1].kwargs
     assert second_call_kwargs["tool_choice"] == {"type": "tool", "name": "create_sprint_plan"}
+
+
+# ---------------------------------------------------------------------------
+# Skill vector / skill ratings integration tests (Initiative A Wave 2)
+# ---------------------------------------------------------------------------
+
+
+class TestSkillVectorIntegration:
+    """Coverage for skill_vector + skill_ratings wiring in Sprint Brain."""
+
+    @pytest.mark.asyncio
+    async def test_compute_skill_velocity_breakdown_empty_when_no_analyses(self):
+        """No completed tickets with analyses → empty list (graceful default)."""
+        import uuid as _uuid
+
+        mock_result = MagicMock()
+        mock_result.all = MagicMock(return_value=[])
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        out = await _compute_skill_velocity_breakdown(_uuid.uuid4(), _uuid.uuid4(), mock_db)
+        assert out == []
+
+    @pytest.mark.asyncio
+    async def test_compute_skill_velocity_breakdown_aggregates_correctly(self):
+        """Verify weighted aggregation across multiple tickets per skill."""
+        import uuid as _uuid
+
+        # Two tickets: t1 has SQL=0.8 (5 pts), t2 has SQL=0.4 (3 pts)
+        # Expected SQL avg = (5*0.8 + 3*0.4) / (0.8 + 0.4) = (4.0 + 1.2) / 1.2 = 4.333
+        t1 = MagicMock(story_points_estimated=5.0)
+        a1 = MagicMock(skill_vector={"SQL": 0.8, "Python": 0.05})  # Python below threshold
+        t2 = MagicMock(story_points_estimated=3.0)
+        a2 = MagicMock(skill_vector={"SQL": 0.4})
+
+        mock_result = MagicMock()
+        mock_result.all = MagicMock(return_value=[(t1, a1), (t2, a2)])
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        out = await _compute_skill_velocity_breakdown(_uuid.uuid4(), _uuid.uuid4(), mock_db)
+        skills = {row["skill"]: row for row in out}
+
+        # Python should be filtered out (weight 0.05 < 0.1 threshold)
+        assert "Python" not in skills
+        assert "SQL" in skills
+        assert skills["SQL"]["avg_pts"] == pytest.approx(4.33, rel=0.01)
+        assert skills["SQL"]["sample_count"] == 2
+
+    def test_assignment_message_includes_required_skills_when_present(self):
+        """A candidate ticket with skill_vector should add a 'Required skills:' line."""
+        tickets = [
+            {
+                "id": "PROJ-1",
+                "summary": "Build SQL view",
+                "story_points": 3,
+                "priority": "high",
+                "skill_vector": {"SQL": 0.8, "Java": 0.3, "CSS": 0.1},  # CSS below threshold
+            }
+        ]
+        inp = SprintBrainInput(
+            team_id="team-abc",
+            candidate_tickets=tickets,
+            developer_profiles=[PROFILE_ALICE],
+            sprint_length_days=14,
+            sprint_start_date="2026-03-17",
+        )
+        msg = _build_assignment_message(inp, COMPLEXITY_ANALYSIS, [PROFILE_ALICE])
+        assert "Required skills:" in msg
+        assert "SQL=0.8" in msg
+        assert "Java=0.3" in msg
+        # CSS below 0.2 threshold should NOT appear in the inline list
+        assert "CSS=0.1" not in msg
+
+    def test_assignment_message_omits_required_skills_when_empty(self):
+        """A ticket with no skill_vector / empty dict should NOT emit a 'Required skills:' line."""
+        tickets = [
+            {"id": "PROJ-1", "summary": "Build login page", "story_points": 3, "priority": "high"},
+            {"id": "PROJ-2", "summary": "Fix bug", "story_points": 2, "priority": "high", "skill_vector": {}},
+        ]
+        inp = SprintBrainInput(
+            team_id="team-abc",
+            candidate_tickets=tickets,
+            developer_profiles=[PROFILE_ALICE],
+            sprint_length_days=14,
+            sprint_start_date="2026-03-17",
+        )
+        msg = _build_assignment_message(inp, COMPLEXITY_ANALYSIS, [PROFILE_ALICE])
+        assert "Required skills:" not in msg
+
+    def test_assignment_message_includes_skill_ratings_for_dev(self):
+        """A developer profile with skill_ratings should produce a 'Skill ratings:' line."""
+        alice_with_ratings = {**PROFILE_ALICE, "skill_ratings": {"SQL": 0.9, "Java": 0.6, "CSS": 0.1}}
+        inp = SprintBrainInput(
+            team_id="team-abc",
+            candidate_tickets=SAMPLE_TICKETS[:1],
+            developer_profiles=[alice_with_ratings],
+            sprint_length_days=14,
+            sprint_start_date="2026-03-17",
+        )
+        msg = _build_assignment_message(inp, COMPLEXITY_ANALYSIS, [alice_with_ratings])
+        assert "Skill ratings:" in msg
+        assert "SQL=0.9" in msg
+        assert "Java=0.6" in msg
+        assert "CSS=0.1" not in msg
+
+    def test_sprint_plan_tool_schema_includes_skill_match_reasoning(self):
+        """Tool schema must expose skill_match_reasoning on each assignment."""
+        assignment_schema = _SPRINT_PLAN_TOOL["input_schema"]["properties"]["assignments"]["items"]
+        assert "skill_match_reasoning" in assignment_schema["properties"]
+        assert assignment_schema["properties"]["skill_match_reasoning"]["type"] == "string"
+        assert "skill_match_reasoning" in assignment_schema["required"]
+
+    @pytest.mark.asyncio
+    async def test_extract_plan_defaults_skill_match_reasoning_when_missing(self):
+        """Backward-compat: assignments lacking skill_match_reasoning must NOT crash."""
+        legacy_plan = {
+            "assignments": [
+                {
+                    "ticket_id": "PROJ-1",
+                    "developer_id": "dev-1",
+                    "reasoning": "Legacy reason",
+                    "confidence": 0.8,
+                    # NOTE: no skill_match_reasoning — older shape
+                }
+            ],
+            "confidence_score": 0.8,
+            "summary": "Legacy plan",
+            "warnings": [],
+            "what_if_dropped": {"PROJ-1": 0.7},
+        }
+        complexity_response = _make_complexity_response(SAMPLE_COMPLEXITY)
+        legacy_response = _make_mock_response(legacy_plan)
+
+        with patch("src.services.sprint_brain.anthropic.AsyncAnthropic") as MockClient:
+            instance = MockClient.return_value
+            instance.messages.create = AsyncMock(side_effect=[complexity_response, legacy_response])
+
+            out = await generate_sprint_plan(NEW_SAMPLE_INPUT, "sk-ant-test")
+
+        # Should default to None instead of raising
+        assert out.assignments[0]["skill_match_reasoning"] is None

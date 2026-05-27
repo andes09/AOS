@@ -1,11 +1,22 @@
 """
-Scope Cop AI service — Claude evaluates ticket readiness on four criteria.
+Scope Cop AI service — Claude evaluates ticket readiness on five criteria.
 
 analyze_tickets():
   1. Fetches full ticket detail from Jira per key
-  2. Sends all tickets to Claude in a single prompt with four scoring criteria
-  3. Upserts results to ticket_analyses with ON CONFLICT update
-  4. Returns list of TicketAnalysisResult Pydantic objects
+  2. Joins per-ticket identifier-match counts from ticket_skill_analyses (Wave 1)
+  3. Sends all tickets to Claude in a single prompt with five scoring criteria
+  4. Upserts results to ticket_analyses with ON CONFLICT update
+  5. Returns list of TicketAnalysisResult Pydantic objects
+
+JSONB stash strategy for new fields (Wave 2):
+  The ``ticket_analyses`` table is shared with downstream readers (routers,
+  sprint_brain) that expect ``issues``/``suggestions`` to be ``list[str]``.
+  We avoid a migration by stashing ``stack_alignment`` and
+  ``matched_identifier_count`` as a sentinel dict prepended to the
+  ``suggestions`` JSONB array, of the form
+  ``{"_meta": True, "stack_alignment": <int>, "matched_identifier_count": <int|None>}``.
+  Readers that iterate ``suggestions`` as strings should call
+  ``_split_meta_from_suggestions()`` to peel the sentinel off (see helper below).
 """
 
 import json
@@ -20,6 +31,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.models.identifier import TicketSkillAnalysis
 from src.models.organization import Organization
 from src.models.team import Team
 from src.services.encryption import decrypt
@@ -41,6 +53,50 @@ class TicketAnalysisResult(BaseModel):
     status: str  # "ready" | "needs_work" | "blocked"
     issues: list[str]
     suggestions: list[str]
+    # Wave 2 (Initiative A): stack-alignment scoring. Optional for backward
+    # compatibility — older cached rows / Claude responses that omit these
+    # fields will surface as ``None`` without crashing the API contract.
+    stack_alignment: int | None = None
+    matched_identifier_count: int | None = None
+
+
+# ---------------------------------------------------------------------------
+# JSONB meta-sentinel helpers (Wave 2 — see module docstring)
+# ---------------------------------------------------------------------------
+
+
+def _make_meta_sentinel(stack_alignment: int | None, matched_count: int | None) -> dict:
+    """Build the sentinel dict that gets prepended to the ``suggestions`` JSONB
+    array to carry stack_alignment + matched_identifier_count without a schema
+    migration. Downstream readers should detect ``_meta is True`` and skip.
+    """
+    return {
+        "_meta": True,
+        "stack_alignment": stack_alignment,
+        "matched_identifier_count": matched_count,
+    }
+
+
+def _split_meta_from_suggestions(
+    suggestions: list,
+) -> tuple[list[str], int | None, int | None]:
+    """Peel the meta sentinel (if present) off a stored ``suggestions`` array.
+
+    Returns ``(string_suggestions, stack_alignment, matched_identifier_count)``.
+    Used by router code that surfaces cached analyses so the sentinel never
+    leaks into the API response as a stray "suggestion".
+    """
+    stack_alignment: int | None = None
+    matched_count: int | None = None
+    cleaned: list[str] = []
+    for item in suggestions or []:
+        if isinstance(item, dict) and item.get("_meta") is True:
+            stack_alignment = item.get("stack_alignment")
+            matched_count = item.get("matched_identifier_count")
+            continue
+        if isinstance(item, str):
+            cleaned.append(item)
+    return cleaned, stack_alignment, matched_count
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +107,7 @@ _SCOPE_COP_TOOL: dict = {
     "name": "score_tickets",
     "description": (
         "Score each ticket on sprint readiness. "
-        "Evaluate four criteria and return a structured assessment per ticket."
+        "Evaluate five criteria and return a structured assessment per ticket."
     ),
     "input_schema": {
         "type": "object",
@@ -65,12 +121,52 @@ _SCOPE_COP_TOOL: dict = {
                         "ticketTitle": {"type": "string"},
                         "readinessScore": {
                             "type": "integer",
-                            "description": "0–100 readiness score derived from the four criteria.",
+                            "description": "0–100 readiness score derived from the five criteria (5 × 20 pts).",
                         },
                         "status": {
                             "type": "string",
                             "enum": ["ready", "needs_work", "blocked"],
                             "description": ">=80 → ready, 50-79 → needs_work, <50 → blocked.",
+                        },
+                        "acceptance_criteria": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 20,
+                            "description": "0–20 pts. Testable success conditions clearly stated.",
+                        },
+                        "estimate": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 20,
+                            "description": "0–20 pts. Story-point value set and non-zero.",
+                        },
+                        "bounded_scope": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 20,
+                            "description": "0–20 pts. Single, clearly-scoped deliverable.",
+                        },
+                        "unambiguous_ownership": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 20,
+                            "description": "0–20 pts. Clear owner — no 'someone should' / 'TBD'.",
+                        },
+                        "stack_alignment": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 20,
+                            "description": (
+                                "Whether the ticket touches the team's known stack. "
+                                "20 = clearly does; 10 = vague; 0 = doesn't seem to."
+                            ),
+                        },
+                        "matched_identifier_count": {
+                            "type": "integer",
+                            "description": (
+                                "Echo of the count provided in the prompt — Claude should "
+                                "pass through what it was given."
+                            ),
                         },
                         "issues": {
                             "type": "array",
@@ -90,6 +186,8 @@ _SCOPE_COP_TOOL: dict = {
                         "status",
                         "issues",
                         "suggestions",
+                        "stack_alignment",
+                        "matched_identifier_count",
                     ],
                     "additionalProperties": False,
                 },
@@ -103,16 +201,27 @@ _SCOPE_COP_TOOL: dict = {
 _SYSTEM_PROMPT = """\
 You are an expert agile coach evaluating sprint ticket readiness.
 
-Score each ticket from 0 to 100 based on four equally-weighted criteria (0–25 pts each):
+Score each ticket from 0 to 100 based on 5 equally-weighted criteria (0–20 pts each):
 
-1. **Acceptance criteria** (0–25 pts): Are testable success conditions explicitly stated \
+1. **Acceptance criteria** (0–20 pts): Are testable success conditions explicitly stated \
    in the description or a dedicated AC field? Vague or absent → deduct.
-2. **Estimate** (0–25 pts): Is a story point value set and non-zero? \
+2. **Estimate** (0–20 pts): Is a story point value set and non-zero? \
    Missing or zero estimate → 0 pts for this criterion.
-3. **Bounded scope** (0–25 pts): Is this a single, clearly-scoped deliverable? \
+3. **Bounded scope** (0–20 pts): Is this a single, clearly-scoped deliverable? \
    Compound tickets with "and also", "plus", or multiple unrelated goals → deduct.
-4. **Unambiguous ownership** (0–25 pts): Is it clear who does the work? \
+4. **Unambiguous ownership** (0–20 pts): Is it clear who does the work? \
    Vague phrases like "someone should", "the team needs to", or "TBD" → deduct.
+5. **Stack alignment** (0–20 pts): Does the ticket touch the team's known stack?
+   - 20 pts: ticket clearly touches the team's stack (the supplied \
+     `matched_identifier_count` confirms specific files / services / schemas).
+   - 10 pts: vaguely on-stack but unclear, OR the count is "unknown" because \
+     no identifier scan has run for this team (default to a neutral 10).
+   - 0 pts: doesn't seem to touch the team's stack at all.
+   - If `matched_identifier_count == 0`, cap `stack_alignment` at 5 and consider \
+     setting status='needs_work' even when the other four criteria pass — the \
+     ticket may be off-stack work for this team.
+
+The total `readinessScore` should equal the sum of the five 0–20 sub-scores.
 
 Status derived from score:
 - >= 80  → "ready"
@@ -120,6 +229,8 @@ Status derived from score:
 - < 50   → "blocked"
 
 For each ticket, list concrete issues found and specific, actionable suggestions to fix them.
+Echo the per-ticket `matched_identifier_count` you were given back in the response \
+(use 0 if the prompt says "unknown" — but only after applying the neutral-10 rule above). \
 Always respond by calling the score_tickets tool.\
 """
 
@@ -172,19 +283,75 @@ def _flatten_adf(node: dict) -> str:
     return " ".join(p for p in parts if p).strip()
 
 
-def _build_prompt(tickets: list[dict]) -> str:
+def _build_prompt(
+    tickets: list[dict],
+    match_counts: dict[str, int | None] | None = None,
+) -> str:
+    """Build the per-ticket prompt body.
+
+    ``match_counts`` maps ticket_key → number of matched team identifiers
+    (from ``ticket_skill_analyses.matched_identifiers``). A value of ``None``
+    means we have no analysis row for that ticket — surfaced to Claude as
+    "unknown" so the system prompt's neutral-10 rule applies.
+    """
+    match_counts = match_counts or {}
     lines = ["## Tickets to Evaluate", ""]
     for t in tickets:
-        lines.append(f"### {t['key']}: {t['summary']}")
+        key = t["key"]
+        lines.append(f"### {key}: {t['summary']}")
         pts = t.get("story_points")
         lines.append(f"Story points: {pts if pts is not None else 'NOT SET'}")
+        mc = match_counts.get(key)
+        mc_text = "unknown" if mc is None else str(mc)
+        lines.append(f"{key} — matched_identifier_count: {mc_text}")
         desc = t.get("description") or "(no description provided)"
         lines.append(f"Description:\n{str(desc)[:1000]}")
         lines.append("")
     lines.append(
-        "Evaluate each ticket against the four readiness criteria and call score_tickets."
+        "Evaluate each ticket against the five readiness criteria and call score_tickets."
     )
     return "\n".join(lines)
+
+
+async def _fetch_match_counts(
+    team_id: str,
+    ticket_keys: list[str],
+    db: AsyncSession,
+) -> dict[str, int | None]:
+    """Return ``{ticket_key: len(matched_identifiers) or None}``.
+
+    Joins ``tickets`` (matched on team_id + jira_issue_key) to
+    ``ticket_skill_analyses``. Tickets without an analysis row yield ``None``,
+    which the prompt surfaces as "unknown".
+    """
+    from src.models.ticket import Ticket
+
+    if not ticket_keys:
+        return {}
+
+    rows = (
+        await db.execute(
+            select(Ticket.jira_issue_key, TicketSkillAnalysis.matched_identifiers)
+            .join(
+                TicketSkillAnalysis,
+                TicketSkillAnalysis.ticket_id == Ticket.id,
+                isouter=True,
+            )
+            .where(Ticket.team_id == uuid.UUID(team_id))
+            .where(Ticket.jira_issue_key.in_(ticket_keys))
+        )
+    ).all()
+
+    counts: dict[str, int | None] = {k: None for k in ticket_keys}
+    for jira_key, matched in rows:
+        if matched is None:
+            counts[jira_key] = None
+        else:
+            try:
+                counts[jira_key] = len(matched)
+            except TypeError:
+                counts[jira_key] = None
+    return counts
 
 
 def _derive_status(score: int) -> str:
@@ -252,6 +419,10 @@ async def analyze_tickets(
         ticket = await _fetch_ticket(jira_client, key)
         tickets.append(ticket)
 
+    # 1b. Pull matched-identifier counts so Claude can score `stack_alignment`.
+    # Missing analysis rows → None → "unknown" in the prompt.
+    match_counts = await _fetch_match_counts(team_id, ticket_keys, db)
+
     # 2. Call Claude with all tickets in a single prompt
     client = anthropic.AsyncAnthropic(api_key=anthropic_api_key)
     try:
@@ -259,7 +430,9 @@ async def analyze_tickets(
             model=_MODEL,
             max_tokens=4096,
             system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": _build_prompt(tickets)}],
+            messages=[
+                {"role": "user", "content": _build_prompt(tickets, match_counts)}
+            ],
             tools=[_SCOPE_COP_TOOL],
             tool_choice={"type": "tool", "name": "score_tickets"},
         )
@@ -296,6 +469,24 @@ async def analyze_tickets(
         derived_status = _derive_status(score)
         ticket_title = item.get("ticketTitle") or item["ticketKey"]
 
+        # Wave 2: parse new fields; tolerate Claude omitting them (backward compat).
+        raw_stack = item.get("stack_alignment")
+        stack_alignment = int(raw_stack) if isinstance(raw_stack, (int, float)) else None
+        raw_match = item.get("matched_identifier_count")
+        if isinstance(raw_match, (int, float)):
+            matched_count: int | None = int(raw_match)
+        else:
+            # Fall back to the count we sent in the prompt (authoritative).
+            matched_count = match_counts.get(item["ticketKey"])
+
+        # Stash meta sentinel as first element of suggestions JSONB array.
+        # See module docstring for rationale.
+        clean_suggestions = list(item.get("suggestions", []))
+        suggestions_to_persist: list = [
+            _make_meta_sentinel(stack_alignment, matched_count),
+            *clean_suggestions,
+        ]
+
         await db.execute(
             text("""
                 INSERT INTO ticket_analyses
@@ -322,7 +513,7 @@ async def analyze_tickets(
                 "readiness_score": score,
                 "status": derived_status,
                 "issues": json.dumps(item.get("issues", [])),
-                "suggestions": json.dumps(item.get("suggestions", [])),
+                "suggestions": json.dumps(suggestions_to_persist),
                 "analyzed_at": now,
             },
         )
@@ -333,7 +524,9 @@ async def analyze_tickets(
                 readiness_score=score,
                 status=derived_status,
                 issues=item.get("issues", []),
-                suggestions=item.get("suggestions", []),
+                suggestions=clean_suggestions,
+                stack_alignment=stack_alignment,
+                matched_identifier_count=matched_count,
             )
         )
 

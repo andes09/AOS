@@ -9,9 +9,10 @@ interface AddMembersStepProps {
   onRemove: (i: number) => void
   onNext: () => void
   onBack: () => void
+  techStack: string[]
 }
 
-export function AddMembersStep({ members, onAdd, onRemove, onNext, onBack }: AddMembersStepProps) {
+export function AddMembersStep({ members, onAdd, onRemove, onNext, onBack, techStack }: AddMembersStepProps) {
   const [showForm, setShowForm] = useState(members.length === 0)
 
   function handleSave(m: MemberDraft) {
@@ -87,6 +88,7 @@ export function AddMembersStep({ members, onAdd, onRemove, onNext, onBack }: Add
           onSave={handleSave}
           onCancel={handleCancel}
           showCancel={members.length > 0}
+          techStack={techStack}
         />
       )}
 

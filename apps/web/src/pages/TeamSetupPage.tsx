@@ -82,6 +82,7 @@ export function TeamSetupPage() {
           capacityHoursPerWeek: m.capacity,
           domainStrengths: m.strengths,
           meetingHoursBucket: m.meetings,
+          skillRatings: Object.keys(m.skillRatings).length > 0 ? m.skillRatings : null,
         })),
       })
       localStorage.removeItem(STORAGE_KEY)
@@ -305,6 +306,7 @@ export function TeamSetupPage() {
                 onRemove={handleRemoveMember}
                 onNext={() => goTo(2)}
                 onBack={() => goTo(0)}
+                techStack={team.techStack}
               />
             )}
             {step === 2 && (

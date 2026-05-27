@@ -7,6 +7,7 @@ interface MemberFormProps {
   onSave: (m: MemberDraft) => void
   onCancel: () => void
   showCancel: boolean
+  techStack: string[]
 }
 
 const ENGINEERING_ROLES = ROLES.filter(r => r.group === 'Engineering')
@@ -59,12 +60,16 @@ function RoleButton({ label, selected, onClick }: { label: string; selected: boo
   )
 }
 
-export function MemberForm({ onSave, onCancel, showCancel }: MemberFormProps) {
-  const [draft, setDraft] = useState<MemberDraft>({ ...BLANK_MEMBER })
+export function MemberForm({ onSave, onCancel, showCancel, techStack }: MemberFormProps) {
+  const [draft, setDraft] = useState<MemberDraft>({ ...BLANK_MEMBER, skillRatings: {} })
   const [showCustomRoleInput, setShowCustomRoleInput] = useState(false)
 
   function set<K extends keyof MemberDraft>(key: K, value: MemberDraft[K]) {
     setDraft(d => ({ ...d, [key]: value }))
+  }
+
+  function setSkillRating(skill: string, value: number) {
+    setDraft(d => ({ ...d, skillRatings: { ...d.skillRatings, [skill]: value } }))
   }
 
   function handleRoleClick(id: string) {
@@ -324,6 +329,65 @@ export function MemberForm({ onSave, onCancel, showCancel }: MemberFormProps) {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Skill ratings (optional) */}
+      <div>
+        <label style={labelStyle}>
+          Skill ratings <span style={{ fontWeight: 400, color: 'var(--color-text-muted)' }}>— optional</span>
+        </label>
+        {techStack.length === 0 ? (
+          <div style={{
+            fontSize: 'var(--text-xs)',
+            color: 'var(--color-text-muted)',
+            fontFamily: 'var(--font-sans)',
+            fontStyle: 'italic',
+            padding: '8px 0',
+          }}>
+            Pick your tech stack above to rate this developer&rsquo;s skills.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {techStack.map(skill => {
+              const hasValue = Object.prototype.hasOwnProperty.call(draft.skillRatings, skill)
+              const value = hasValue ? draft.skillRatings[skill] : 0.5
+              return (
+                <div key={skill} style={{
+                  display: 'grid',
+                  gridTemplateColumns: '110px 1fr 36px',
+                  alignItems: 'center',
+                  gap: 10,
+                }}>
+                  <span style={{
+                    fontSize: 'var(--text-sm)',
+                    fontFamily: 'var(--font-sans)',
+                    color: 'var(--color-text-secondary)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}>{skill}</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.1}
+                    value={value}
+                    onChange={e => setSkillRating(skill, Number(e.target.value))}
+                    style={{ width: '100%', accentColor: 'var(--color-accent)' }}
+                  />
+                  <span style={{
+                    fontSize: 'var(--text-xs)',
+                    fontFamily: 'var(--font-sans)',
+                    color: hasValue ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
+                    fontWeight: 600,
+                    textAlign: 'right',
+                    fontVariantNumeric: 'tabular-nums',
+                  }}>{value.toFixed(1)}</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       {/* Actions */}

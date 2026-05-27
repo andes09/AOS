@@ -211,6 +211,23 @@ async def _get_candidate_tickets(team_id: str, db: AsyncSession) -> list[dict]:
         .order_by(Ticket.story_points_estimated.desc().nulls_last())
         .limit(50)
     )).all()
+
+    # Attach per-ticket skill_vector from TicketSkillAnalysis (additive enrichment).
+    skill_vectors: dict = {}
+    try:
+        from src.models.identifier import TicketSkillAnalysis
+        ticket_ids = [t.id for t in tickets]
+        if ticket_ids:
+            analyses = (await db.scalars(
+                select(TicketSkillAnalysis).where(
+                    TicketSkillAnalysis.ticket_id.in_(ticket_ids)
+                )
+            )).all()
+            skill_vectors = {a.ticket_id: (a.skill_vector or {}) for a in analyses}
+    except Exception:
+        # Defensive: never block plan generation on enrichment failure.
+        skill_vectors = {}
+
     return [
         {
             "id": t.jira_issue_key or str(t.id),
@@ -218,6 +235,7 @@ async def _get_candidate_tickets(team_id: str, db: AsyncSession) -> list[dict]:
             "story_points": t.story_points_estimated or 0,
             "priority": "medium",
             "labels": t.labels or [],
+            "skill_vector": skill_vectors.get(t.id, {}),
         }
         for t in tickets
     ]

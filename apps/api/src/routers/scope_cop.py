@@ -31,7 +31,10 @@ from src.models.organization import Organization
 from src.models.scope_cop import TicketAnalysis
 from src.models.team import Team
 from src.services.encryption import decrypt, encrypt
-from src.services.scope_cop import analyze_tickets
+from src.services.scope_cop import (
+    _split_meta_from_suggestions,
+    analyze_tickets,
+)
 
 scope_cop_router = APIRouter(tags=["scope-cop"])
 
@@ -57,6 +60,9 @@ class TicketAnalysisResult(BaseModel):
     status: str
     issues: list[str]
     suggestions: list[str]
+    # Wave 2 (Initiative A) — optional for backward compat with old cached rows.
+    stack_alignment: int | None = None
+    matched_identifier_count: int | None = None
 
 
 class ScopeCopSummary(BaseModel):
@@ -189,6 +195,8 @@ async def analyze(
             status=r.status,
             issues=r.issues,
             suggestions=r.suggestions,
+            stack_alignment=r.stack_alignment,
+            matched_identifier_count=r.matched_identifier_count,
         )
         for r in raw_results
     ]
@@ -226,17 +234,24 @@ async def get_analyses(
             detail="No analyses found for this team.",
         )
 
-    results = [
-        TicketAnalysisResult(
-            ticket_key=row.ticket_key,
-            ticket_title=row.ticket_title or row.ticket_key,
-            readiness_score=row.readiness_score or 0,
-            status=row.status if isinstance(row.status, str) else row.status.value,
-            issues=row.issues or [],
-            suggestions=row.suggestions or [],
+    results = []
+    for row in rows:
+        # Peel the Wave-2 meta sentinel off the persisted suggestions array.
+        clean_suggestions, stack_alignment, matched_count = (
+            _split_meta_from_suggestions(row.suggestions or [])
         )
-        for row in rows
-    ]
+        results.append(
+            TicketAnalysisResult(
+                ticket_key=row.ticket_key,
+                ticket_title=row.ticket_title or row.ticket_key,
+                readiness_score=row.readiness_score or 0,
+                status=row.status if isinstance(row.status, str) else row.status.value,
+                issues=row.issues or [],
+                suggestions=clean_suggestions,
+                stack_alignment=stack_alignment,
+                matched_identifier_count=matched_count,
+            )
+        )
 
     analyzed_at = max(row.analyzed_at for row in rows)
 

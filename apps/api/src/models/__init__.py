@@ -14,6 +14,7 @@ from src.models.invitation import Invitation, InvitationStatus
 from src.models.capacity import DeveloperCapacityOverride
 from src.models.team_access import TeamAccessGrant
 from src.models.slack_config import SlackConfig
+from src.models.sprint_plan_override import SprintPlanOverride, OverrideAction, OverrideReason
 
 __all__ = [
     "Organization",
@@ -47,4 +48,7 @@ __all__ = [
     "DeveloperCapacityOverride",
     "TeamAccessGrant",
     "SlackConfig",
+    "SprintPlanOverride",
+    "OverrideAction",
+    "OverrideReason",
 ]

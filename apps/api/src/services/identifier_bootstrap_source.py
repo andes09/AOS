@@ -38,6 +38,7 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -146,6 +147,7 @@ async def fetch_bootstrap_corpus(
     db: AsyncSession,
     jira_client,
     max_tickets: int = 500,
+    since_at: datetime | None = None,
 ) -> tuple[list[TicketTextSource], list[EpicTextSource]]:
     """Return (tickets, epics) from this team's closed-sprint history.
 
@@ -153,6 +155,10 @@ async def fetch_bootstrap_corpus(
              ordered by sprint creation desc, capped at `max_tickets`.
              Description fetched from Jira per ticket.
     Epics:   each ticket's epic link is followed via Jira; deduped by key.
+
+    When ``since_at`` is provided, only tickets with ``completed_at > since_at``
+    are included — enables incremental refresh (Wave 4 SA-13). Default
+    ``None`` preserves the original full-bootstrap behavior.
 
     Failures on individual Jira fetches are isolated — affected
     tickets/epics simply have empty descriptions or are skipped.
@@ -165,9 +171,12 @@ async def fetch_bootstrap_corpus(
         .join(Sprint, Ticket.sprint_id == Sprint.id)
         .where(Ticket.team_id == team_uuid)
         .where(Sprint.status == SprintStatus.COMPLETED)
-        .order_by(Sprint.created_at.desc())
-        .limit(max_tickets)
     )
+    if since_at is not None:
+        stmt = stmt.where(Ticket.completed_at.is_not(None)).where(
+            Ticket.completed_at > since_at
+        )
+    stmt = stmt.order_by(Sprint.created_at.desc()).limit(max_tickets)
     result = await db.execute(stmt)
     tickets: list[Ticket] = list(result.scalars().all())
 

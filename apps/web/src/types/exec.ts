@@ -18,3 +18,11 @@ export interface SectorOverviewResponse {
   teamCount: number;
   teams: TeamSummary[];
 }
+
+export interface PlanQualityPoint {
+  sprintId: string;
+  sprintName: string;
+  completedAt: string | null;
+  overrideRate: number | null;
+  overridesByReason: Record<string, number> | null;
+}

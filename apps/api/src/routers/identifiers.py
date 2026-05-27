@@ -31,6 +31,7 @@ from src.models.identifier import TeamIdentifier
 from src.models.organization import Organization
 from src.models.team import Team
 from src.routers.scope_cop import _get_jira_client
+from src.services.identifier_refresh_service import refresh_team_identifiers
 from src.services.identifier_scan_service import (
     LOW_CONFIDENCE_THRESHOLD,
     run_team_scan,
@@ -48,6 +49,21 @@ router = APIRouter(tags=["identifiers"])
 class ScanRequest(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
     team_id: str
+
+
+class RefreshRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    team_id: str | None = None
+
+
+class RefreshSummary(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    tokens_seen: int
+    new_tokens: int
+    classified: int
+    persisted: int
+    aged_out: int
+    pruned: int
 
 
 class ScanSummary(BaseModel):
@@ -122,6 +138,63 @@ async def _resolve_team_in_org(team_id: str, clerk_org_id: str, db: AsyncSession
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/refresh",
+    response_model=RefreshSummary,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def refresh_identifiers(
+    request: RefreshRequest,
+    _: str = Depends(require_role("lead")),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Incremental identifier refresh (M7).
+
+    Thin wrapper around
+    ``identifier_refresh_service.refresh_team_identifiers``. If ``team_id``
+    is omitted, picks the lead's first team in the org. Synchronous (mirrors
+    ``/scan``) — returns the summary once classification + age-out finish.
+    """
+    team_id = request.team_id
+    if not team_id:
+        # Resolve "default" team for the org. Mirrors how the lead's UI
+        # has a single active team selector; we just pick the most recent.
+        org = await db.scalar(
+            select(Organization).where(Organization.clerk_org_id == clerk_org_id)
+        )
+        if not org:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Team not found."
+            )
+        team = await db.scalar(
+            select(Team)
+            .where(Team.organization_id == org.id)
+            .order_by(Team.created_at.desc())
+        )
+        if not team:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Team not found."
+            )
+    else:
+        team = await _resolve_team_in_org(team_id, clerk_org_id, db)
+
+    jira_client = await _get_jira_client(team, db)
+    anthropic_key = await _get_anthropic_key(str(team.id), db)
+
+    summary = await refresh_team_identifiers(
+        team=team, jira_client=jira_client, anthropic_key=anthropic_key, db=db
+    )
+    return RefreshSummary(
+        tokens_seen=summary["tokens_seen"],
+        new_tokens=summary["new_tokens"],
+        classified=summary["classified"],
+        persisted=summary["persisted"],
+        aged_out=summary["aged_out"],
+        pruned=summary["pruned"],
+    )
 
 
 @router.post("/scan", response_model=ScanSummary)

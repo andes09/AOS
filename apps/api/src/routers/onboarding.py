@@ -13,10 +13,11 @@ GET    /api/invitations
 DELETE /api/invitations/{invitation_id}
 POST   /api/invitations/accept
 """
+import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
@@ -25,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.auth import get_current_user_id, get_current_org_id
 from src.auth_roles import require_role
 from src.config import settings
-from src.database import get_db
+from src.database import AsyncSessionLocal, get_db
 from src.integrations.jira.client import JiraClient
 from src.integrations.jira.oauth import refresh_access_token
 from src.models.invitation import Invitation
@@ -33,12 +34,16 @@ from src.models.jira_connection import JiraConnection
 from src.models.organization import Organization
 from src.models.team import Team
 from src.services.encryption import decrypt
+from src.services.identifier_scan_service import run_team_scan
 from src.services.invitation import (
     accept_invitation,
     build_invite_link,
     create_invitation,
 )
 from src.services.onboarding import get_onboarding_status, import_jira_sprint_history
+from src.services.scope_cop import _get_anthropic_key
+
+logger = logging.getLogger(__name__)
 
 onboarding_router = APIRouter(tags=["onboarding"])
 invitations_router = APIRouter(tags=["invitations"])
@@ -200,9 +205,48 @@ async def complete_onboarding(
     return CompleteOnboardingResponse(completed_at=now.isoformat())
 
 
+async def _run_identifier_scan_bg(team_id: uuid.UUID, org_id: uuid.UUID) -> None:
+    """Background worker: run the bootstrap identifier scan after Jira import.
+
+    Owns its own DB session (BackgroundTasks fire after the request scope is
+    torn down). Failures are logged but never re-raised — a glossary build
+    failure must not affect the user's onboarding flow.
+    """
+    try:
+        async with AsyncSessionLocal() as bg_db:
+            team = await bg_db.scalar(select(Team).where(Team.id == team_id))
+            org = await bg_db.scalar(select(Organization).where(Organization.id == org_id))
+            if not team or not org:
+                logger.warning(
+                    "identifier_scan_bg: team/org missing (team_id=%s, org_id=%s)",
+                    team_id, org_id,
+                )
+                return
+
+            jira_client = await _get_jira_client(org, bg_db)
+            anthropic_key = await _get_anthropic_key(str(team.id), bg_db)
+
+            logger.info("identifier_scan_bg: starting (team_id=%s)", team_id)
+            summary = await run_team_scan(
+                team=team, jira_client=jira_client,
+                anthropic_key=anthropic_key, db=bg_db,
+            )
+            logger.info(
+                "identifier_scan_bg: completed (team_id=%s, persisted=%d, low_conf=%d)",
+                team_id,
+                summary.get("identifiers_persisted", 0),
+                summary.get("low_confidence_count", 0),
+            )
+    except Exception as exc:  # noqa: BLE001 — must not propagate
+        logger.exception(
+            "identifier_scan_bg: failed (team_id=%s): %s", team_id, exc
+        )
+
+
 @onboarding_router.post("/import-history", response_model=ImportHistoryResponse, status_code=202)
 async def import_history(
     body: ImportHistoryRequest,
+    background_tasks: BackgroundTasks,
     _user_id: str = Depends(get_current_user_id),
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
@@ -223,6 +267,11 @@ async def import_history(
     # Run import inline (no Celery)
     await import_jira_sprint_history(team, jira_client, sprint_count, db)
     await db.commit()
+
+    # Auto-trigger the identifier bootstrap scan in the background so the
+    # Team Glossary is ready when the lead lands on Settings → Glossary.
+    # Runs after the request returns; failures are logged but never block UX.
+    background_tasks.add_task(_run_identifier_scan_bg, team.id, org.id)
 
     return ImportHistoryResponse(status=team.jira_import_status, sprint_count=sprint_count)
 

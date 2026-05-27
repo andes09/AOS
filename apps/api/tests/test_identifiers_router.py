@@ -156,8 +156,13 @@ def _patch_external(monkeypatch, *, classified=None, tickets=None, epics=None):
 
     monkeypatch.setattr("src.routers.identifiers._get_jira_client", fake_jira_client)
     monkeypatch.setattr("src.routers.identifiers._get_anthropic_key", fake_anthropic_key)
-    monkeypatch.setattr("src.routers.identifiers.fetch_bootstrap_corpus", fake_corpus)
-    monkeypatch.setattr("src.routers.identifiers.classify_identifiers", fake_classify)
+    # Wave 3: scan core was extracted to identifier_scan_service. Patch there.
+    monkeypatch.setattr(
+        "src.services.identifier_scan_service.fetch_bootstrap_corpus", fake_corpus
+    )
+    monkeypatch.setattr(
+        "src.services.identifier_scan_service.classify_identifiers", fake_classify
+    )
 
 
 # ---------------------------------------------------------------------------

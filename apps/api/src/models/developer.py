@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from sqlalchemy import Enum as SAEnum, String, DateTime, ForeignKey, Boolean, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from src.database import Base
 
 
@@ -47,6 +47,7 @@ class Developer(Base):
     seniority: Mapped[str | None] = mapped_column(String(20), nullable=True)
     capacity_hours_per_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
     domain_strengths: Mapped[str | None] = mapped_column(String, nullable=True)
+    skill_ratings: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     meeting_hours_bucket: Mapped[str | None] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

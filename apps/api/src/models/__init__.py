@@ -7,6 +7,7 @@ from src.models.jira_connection import JiraConnection
 from src.models.alert import SprintAlert, AlertType
 from src.models.ticket import Ticket, TicketStatus
 from src.models.scope_cop import ScopeCopStatus, TicketAnalysis
+from src.models.identifier import IdentifierSource, TeamIdentifier, TicketSkillAnalysis
 from src.models.dependency_radar import DependencyType, RiskLevel, Dependency
 from src.models.retro import PatternType, PatternStatus, Retrospective, RetroPattern
 from src.models.invitation import Invitation, InvitationStatus
@@ -31,6 +32,9 @@ __all__ = [
     "TicketStatus",
     "ScopeCopStatus",
     "TicketAnalysis",
+    "IdentifierSource",
+    "TeamIdentifier",
+    "TicketSkillAnalysis",
     "DependencyType",
     "RiskLevel",
     "Dependency",

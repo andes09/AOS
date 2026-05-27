@@ -1,9 +1,12 @@
 import enum
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Text, Integer, Float, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import String, Text, Integer, Float, DateTime, ForeignKey, UniqueConstraint, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID, JSONB
+
+
+_JSONB_OR_JSON = JSON().with_variant(JSONB(), "postgresql")
 from src.database import Base
 
 
@@ -51,7 +54,7 @@ class TicketSkillAnalysis(Base):
     ticket_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    skill_vector: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
-    domain_vector: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
-    matched_identifiers: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    skill_vector: Mapped[dict] = mapped_column(_JSONB_OR_JSON, nullable=False, default=dict, server_default="{}")
+    domain_vector: Mapped[dict] = mapped_column(_JSONB_OR_JSON, nullable=False, default=dict, server_default="{}")
+    matched_identifiers: Mapped[list] = mapped_column(_JSONB_OR_JSON, nullable=False, default=list, server_default="[]")
     analyzed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

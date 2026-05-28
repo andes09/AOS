@@ -200,6 +200,8 @@ export function SprintPlannerPage() {
     developer_name: a.developer_name || devNameMap[a.developer_id.toLowerCase()] || a.developer_id,
     story_points: a.story_points,
     confidence: a.confidence,
+    skill_vector: a.skill_vector,
+    matched_identifiers: a.matched_identifiers,
   }))
 
   return (

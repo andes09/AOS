@@ -5,6 +5,8 @@ Service tests mock the Anthropic client; API tests mock both auth and the
 service layer so no real API calls or DB connections are required.
 """
 
+import uuid
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,6 +19,10 @@ from src.services.sprint_brain import (
     _extract_complexity,
     _analyse_ticket_complexity,
     _CITATION_INSTRUCTION,
+    _SPRINT_PLAN_TOOL,
+    _compute_skill_velocity_breakdown,
+    _fetch_recent_overrides,
+    _format_overrides_section,
     generate_sprint_plan,
     simulate_what_if,
 )
@@ -619,3 +625,275 @@ async def test_generate_sprint_plan_second_call_uses_assignment_tool():
 
     second_call_kwargs = instance.messages.create.call_args_list[1].kwargs
     assert second_call_kwargs["tool_choice"] == {"type": "tool", "name": "create_sprint_plan"}
+
+
+# ---------------------------------------------------------------------------
+# Skill vector / skill ratings integration tests (Initiative A Wave 2)
+# ---------------------------------------------------------------------------
+
+
+class TestSkillVectorIntegration:
+    """Coverage for skill_vector + skill_ratings wiring in Sprint Brain."""
+
+    @pytest.mark.asyncio
+    async def test_compute_skill_velocity_breakdown_empty_when_no_analyses(self):
+        """No completed tickets with analyses → empty list (graceful default)."""
+        import uuid as _uuid
+
+        mock_result = MagicMock()
+        mock_result.all = MagicMock(return_value=[])
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        out = await _compute_skill_velocity_breakdown(_uuid.uuid4(), _uuid.uuid4(), mock_db)
+        assert out == []
+
+    @pytest.mark.asyncio
+    async def test_compute_skill_velocity_breakdown_aggregates_correctly(self):
+        """Verify weighted aggregation across multiple tickets per skill."""
+        import uuid as _uuid
+
+        # Two tickets: t1 has SQL=0.8 (5 pts), t2 has SQL=0.4 (3 pts)
+        # Expected SQL avg = (5*0.8 + 3*0.4) / (0.8 + 0.4) = (4.0 + 1.2) / 1.2 = 4.333
+        t1 = MagicMock(story_points_estimated=5.0)
+        a1 = MagicMock(skill_vector={"SQL": 0.8, "Python": 0.05})  # Python below threshold
+        t2 = MagicMock(story_points_estimated=3.0)
+        a2 = MagicMock(skill_vector={"SQL": 0.4})
+
+        mock_result = MagicMock()
+        mock_result.all = MagicMock(return_value=[(t1, a1), (t2, a2)])
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        out = await _compute_skill_velocity_breakdown(_uuid.uuid4(), _uuid.uuid4(), mock_db)
+        skills = {row["skill"]: row for row in out}
+
+        # Python should be filtered out (weight 0.05 < 0.1 threshold)
+        assert "Python" not in skills
+        assert "SQL" in skills
+        assert skills["SQL"]["avg_pts"] == pytest.approx(4.33, rel=0.01)
+        assert skills["SQL"]["sample_count"] == 2
+
+    def test_assignment_message_includes_required_skills_when_present(self):
+        """A candidate ticket with skill_vector should add a 'Required skills:' line."""
+        tickets = [
+            {
+                "id": "PROJ-1",
+                "summary": "Build SQL view",
+                "story_points": 3,
+                "priority": "high",
+                "skill_vector": {"SQL": 0.8, "Java": 0.3, "CSS": 0.1},  # CSS below threshold
+            }
+        ]
+        inp = SprintBrainInput(
+            team_id="team-abc",
+            candidate_tickets=tickets,
+            developer_profiles=[PROFILE_ALICE],
+            sprint_length_days=14,
+            sprint_start_date="2026-03-17",
+        )
+        msg = _build_assignment_message(inp, COMPLEXITY_ANALYSIS, [PROFILE_ALICE])
+        assert "Required skills:" in msg
+        assert "SQL=0.8" in msg
+        assert "Java=0.3" in msg
+        # CSS below 0.2 threshold should NOT appear in the inline list
+        assert "CSS=0.1" not in msg
+
+    def test_assignment_message_omits_required_skills_when_empty(self):
+        """A ticket with no skill_vector / empty dict should NOT emit a 'Required skills:' line."""
+        tickets = [
+            {"id": "PROJ-1", "summary": "Build login page", "story_points": 3, "priority": "high"},
+            {"id": "PROJ-2", "summary": "Fix bug", "story_points": 2, "priority": "high", "skill_vector": {}},
+        ]
+        inp = SprintBrainInput(
+            team_id="team-abc",
+            candidate_tickets=tickets,
+            developer_profiles=[PROFILE_ALICE],
+            sprint_length_days=14,
+            sprint_start_date="2026-03-17",
+        )
+        msg = _build_assignment_message(inp, COMPLEXITY_ANALYSIS, [PROFILE_ALICE])
+        assert "Required skills:" not in msg
+
+    def test_assignment_message_includes_skill_ratings_for_dev(self):
+        """A developer profile with skill_ratings should produce a 'Skill ratings:' line."""
+        alice_with_ratings = {**PROFILE_ALICE, "skill_ratings": {"SQL": 0.9, "Java": 0.6, "CSS": 0.1}}
+        inp = SprintBrainInput(
+            team_id="team-abc",
+            candidate_tickets=SAMPLE_TICKETS[:1],
+            developer_profiles=[alice_with_ratings],
+            sprint_length_days=14,
+            sprint_start_date="2026-03-17",
+        )
+        msg = _build_assignment_message(inp, COMPLEXITY_ANALYSIS, [alice_with_ratings])
+        assert "Skill ratings:" in msg
+        assert "SQL=0.9" in msg
+        assert "Java=0.6" in msg
+        assert "CSS=0.1" not in msg
+
+    def test_sprint_plan_tool_schema_includes_skill_match_reasoning(self):
+        """Tool schema must expose skill_match_reasoning on each assignment."""
+        assignment_schema = _SPRINT_PLAN_TOOL["input_schema"]["properties"]["assignments"]["items"]
+        assert "skill_match_reasoning" in assignment_schema["properties"]
+        assert assignment_schema["properties"]["skill_match_reasoning"]["type"] == "string"
+        assert "skill_match_reasoning" in assignment_schema["required"]
+
+    @pytest.mark.asyncio
+    async def test_extract_plan_defaults_skill_match_reasoning_when_missing(self):
+        """Backward-compat: assignments lacking skill_match_reasoning must NOT crash."""
+        legacy_plan = {
+            "assignments": [
+                {
+                    "ticket_id": "PROJ-1",
+                    "developer_id": "dev-1",
+                    "reasoning": "Legacy reason",
+                    "confidence": 0.8,
+                    # NOTE: no skill_match_reasoning — older shape
+                }
+            ],
+            "confidence_score": 0.8,
+            "summary": "Legacy plan",
+            "warnings": [],
+            "what_if_dropped": {"PROJ-1": 0.7},
+        }
+        complexity_response = _make_complexity_response(SAMPLE_COMPLEXITY)
+        legacy_response = _make_mock_response(legacy_plan)
+
+        with patch("src.services.sprint_brain.anthropic.AsyncAnthropic") as MockClient:
+            instance = MockClient.return_value
+            instance.messages.create = AsyncMock(side_effect=[complexity_response, legacy_response])
+
+            out = await generate_sprint_plan(NEW_SAMPLE_INPUT, "sk-ant-test")
+
+        # Should default to None instead of raising
+        assert out.assignments[0]["skill_match_reasoning"] is None
+
+
+# ---------------------------------------------------------------------------
+# Override context injection tests (Initiative A Wave 5 — SA-16)
+# ---------------------------------------------------------------------------
+
+
+class TestOverrideContextInjection:
+    """Coverage for last-sprint override patterns injected into Sprint Brain."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_recent_overrides_returns_empty_when_none(self):
+        """No completed sprints / no overrides → empty list."""
+        # First call returns no sprint ids; helper must short-circuit.
+        empty_sprint_ids = MagicMock()
+        empty_sprint_ids.all = MagicMock(return_value=[])
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=empty_sprint_ids)
+
+        team_id = str(uuid.uuid4())
+        out = await _fetch_recent_overrides(team_id, mock_db, n_sprints=2)
+        assert out == []
+        # Only one query made (the sprint id lookup); no override query because no sprints.
+        assert mock_db.execute.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_fetch_recent_overrides_returns_dicts_with_joined_names(self):
+        """Joined rows are mapped into the expected dict shape."""
+        # Step 1: sprint ids query
+        sprint_ids = MagicMock()
+        sprint_ids.all = MagicMock(return_value=[(uuid.uuid4(),), (uuid.uuid4(),)])
+
+        # Step 2: override join rows.
+        # Tuple order in select(): (action, reason_code, created_at, jira_issue_key, original_name, new_name)
+        from datetime import datetime as _dt
+        override_rows = MagicMock()
+        override_rows.all = MagicMock(return_value=[
+            ("reassign", "skill_fit", _dt(2026, 5, 20), "PROJ-123", "Alice", "Bob"),
+            ("remove", "capacity", _dt(2026, 5, 19), "PROJ-456", "Carol", None),
+            ("add", "mentorship", _dt(2026, 5, 18), "PROJ-789", None, "Dave"),
+        ])
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(side_effect=[sprint_ids, override_rows])
+
+        out = await _fetch_recent_overrides(str(uuid.uuid4()), mock_db, n_sprints=2)
+        assert len(out) == 3
+        assert out[0] == {
+            "ticket_key": "PROJ-123",
+            "action": "reassign",
+            "from_dev": "Alice",
+            "to_dev": "Bob",
+            "reason_code": "skill_fit",
+        }
+        assert out[1]["action"] == "remove" and out[1]["to_dev"] is None
+        assert out[2]["action"] == "add" and out[2]["from_dev"] is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_recent_overrides_respects_n_sprints_limit(self):
+        """The sprint id query is built with .limit(n_sprints) — verify by inspecting the executed stmt."""
+        executed_stmts: list = []
+
+        async def _capture(stmt):
+            executed_stmts.append(stmt)
+            res = MagicMock()
+            res.all = MagicMock(return_value=[])
+            return res
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(side_effect=_capture)
+
+        await _fetch_recent_overrides(str(uuid.uuid4()), mock_db, n_sprints=2)
+        # The first executed statement is the sprint-ids lookup; compiled SQL should contain a LIMIT 2.
+        first_sql = str(executed_stmts[0])
+        assert "LIMIT" in first_sql.upper()
+        # Sanity: n_sprints value appears in the bound params of the compiled statement.
+        compiled = executed_stmts[0].compile(compile_kwargs={"literal_binds": True})
+        assert " 2" in str(compiled) or "LIMIT 2" in str(compiled).upper()
+
+    def test_format_overrides_section_handles_all_actions(self):
+        overrides = [
+            {"ticket_key": "PROJ-1", "action": "reassign", "from_dev": "Alice", "to_dev": "Bob", "reason_code": "skill_fit"},
+            {"ticket_key": "PROJ-2", "action": "remove", "from_dev": "Carol", "to_dev": None, "reason_code": "capacity"},
+            {"ticket_key": "PROJ-3", "action": "add", "from_dev": None, "to_dev": "Dave", "reason_code": None},
+        ]
+        section = _format_overrides_section(overrides)
+        assert "Previous Sprint Overrides" in section
+        assert "PROJ-1 reassigned Alice → Bob (reason: skill_fit)" in section
+        assert "PROJ-2 removed from Carol (reason: capacity)" in section
+        # None reason_code falls back to "unspecified"
+        assert "PROJ-3 added to Dave (reason: unspecified)" in section
+
+    def test_format_overrides_section_returns_empty_string_on_empty_list(self):
+        assert _format_overrides_section([]) == ""
+
+    def test_format_overrides_section_truncates_above_cap(self):
+        # 35 overrides → 30 lines + a truncation note for +5 omitted
+        overrides = [
+            {"ticket_key": f"PROJ-{i}", "action": "reassign", "from_dev": "A", "to_dev": "B", "reason_code": "skill_fit"}
+            for i in range(35)
+        ]
+        section = _format_overrides_section(overrides)
+        assert "(+5 more overrides omitted)" in section
+
+    def test_build_assignment_message_includes_overrides_section(self):
+        """When `overrides_section` is non-empty, the message must include the heading and lines."""
+        override_text = (
+            "## Previous Sprint Overrides (last 2 sprints)\n\n"
+            "- PROJ-9 reassigned Alice → Bob (reason: skill_fit)\n"
+        )
+        msg = _build_assignment_message(
+            NEW_SAMPLE_INPUT,
+            COMPLEXITY_ANALYSIS,
+            NEW_SAMPLE_PROFILES,
+            overrides_section=override_text,
+        )
+        assert "Previous Sprint Overrides" in msg
+        assert "PROJ-9 reassigned Alice → Bob" in msg
+        # Section must appear before the candidate-tickets header (ordering guarantee)
+        assert msg.index("Previous Sprint Overrides") < msg.index("Candidate Tickets")
+
+    def test_build_assignment_message_omits_section_when_empty(self):
+        """Empty overrides_section means the section heading must NOT appear."""
+        msg = _build_assignment_message(
+            NEW_SAMPLE_INPUT,
+            COMPLEXITY_ANALYSIS,
+            NEW_SAMPLE_PROFILES,
+            overrides_section="",
+        )
+        assert "Previous Sprint Overrides" not in msg

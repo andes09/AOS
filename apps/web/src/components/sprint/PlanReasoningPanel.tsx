@@ -95,7 +95,28 @@ export function PlanReasoningPanel({ assignments }: PlanReasoningPanelProps) {
                   lineHeight: 1.6,
                   borderTop: '1px solid var(--color-border-subtle)',
                 }}>
-                  {a.reasoning}
+                  <div>{a.reasoning}</div>
+                  {a.skill_match_reasoning === 'capacity_only' && (
+                    <div style={{
+                      marginTop: 6,
+                      color: 'var(--color-text-muted)',
+                      fontSize: 'var(--text-xs)',
+                      fontStyle: 'italic',
+                    }}>
+                      Skill match: (no specific skill required)
+                    </div>
+                  )}
+                  {a.skill_match_reasoning &&
+                    a.skill_match_reasoning !== 'capacity_only' && (
+                    <div style={{
+                      marginTop: 6,
+                      color: 'var(--color-text-secondary)',
+                      fontSize: 'var(--text-xs)',
+                    }}>
+                      <span style={{ fontWeight: 600, color: 'var(--color-accent)' }}>Skill match:</span>{' '}
+                      {a.skill_match_reasoning}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

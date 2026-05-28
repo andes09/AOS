@@ -8,6 +8,9 @@ export interface Assignment {
   reasoning: string
   confidence: number
   story_points: number
+  skill_vector?: Record<string, number>
+  matched_identifiers?: string[]
+  skill_match_reasoning?: string | null
 }
 
 export type ScopeCopStatus = 'not_analyzed' | 'all_ready' | 'has_issues'
@@ -59,6 +62,8 @@ export interface Ticket {
   developer_name: string
   story_points: number
   confidence: number
+  skill_vector?: Record<string, number>
+  matched_identifiers?: string[]
 }
 
 export interface JiraBoard {

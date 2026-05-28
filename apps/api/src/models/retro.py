@@ -1,11 +1,14 @@
 import uuid
 import enum
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime, ForeignKey, Integer, Index
+from sqlalchemy import String, Text, DateTime, ForeignKey, Integer, Index, JSON
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from src.database import Base
+
+
+_JSONB_OR_JSON = JSON().with_variant(JSONB(), "postgresql")
 
 
 class PatternType(enum.Enum):
@@ -28,10 +31,10 @@ class Retrospective(Base):
     sprint_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sprints.id"), nullable=False, unique=True)
     team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id"), nullable=False)
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    went_well: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    went_poorly: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    action_items: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    velocity_summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    went_well: Mapped[list | None] = mapped_column(_JSONB_OR_JSON, nullable=True)
+    went_poorly: Mapped[list | None] = mapped_column(_JSONB_OR_JSON, nullable=True)
+    action_items: Mapped[list | None] = mapped_column(_JSONB_OR_JSON, nullable=True)
+    velocity_summary: Mapped[dict | None] = mapped_column(_JSONB_OR_JSON, nullable=True)
 
 
 class RetroPattern(Base):
@@ -54,4 +57,4 @@ class RetroPattern(Base):
         SAEnum(PatternStatus, native_enum=False, values_callable=lambda obj: [e.value for e in obj]),
         nullable=False, default="active", server_default="active",
     )
-    affected_sprint_names: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    affected_sprint_names: Mapped[list | None] = mapped_column(_JSONB_OR_JSON, nullable=True)

@@ -20,6 +20,9 @@ from src.models.developer import Developer
 from src.models.team import Team
 from src.models.sprint import Sprint, SprintStatus
 from src.models.capacity import DeveloperCapacityOverride
+from src.models.ticket import Ticket, TicketStatus
+from src.models.identifier import TicketSkillAnalysis
+from src.models.sprint_plan_override import SprintPlanOverride
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +58,21 @@ _SPRINT_PLAN_TOOL: dict = {
                             "description": "0.0–1.0 confidence for this specific assignment.",
                         },
                         "story_points": {"type": "number"},
+                        "skill_match_reasoning": {
+                            "type": "string",
+                            "description": (
+                                "One sentence: which skill(s) drove this dev choice and what "
+                                "rating(s) supported it. Use 'capacity_only' if no skill signal."
+                            ),
+                        },
                     },
-                    "required": ["ticket_id", "developer_id", "reasoning", "confidence"],
+                    "required": [
+                        "ticket_id",
+                        "developer_id",
+                        "reasoning",
+                        "confidence",
+                        "skill_match_reasoning",
+                    ],
                     "additionalProperties": False,
                 },
             },
@@ -178,6 +194,25 @@ Your responsibilities:
    Example: "Based on 4 backend/bug sprints averaging 8.2 pts, this fits \
    within Alice's safe capacity of 24 pts."
 
+Skill matching:
+- If a ticket has NO skill_vector entries with weight >= 0.2 it is unconstrained;
+  assign by capacity / velocity. Set `skill_match_reasoning` to "capacity_only".
+- If a ticket has a SINGLE high skill (one entry with weight >= 0.6) prefer
+  developers whose `skill_ratings[that_skill] >= 0.6`. If none qualify, surface
+  this as a warning in `reasoning` and assign by capacity / velocity.
+- If a ticket has MULTI-HIGH skills (>=2 entries with weight >= 0.6) prefer the
+  developer with the highest combined rating across those skills. If no single
+  developer hits >= 0.6 on all of them, flag a pair-program candidate in
+  `reasoning`.
+- Always cite the matching skill name and the developer's numeric rating in
+  `skill_match_reasoning` (e.g. "SQL=0.9 matched required SQL=0.8").
+
+PREVIOUS-SPRINT OVERRIDES
+If the message contains a "Previous Sprint Overrides" section, factor recurring
+patterns into your reasoning. If a developer is repeatedly reassigned AWAY from
+a skill area, prefer not to assign similar tickets to them again. Cite the
+pattern in your `reasoning` field when it influences a decision.
+
 Always respond by calling the create_sprint_plan tool with your complete \
 analysis. Do not respond in prose outside the tool call.\
 """
@@ -270,8 +305,17 @@ def _extract_plan(response: anthropic.types.Message) -> SprintBrainOutput:
             "This is unexpected — please try again."
         )
     plan: dict = tool_block.input  # SDK already parses to dict
+
+    # Backward-compat: default skill_match_reasoning if the model omitted it
+    # (older response shape, or before this field existed). Never raise.
+    safe_assignments = []
+    for a in plan.get("assignments", []):
+        if isinstance(a, dict) and "skill_match_reasoning" not in a:
+            a = {**a, "skill_match_reasoning": None}
+        safe_assignments.append(a)
+
     return SprintBrainOutput(
-        assignments=plan["assignments"],
+        assignments=safe_assignments,
         confidence_score=float(plan["confidence_score"]),
         summary=plan["summary"],
         warnings=plan["warnings"],
@@ -348,10 +392,159 @@ async def _analyse_ticket_complexity(
     return _extract_complexity(response)
 
 
+def _format_skill_inline(skill_map: dict, threshold: float = 0.2) -> str:
+    """Format a {skill: weight} dict into 'SQL=0.8, Java=0.3' string, filtered by threshold."""
+    if not isinstance(skill_map, dict):
+        return ""
+    items = []
+    for skill, weight in skill_map.items():
+        try:
+            w = float(weight)
+        except (TypeError, ValueError):
+            continue
+        if w >= threshold:
+            items.append((skill, w))
+    items.sort(key=lambda x: -x[1])
+    return ", ".join(f"{s}={w:g}" for s, w in items)
+
+
+_MAX_OVERRIDES_IN_PROMPT = 30
+
+
+async def _fetch_recent_overrides(
+    team_id: str,
+    db: AsyncSession,
+    n_sprints: int = 2,
+) -> list[dict]:
+    """
+    Return overrides from the most recent N completed sprints for this team.
+
+    Each item shape:
+      {
+        "ticket_key": "PROJ-123",
+        "action": "reassign",
+        "from_dev": "Alice" | None,
+        "to_dev": "Bob" | None,
+        "reason_code": "skill_fit" | None,
+      }
+
+    Ordered most-recent first. Returns [] when no overrides exist.
+    """
+    try:
+        team_uuid = uuid.UUID(team_id) if isinstance(team_id, str) else team_id
+    except (ValueError, TypeError):
+        return []
+
+    # Find the N most recent completed sprints for this team.
+    recent_sprints_stmt = (
+        select(Sprint.id)
+        .where(
+            Sprint.team_id == team_uuid,
+            Sprint.status == SprintStatus.COMPLETED,
+        )
+        .order_by(Sprint.end_date.desc())
+        .limit(n_sprints)
+    )
+    try:
+        sprint_ids_result = await db.execute(recent_sprints_stmt)
+        sprint_ids = [row[0] for row in sprint_ids_result.all()]
+    except Exception:
+        return []
+
+    if not sprint_ids:
+        return []
+
+    # Aliased joins onto Developer twice (original + new) and Ticket once.
+    from sqlalchemy.orm import aliased
+
+    OriginalDev = aliased(Developer)
+    NewDev = aliased(Developer)
+
+    stmt = (
+        select(
+            SprintPlanOverride.action,
+            SprintPlanOverride.reason_code,
+            SprintPlanOverride.created_at,
+            Ticket.jira_issue_key,
+            OriginalDev.name,
+            NewDev.name,
+        )
+        .join(Ticket, Ticket.id == SprintPlanOverride.ticket_id)
+        .outerjoin(OriginalDev, OriginalDev.id == SprintPlanOverride.original_developer_id)
+        .outerjoin(NewDev, NewDev.id == SprintPlanOverride.new_developer_id)
+        .where(SprintPlanOverride.sprint_id.in_(sprint_ids))
+        .order_by(SprintPlanOverride.created_at.desc())
+    )
+
+    try:
+        result = await db.execute(stmt)
+        rows = result.all()
+    except Exception:
+        return []
+
+    out: list[dict] = []
+    for action, reason_code, _created_at, ticket_key, original_name, new_name in rows:
+        out.append({
+            "ticket_key": ticket_key or "",
+            "action": action,
+            "from_dev": original_name,
+            "to_dev": new_name,
+            "reason_code": reason_code,
+        })
+    return out
+
+
+def _format_overrides_section(overrides: list[dict]) -> str:
+    """
+    Format a list of override dicts into a prompt section.
+
+    Returns '' for an empty list so callers can omit the section entirely.
+    Caps at _MAX_OVERRIDES_IN_PROMPT and appends a truncation note when exceeded.
+    """
+    if not overrides:
+        return ""
+
+    total = len(overrides)
+    truncated = overrides[:_MAX_OVERRIDES_IN_PROMPT]
+
+    lines = [f"## Previous Sprint Overrides (last 2 sprints)", ""]
+    for o in truncated:
+        action = o.get("action") or ""
+        ticket_key = o.get("ticket_key") or "?"
+        from_dev = o.get("from_dev")
+        to_dev = o.get("to_dev")
+        reason = o.get("reason_code") or "unspecified"
+
+        if action == "reassign":
+            lines.append(
+                f"- {ticket_key} reassigned {from_dev or '?'} → {to_dev or '?'} "
+                f"(reason: {reason})"
+            )
+        elif action == "remove":
+            lines.append(
+                f"- {ticket_key} removed from {from_dev or '?'} (reason: {reason})"
+            )
+        elif action == "add":
+            lines.append(
+                f"- {ticket_key} added to {to_dev or '?'} (reason: {reason})"
+            )
+        else:
+            # Unknown action — fall back to a generic line
+            lines.append(f"- {ticket_key} {action} (reason: {reason})")
+
+    if total > _MAX_OVERRIDES_IN_PROMPT:
+        lines.append(
+            f"... (+{total - _MAX_OVERRIDES_IN_PROMPT} more overrides omitted)"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _build_assignment_message(
     inp: SprintBrainInput,
     complexity_analysis: list[dict],
     eligible_profiles: list[dict],
+    overrides_section: str = "",
 ) -> str:
     # Index complexity by ticket_id for quick lookup
     complexity_map = {c["ticket_id"]: c for c in complexity_analysis}
@@ -381,14 +574,31 @@ def _build_assignment_message(
         if breakdown:
             lines.append("  Historical velocity breakdown:")
             for row in breakdown:
-                ttype = row.get("ticket_type", "?")
-                domain = row.get("domain", "?")
-                avg = row.get("avg_pts", "?")
-                count = row.get("sample_count", "?")
-                lines.append(f"    {domain} / {ttype} → {count} sprints, avg {avg} pts/sprint")
+                # Support both shapes: legacy (ticket_type/domain) and per-skill ({skill, avg_pts, sample_count}).
+                if "skill" in row:
+                    skill = row.get("skill", "?")
+                    avg = row.get("avg_pts", "?")
+                    count = row.get("sample_count", "?")
+                    lines.append(f"    skill={skill} → {count} tickets, avg {avg} pts (weighted)")
+                else:
+                    ttype = row.get("ticket_type", "?")
+                    domain = row.get("domain", "?")
+                    avg = row.get("avg_pts", "?")
+                    count = row.get("sample_count", "?")
+                    lines.append(f"    {domain} / {ttype} → {count} sprints, avg {avg} pts/sprint")
         else:
             lines.append("  Historical velocity breakdown: no data recorded")
+
+        # Skill ratings (from self-assessment / onboarding) — emit only if non-empty.
+        skill_ratings_line = _format_skill_inline(profile.get("skill_ratings") or {})
+        if skill_ratings_line:
+            lines.append(f"  Skill ratings: {skill_ratings_line}")
         lines.append("")
+
+    if overrides_section:
+        # Insert before the candidate-tickets list so Claude sees override
+        # patterns alongside developer + ticket context.
+        lines.append(overrides_section)
 
     lines += ["## Candidate Tickets (with complexity analysis)", ""]
     for i, ticket in enumerate(inp.candidate_tickets, 1):
@@ -408,6 +618,11 @@ def _build_assignment_message(
             lines.append(f"   Est. days : {analysis.get('estimated_days', '?')}")
             lines.append(f"   Skills    : {', '.join(analysis.get('required_skills', []))}")
             lines.append(f"   Notes     : {analysis.get('complexity_notes', '')}")
+
+        # Per-ticket skill_vector from TicketSkillAnalysis (optional enrichment).
+        ticket_skill_line = _format_skill_inline(ticket.get("skill_vector") or {})
+        if ticket_skill_line:
+            lines.append(f"   Required skills: {ticket_skill_line}")
         lines.append("")
 
     if inp.historical_patterns:
@@ -429,6 +644,70 @@ def _build_assignment_message(
 # ---------------------------------------------------------------------------
 # Developer profile builder — capacity-aware
 # ---------------------------------------------------------------------------
+
+
+async def _compute_skill_velocity_breakdown(
+    developer_id,
+    team_id,
+    db: AsyncSession,
+) -> list[dict]:
+    """
+    Aggregate per-skill historical velocity for a developer from
+    TicketSkillAnalysis rows joined to completed Tickets they were assigned to.
+
+    Returns a list of {skill, avg_pts, sample_count} dicts. Empty list if
+    the developer has no completed tickets with skill analyses.
+    """
+    dev_uuid = uuid.UUID(str(developer_id)) if not isinstance(developer_id, uuid.UUID) else developer_id
+
+    stmt = (
+        select(Ticket, TicketSkillAnalysis)
+        .join(TicketSkillAnalysis, TicketSkillAnalysis.ticket_id == Ticket.id)
+        .where(
+            Ticket.assignee_id == dev_uuid,
+            Ticket.status == TicketStatus.DONE,
+        )
+        .order_by(Ticket.completed_at.desc())
+        .limit(100)
+    )
+    try:
+        result = await db.execute(stmt)
+        rows = result.all()
+    except Exception:
+        # Defensive: if the join fails (e.g. schema mismatch in tests), fall back to empty.
+        return []
+
+    # skill -> [weighted_pts_sum, weight_sum, count]
+    accum: dict[str, list[float]] = {}
+    for ticket, analysis in rows:
+        story_points = float(ticket.story_points_estimated or 0.0)
+        skill_vector = analysis.skill_vector or {}
+        if not isinstance(skill_vector, dict):
+            continue
+        for skill, weight in skill_vector.items():
+            try:
+                w = float(weight)
+            except (TypeError, ValueError):
+                continue
+            if w < 0.1:
+                continue
+            bucket = accum.setdefault(skill, [0.0, 0.0, 0])
+            bucket[0] += story_points * w
+            bucket[1] += w
+            bucket[2] += 1
+
+    breakdown: list[dict] = []
+    for skill, (weighted_sum, weight_sum, count) in accum.items():
+        if weight_sum <= 0:
+            continue
+        avg_pts = round(weighted_sum / weight_sum, 2)
+        breakdown.append({
+            "skill": skill,
+            "avg_pts": avg_pts,
+            "sample_count": count,
+        })
+
+    return breakdown
 
 
 async def _get_developer_profiles(
@@ -516,25 +795,34 @@ async def _get_developer_profiles(
             per_dev_velocity * capacity_pct * (1 - meeting_overhead_pct), 1
         )
 
+        default_breakdown = [
+            {
+                "ticket_type": "general",
+                "domain": dev.role or "Engineering",
+                "avg_pts": per_dev_velocity,
+                "sample_count": sprint_count,
+            }
+        ] if sprint_count > 0 else []
+
+        # Try to enrich with per-skill aggregation. If no analysis data exists,
+        # fall back to the single-row default above.
+        skill_breakdown = await _compute_skill_velocity_breakdown(dev.id, team_uuid, db)
+        velocity_breakdown = skill_breakdown if skill_breakdown else default_breakdown
+
         profiles.append({
             "developer_id": str(dev.id),
             "display_name": dev.name,
             "role": dev.role or "Engineer",
             "email": dev.email or "",
+            "seniority": dev.seniority,
+            "skill_ratings": dev.skill_ratings or {},
             "velocity": per_dev_velocity,
             "sprint_count": sprint_count,
             "avg_points_per_sprint": per_dev_velocity,
             "safe_capacity_pts": safe_capacity_pts,
             "meetingOverheadPct": meeting_overhead_pct,
             "capacityOverridePct": capacity_pct,
-            "velocity_breakdown": [
-                {
-                    "ticket_type": "general",
-                    "domain": dev.role or "Engineering",
-                    "avg_pts": per_dev_velocity,
-                    "sample_count": sprint_count,
-                }
-            ] if sprint_count > 0 else [],
+            "velocity_breakdown": velocity_breakdown,
         })
 
     return profiles
@@ -548,6 +836,7 @@ async def _get_developer_profiles(
 async def generate_sprint_plan(
     inp: SprintBrainInput,
     anthropic_api_key: str,
+    db: AsyncSession | None = None,
 ) -> SprintBrainOutput:
     """
     Generate an AI-powered sprint plan using a two-step Claude Opus 4.6 pipeline.
@@ -577,12 +866,25 @@ async def generate_sprint_plan(
 
     client = anthropic.AsyncAnthropic(api_key=anthropic_api_key)
 
+    # Resolve override context (last-N completed sprints) when a DB session
+    # is available. Safe no-op for legacy callers / tests that don't pass db.
+    overrides_section = ""
+    if db is not None:
+        try:
+            recent_overrides = await _fetch_recent_overrides(inp.team_id, db, n_sprints=2)
+            overrides_section = _format_overrides_section(recent_overrides)
+        except Exception:
+            logger.warning("Failed to fetch sprint plan overrides; proceeding without.", exc_info=True)
+            overrides_section = ""
+
     try:
         # --- Call 1: ticket complexity analysis ---
         complexity_analysis = await _analyse_ticket_complexity(inp.candidate_tickets, client)
 
         # --- Call 2: assignment generation with historical citations ---
-        assignment_message = _build_assignment_message(inp, complexity_analysis, eligible_profiles)
+        assignment_message = _build_assignment_message(
+            inp, complexity_analysis, eligible_profiles, overrides_section=overrides_section,
+        )
         response = await client.messages.create(
             model=_MODEL,
             max_tokens=16384,
@@ -614,6 +916,7 @@ async def simulate_what_if(
     inp: SprintBrainInput,
     dropped_ticket_ids: list[str],
     anthropic_api_key: str,
+    db: AsyncSession | None = None,
 ) -> SprintBrainOutput:
     """
     Re-run sprint planning with the specified tickets removed from the
@@ -634,4 +937,6 @@ async def simulate_what_if(
         sprint_start_date=inp.sprint_start_date,
         pto_overrides=inp.pto_overrides,
     )
+    if db is not None:
+        return await generate_sprint_plan(modified_input, anthropic_api_key, db=db)
     return await generate_sprint_plan(modified_input, anthropic_api_key)

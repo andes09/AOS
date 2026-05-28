@@ -3,6 +3,7 @@ import { useAuth } from '@clerk/clerk-react'
 import { useApi, ApiError } from '../lib/api'
 import { SectorHealthBanner } from '../components/exec/SectorHealthBanner'
 import { TeamHealthCard } from '../components/exec/TeamHealthCard'
+import { PlanQualityChart } from '../components/exec/PlanQualityChart'
 import { Alert } from '../components/ui/Alert'
 import { SectorOverviewResponse } from '../types/exec'
 
@@ -86,6 +87,9 @@ export function ExecDashboardPage() {
             <div style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', textAlign: 'center', marginTop: 32 }}>
               No teams found in this organization.
             </div>
+          )}
+          {data.teams.length > 0 && (
+            <PlanQualityChart teams={data.teams} />
           )}
         </>
       )}

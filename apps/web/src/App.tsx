@@ -11,6 +11,8 @@ import { RetrospectivePage } from './pages/RetrospectivePage'
 import { OnboardingPage } from './pages/OnboardingPage'
 import { TeamSetupPage } from './pages/TeamSetupPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { TeamGlossaryPage } from './pages/settings/TeamGlossaryPage'
+import { CalibrationSuggestionsPage } from './pages/settings/CalibrationSuggestionsPage'
 import { MultiTeamDashboardPage } from './pages/MultiTeamDashboardPage'
 import { InviteAcceptPage } from './pages/InviteAcceptPage'
 
@@ -55,6 +57,8 @@ export default function App() {
           <RequireFeature flag="multi_team_dashboard"><MultiTeamDashboardPage /></RequireFeature>
         } />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="settings/glossary" element={<TeamGlossaryPage />} />
+        <Route path="settings/calibration" element={<CalibrationSuggestionsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/app" replace />} />
     </Routes>

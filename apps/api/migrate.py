@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
 
 
-HEAD = "0015"
+HEAD = "0019"
 
 MIGRATIONS = [
     # (revision_id, sql_statements)
@@ -363,6 +363,81 @@ MIGRATIONS = [
         """,
         """CREATE INDEX IF NOT EXISTS ix_sprint_alerts_sprint_id ON sprint_alerts(sprint_id)""",
         """CREATE INDEX IF NOT EXISTS ix_sprint_alerts_team_id ON sprint_alerts(team_id)""",
+    ]),
+    ("0017", [
+        """
+        CREATE TABLE IF NOT EXISTS team_identifiers (
+            id                UUID PRIMARY KEY,
+            team_id           UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+            token             TEXT NOT NULL,
+            normalized_token  TEXT NOT NULL,
+            skill             VARCHAR(100) NOT NULL,
+            domain            VARCHAR(50) NULL,
+            confidence        FLOAT NOT NULL DEFAULT 0.5,
+            source            VARCHAR(30) NOT NULL,
+            occurrence_count  INTEGER NOT NULL DEFAULT 1,
+            first_seen_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+            last_seen_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_team_identifier_token UNIQUE (team_id, token)
+        )
+        """,
+        """CREATE INDEX IF NOT EXISTS ix_team_identifiers_team_id ON team_identifiers(team_id)""",
+        """CREATE INDEX IF NOT EXISTS ix_team_identifiers_team_normalized ON team_identifiers(team_id, normalized_token)""",
+        """
+        CREATE TABLE IF NOT EXISTS ticket_skill_analyses (
+            id                  UUID PRIMARY KEY,
+            ticket_id           UUID NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+            skill_vector        JSONB NOT NULL DEFAULT '{}'::jsonb,
+            domain_vector       JSONB NOT NULL DEFAULT '{}'::jsonb,
+            matched_identifiers JSONB NOT NULL DEFAULT '[]'::jsonb,
+            analyzed_at         TIMESTAMP NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_ticket_skill_analysis UNIQUE (ticket_id)
+        )
+        """,
+        """CREATE INDEX IF NOT EXISTS ix_ticket_skill_analyses_ticket_id ON ticket_skill_analyses(ticket_id)""",
+        """ALTER TABLE developers ADD COLUMN IF NOT EXISTS skill_ratings JSONB NULL""",
+    ]),
+    ("0018", [
+        """
+        CREATE TABLE IF NOT EXISTS sprint_plan_overrides (
+            id                       UUID PRIMARY KEY,
+            sprint_id                UUID NOT NULL REFERENCES sprints(id) ON DELETE CASCADE,
+            ticket_id                UUID NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+            action                   VARCHAR(20) NOT NULL,
+            original_developer_id    UUID NULL REFERENCES developers(id) ON DELETE SET NULL,
+            new_developer_id         UUID NULL REFERENCES developers(id) ON DELETE SET NULL,
+            reason_code              VARCHAR(30) NULL,
+            reason_text              TEXT NULL,
+            created_by               UUID NULL,
+            created_at               TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        """CREATE INDEX IF NOT EXISTS ix_sprint_plan_overrides_sprint_id ON sprint_plan_overrides(sprint_id)""",
+        """CREATE INDEX IF NOT EXISTS ix_sprint_plan_overrides_ticket_new ON sprint_plan_overrides(ticket_id, new_developer_id)""",
+        """ALTER TABLE sprints ADD COLUMN IF NOT EXISTS plan_override_rate FLOAT NULL""",
+        """ALTER TABLE sprints ADD COLUMN IF NOT EXISTS plan_overrides_by_reason JSONB NULL""",
+    ]),
+    ("0019", [
+        """
+        CREATE TABLE IF NOT EXISTS recalibration_proposals (
+            id               UUID PRIMARY KEY,
+            team_id          UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+            kind             VARCHAR(20) NOT NULL,
+            developer_id     UUID NULL REFERENCES developers(id) ON DELETE CASCADE,
+            identifier_id    UUID NULL REFERENCES team_identifiers(id) ON DELETE CASCADE,
+            skill            VARCHAR(100) NULL,
+            current_value    FLOAT NULL,
+            suggested_value  FLOAT NULL,
+            suggested_skill  VARCHAR(100) NULL,
+            evidence         JSONB NOT NULL DEFAULT '[]'::jsonb,
+            status           VARCHAR(15) NOT NULL DEFAULT 'pending',
+            decided_at       TIMESTAMP NULL,
+            decided_by       UUID NULL,
+            created_at       TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        """CREATE INDEX IF NOT EXISTS ix_recalibration_proposals_team_status ON recalibration_proposals(team_id, status)""",
+        """CREATE INDEX IF NOT EXISTS ix_recalibration_proposals_target ON recalibration_proposals(developer_id, identifier_id, skill)""",
     ]),
 ]
 

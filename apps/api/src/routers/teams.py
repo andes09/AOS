@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -131,6 +131,17 @@ class MemberSetupIn(BaseModel):
     capacity_hours_per_week: int
     domain_strengths: list[str]
     meeting_hours_bucket: str
+    skill_ratings: dict[str, float] | None = None
+
+    @field_validator("skill_ratings")
+    @classmethod
+    def _validate_skill_ratings(cls, v: dict[str, float] | None) -> dict[str, float] | None:
+        if v is None:
+            return v
+        for _key, val in v.items():
+            if val < 0.0 or val > 1.0:
+                raise ValueError("skill_ratings values must be between 0.0 and 1.0")
+        return v
 
 
 class TeamSetupRequest(BaseModel):
@@ -487,6 +498,7 @@ async def team_setup(
             capacity_hours_per_week=member.capacity_hours_per_week,
             domain_strengths=json.dumps(member.domain_strengths),
             meeting_hours_bucket=member.meeting_hours_bucket,
+            skill_ratings=member.skill_ratings,
         )
         db.add(dev)
 

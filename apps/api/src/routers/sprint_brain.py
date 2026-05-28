@@ -211,6 +211,29 @@ async def _get_candidate_tickets(team_id: str, db: AsyncSession) -> list[dict]:
         .order_by(Ticket.story_points_estimated.desc().nulls_last())
         .limit(50)
     )).all()
+
+    # Attach per-ticket skill_vector + matched_identifiers from TicketSkillAnalysis
+    # (additive enrichment).
+    skill_vectors: dict = {}
+    matched_identifiers_map: dict = {}
+    try:
+        from src.models.identifier import TicketSkillAnalysis
+        ticket_ids = [t.id for t in tickets]
+        if ticket_ids:
+            analyses = (await db.scalars(
+                select(TicketSkillAnalysis).where(
+                    TicketSkillAnalysis.ticket_id.in_(ticket_ids)
+                )
+            )).all()
+            skill_vectors = {a.ticket_id: (a.skill_vector or {}) for a in analyses}
+            matched_identifiers_map = {
+                a.ticket_id: (a.matched_identifiers or []) for a in analyses
+            }
+    except Exception:
+        # Defensive: never block plan generation on enrichment failure.
+        skill_vectors = {}
+        matched_identifiers_map = {}
+
     return [
         {
             "id": t.jira_issue_key or str(t.id),
@@ -218,6 +241,8 @@ async def _get_candidate_tickets(team_id: str, db: AsyncSession) -> list[dict]:
             "story_points": t.story_points_estimated or 0,
             "priority": "medium",
             "labels": t.labels or [],
+            "skill_vector": skill_vectors.get(t.id, {}),
+            "matched_identifiers": matched_identifiers_map.get(t.id, []),
         }
         for t in tickets
     ]
@@ -402,12 +427,18 @@ def _sprint_plan_response(
 ) -> dict:
     dev_name_map = {p["developer_id"].lower(): p["display_name"] for p in developer_profiles}
     ticket_title_map = {t["id"]: t["summary"] for t in candidate_tickets}
+    ticket_skill_map = {t["id"]: t.get("skill_vector", {}) for t in candidate_tickets}
+    ticket_identifiers_map = {
+        t["id"]: t.get("matched_identifiers", []) for t in candidate_tickets
+    }
     enriched_assignments = [
         {
             **a,
             "developer_id": a.get("developer_id", "").lower(),
             "developer_name": dev_name_map.get(a.get("developer_id", "").lower(), a.get("developer_id", "")),
             "title": ticket_title_map.get(a.get("ticket_id", ""), a.get("ticket_id", "")),
+            "skill_vector": ticket_skill_map.get(a.get("ticket_id", ""), {}),
+            "matched_identifiers": ticket_identifiers_map.get(a.get("ticket_id", ""), []),
         }
         for a in plan.assignments
     ]
@@ -531,7 +562,7 @@ async def create_sprint_plan(
         pass  # non-UUID team_id or DB error — proceed without patterns
 
     try:
-        plan = await generate_sprint_plan(brain_input, api_key)
+        plan = await generate_sprint_plan(brain_input, api_key, db=db)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except RuntimeError as exc:

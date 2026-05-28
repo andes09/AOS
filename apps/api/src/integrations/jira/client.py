@@ -173,6 +173,39 @@ class JiraClient:
             )
             r.raise_for_status()
 
+    async def get_issue(self, issue_key: str) -> dict:
+        """
+        GET /rest/api/3/issue/{issue_key} with the fields needed for
+        identifier-bootstrap scanning.
+
+        Returns the raw Jira issue payload:
+            {"key": "PROJ-123",
+             "fields": {"summary", "description",
+                        "customfield_10014", "parent", "issuetype"}}
+
+        Only the fields required by the bootstrap corpus helper are requested
+        (``fields=description,customfield_10014,parent,summary,issuetype``) to
+        keep the payload small. Raises ``HTTPException(404)`` when the issue
+        is not found, mirroring :meth:`get_issue_links`.
+        """
+        from fastapi import HTTPException
+
+        async with httpx.AsyncClient() as c:
+            r = await c.get(
+                f"{self.base_url}/issue/{issue_key}",
+                headers=self._headers(),
+                params={"fields": "description,customfield_10014,parent,summary,issuetype"},
+            )
+            if r.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"Issue {issue_key} not found in Jira")
+            if not r.is_success:
+                logger.error(
+                    "Jira get_issue %s — status=%s body=%s",
+                    issue_key, r.status_code, r.text[:500],
+                )
+            r.raise_for_status()
+            return r.json()
+
     async def get_issue_links(self, issue_key: str) -> list[dict]:
         """
         GET /rest/api/3/issue/{key}?fields=issuelinks,summary

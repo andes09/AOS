@@ -7,12 +7,15 @@ from src.models.jira_connection import JiraConnection
 from src.models.alert import SprintAlert, AlertType
 from src.models.ticket import Ticket, TicketStatus
 from src.models.scope_cop import ScopeCopStatus, TicketAnalysis
+from src.models.identifier import IdentifierSource, TeamIdentifier, TicketSkillAnalysis
 from src.models.dependency_radar import DependencyType, RiskLevel, Dependency
 from src.models.retro import PatternType, PatternStatus, Retrospective, RetroPattern
 from src.models.invitation import Invitation, InvitationStatus
 from src.models.capacity import DeveloperCapacityOverride
 from src.models.team_access import TeamAccessGrant
 from src.models.slack_config import SlackConfig
+from src.models.sprint_plan_override import SprintPlanOverride, OverrideAction, OverrideReason
+from src.models.recalibration_proposal import RecalibrationProposal, ProposalKind, ProposalStatus
 
 __all__ = [
     "Organization",
@@ -31,6 +34,9 @@ __all__ = [
     "TicketStatus",
     "ScopeCopStatus",
     "TicketAnalysis",
+    "IdentifierSource",
+    "TeamIdentifier",
+    "TicketSkillAnalysis",
     "DependencyType",
     "RiskLevel",
     "Dependency",
@@ -43,4 +49,10 @@ __all__ = [
     "DeveloperCapacityOverride",
     "TeamAccessGrant",
     "SlackConfig",
+    "SprintPlanOverride",
+    "OverrideAction",
+    "OverrideReason",
+    "RecalibrationProposal",
+    "ProposalKind",
+    "ProposalStatus",
 ]

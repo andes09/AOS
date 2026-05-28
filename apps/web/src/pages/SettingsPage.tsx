@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useApi, ApiError } from '../lib/api'
 import { useAppRole } from '../hooks/useAppRole'
 import { Card, CardHeader, CardBody } from '../components/ui/Card'
@@ -484,6 +484,62 @@ export function SettingsPage() {
                 </div>
               </div>
             )}
+          </CardBody>
+        </Card>
+      )}
+
+      {/* Team Glossary */}
+      {isLead && (
+        <Card style={sectionGap}>
+          <CardHeader>
+            <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
+              Team Glossary
+            </span>
+          </CardHeader>
+          <CardBody>
+            <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: '0 0 12px' }}>
+              Identifiers your team has used in past tickets, mapped to skills.
+            </p>
+            <Link
+              to="/app/settings/glossary"
+              style={{
+                color: 'var(--color-accent)',
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--text-sm)',
+                fontWeight: 500,
+                textDecoration: 'none',
+              }}
+            >
+              Manage glossary →
+            </Link>
+          </CardBody>
+        </Card>
+      )}
+
+      {/* Calibration Suggestions */}
+      {isLead && (
+        <Card style={sectionGap}>
+          <CardHeader>
+            <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
+              Calibration Suggestions
+            </span>
+          </CardHeader>
+          <CardBody>
+            <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: '0 0 12px' }}>
+              Sprint Brain learns from your overrides and proposes skill/identifier recalibrations.
+            </p>
+            <Link
+              to="/app/settings/calibration"
+              style={{
+                color: 'var(--color-accent)',
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--text-sm)',
+                fontWeight: 500,
+                textDecoration: 'none',
+              }}
+            >
+              Review suggestions →
+            </Link>
           </CardBody>
         </Card>
       )}

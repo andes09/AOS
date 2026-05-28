@@ -1,10 +1,13 @@
 import uuid
 import enum
 from datetime import datetime
-from sqlalchemy import String, Text, Integer, DateTime, ForeignKey, UniqueConstraint, Enum as SAEnum
+from sqlalchemy import String, Text, Integer, DateTime, ForeignKey, UniqueConstraint, Enum as SAEnum, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from src.database import Base
+
+
+_JSONB_OR_JSON = JSON().with_variant(JSONB(), "postgresql")
 
 
 class ScopeCopStatus(enum.Enum):
@@ -28,6 +31,6 @@ class TicketAnalysis(Base):
         SAEnum(ScopeCopStatus, native_enum=False, values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
     )
-    issues: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    suggestions: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    issues: Mapped[list | None] = mapped_column(_JSONB_OR_JSON, nullable=True)
+    suggestions: Mapped[list | None] = mapped_column(_JSONB_OR_JSON, nullable=True)
     analyzed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

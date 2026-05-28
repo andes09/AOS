@@ -6,6 +6,7 @@ Endpoints
 GET /api/exec/sector-overview
     Aggregate health overview for all teams in the organisation.
 """
+import uuid
 from datetime import date, timedelta
 from typing import Literal
 
@@ -23,6 +24,10 @@ from src.models.organization import Organization
 from src.models.sprint import Sprint, SprintStatus, SprintTicket
 from src.models.team import Team
 from src.services.health import compute_health_score
+from src.services.plan_quality import (
+    get_trailing_override_rates,
+    persist_plan_quality,
+)
 
 exec_router = APIRouter(tags=["exec"])
 
@@ -216,3 +221,86 @@ async def get_sector_overview(
         team_count=len(teams),
         teams=team_summaries,
     )
+
+
+# ---------------------------------------------------------------------------
+# Plan-quality telemetry (Initiative A, Wave 4 — SA-15)
+# ---------------------------------------------------------------------------
+
+
+class PlanQualityPoint(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    sprint_id: str
+    sprint_name: str
+    completed_at: date | None
+    override_rate: float | None
+    overrides_by_reason: dict[str, int] | None
+
+
+class PlanQualityRecomputeResponse(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    recomputed_count: int
+
+
+async def _resolve_team_in_org(
+    team_id: str, clerk_org_id: str, db: AsyncSession
+) -> Team:
+    """Look up a team and 404 if it doesn't exist or belongs to another org."""
+    try:
+        team_uuid = uuid.UUID(team_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+    team = await db.scalar(select(Team).where(Team.id == team_uuid))
+    if team is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+
+    org = await db.scalar(
+        select(Organization).where(Organization.id == team.organization_id)
+    )
+    if org is None or org.clerk_org_id != clerk_org_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+    return team
+
+
+@exec_router.get("/plan-quality/{team_id}", response_model=list[PlanQualityPoint])
+async def get_plan_quality(
+    team_id: str,
+    n: int = 8,
+    _: str = Depends(require_role("lead")),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Trailing N completed-sprint override rates (oldest → newest)."""
+    await _resolve_team_in_org(team_id, clerk_org_id, db)
+    points = await get_trailing_override_rates(team_id, db, n_sprints=n)
+    return [PlanQualityPoint(**p) for p in points]
+
+
+@exec_router.post(
+    "/plan-quality/{team_id}/recompute", response_model=PlanQualityRecomputeResponse
+)
+async def recompute_plan_quality(
+    team_id: str,
+    _: str = Depends(require_role("lead")),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Backfill plan-quality telemetry for every completed sprint on this team."""
+    team = await _resolve_team_in_org(team_id, clerk_org_id, db)
+
+    completed = list(
+        (
+            await db.scalars(
+                select(Sprint).where(
+                    Sprint.team_id == team.id,
+                    Sprint.status == SprintStatus.COMPLETED,
+                )
+            )
+        ).all()
+    )
+    for sprint in completed:
+        await persist_plan_quality(sprint.id, db)
+    return PlanQualityRecomputeResponse(recomputed_count=len(completed))

@@ -1,9 +1,9 @@
 import uuid
 import enum
 from datetime import datetime, date
-from sqlalchemy import String, DateTime, Date, ForeignKey, Float, Boolean, Enum as SAEnum
+from sqlalchemy import JSON, String, DateTime, Date, ForeignKey, Float, Boolean, Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from src.database import Base
 
 
@@ -26,6 +26,13 @@ class Sprint(Base):
     committed_points: Mapped[float | None] = mapped_column(Float, nullable=True)
     delivered_points: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[SprintStatus] = mapped_column(SAEnum(SprintStatus, values_callable=lambda obj: [e.name for e in obj]), default=SprintStatus.PLANNING)
+    # Plan-quality telemetry (M8d, written by SA-15's aggregator). Override
+    # capture (M8a, SA-14) only writes the underlying rows; these columns
+    # remain NULL until the aggregator runs.
+    plan_override_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    plan_overrides_by_reason: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     team: Mapped["Team"] = relationship(back_populates="sprints")

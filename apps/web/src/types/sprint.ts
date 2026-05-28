@@ -48,6 +48,9 @@ export interface SprintPlanResponse {
   dependencyWarnings: DependencyWarning[]
   historicalWarnings: string[]
   enrichmentStatus: EnrichmentStatus
+  // Initiative B — Scope Cop auto-run on plan generation.
+  scopeCopRanAt?: string | null
+  scopeCopResults?: import('./inlineRefinement').ScopeCopResult[]
 }
 
 export interface WhatIfResponse {

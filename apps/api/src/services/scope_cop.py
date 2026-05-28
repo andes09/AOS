@@ -58,6 +58,10 @@ class TicketAnalysisResult(BaseModel):
     # fields will surface as ``None`` without crashing the API contract.
     stack_alignment: int | None = None
     matched_identifier_count: int | None = None
+    # Initiative B / Wave 0 SB-1: Scope Cop's proposed revision payload.
+    # Populated by SB-4 (Wave 1); None until then. Shape:
+    # {title?, description?, acceptance_criteria?: list[str], story_points?: int}
+    suggested_revision: dict | None = None
 
 
 # ---------------------------------------------------------------------------

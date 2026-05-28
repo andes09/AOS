@@ -6,6 +6,26 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 
+def _plain_text_to_adf(text: str) -> dict:
+    """Wrap a plain-text string in the minimal Atlassian Document Format envelope.
+
+    Jira's REST v3 ``description`` field requires ADF rather than raw text.
+    Initiative B v1 emits plain-text revisions only; richer formatting (bullets,
+    headings, links) is deferred to v2. This helper builds the smallest valid
+    ADF doc containing a single paragraph with the given text.
+    """
+    return {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": text}],
+            }
+        ],
+    }
+
+
 @dataclass
 class JiraClient:
     cloud_id: str
@@ -162,6 +182,42 @@ class JiraClient:
                     r.status_code, issue_keys, r.text[:500],
                 )
             r.raise_for_status()
+
+    async def update_issue(self, issue_key: str, fields: dict) -> dict:
+        """PUT /rest/api/3/issue/{issue_key} with body ``{"fields": fields}``.
+
+        Accepts arbitrary Jira field keys — ``summary``, ``description``,
+        ``customfield_xxx`` (story points / acceptance criteria),
+        ``assignee={"accountId": ...}``, etc. Jira returns ``204 No Content``
+        on success.
+
+        If ``fields`` contains a ``description`` key whose value is a string,
+        it is transparently wrapped in the minimal ADF envelope expected by
+        the v3 API (see :func:`_plain_text_to_adf`). A dict value is forwarded
+        unchanged so callers can supply pre-built ADF when needed.
+
+        Returns the input ``fields`` dict (with any string ``description``
+        replaced by its ADF form) on success. Raises ``httpx.HTTPStatusError``
+        on any non-2xx response, mirroring :meth:`assign_issue`.
+        """
+        payload_fields = dict(fields)
+        desc = payload_fields.get("description")
+        if isinstance(desc, str):
+            payload_fields["description"] = _plain_text_to_adf(desc)
+
+        async with httpx.AsyncClient() as c:
+            r = await c.put(
+                f"{self.base_url}/issue/{issue_key}",
+                headers={**self._headers(), "Content-Type": "application/json"},
+                json={"fields": payload_fields},
+            )
+            if not r.is_success:
+                logger.error(
+                    "Jira update_issue %s — status=%s body=%s",
+                    issue_key, r.status_code, r.text[:500],
+                )
+            r.raise_for_status()
+        return payload_fields
 
     async def assign_issue(self, issue_key: str, jira_account_id: str) -> None:
         """PUT /rest/api/3/issue/{key}/assignee"""

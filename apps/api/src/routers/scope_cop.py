@@ -63,6 +63,10 @@ class TicketAnalysisResult(BaseModel):
     # Wave 2 (Initiative A) — optional for backward compat with old cached rows.
     stack_alignment: int | None = None
     matched_identifier_count: int | None = None
+    # Initiative B / Wave 0 SB-1 — Scope Cop's proposed fix payload. Populated
+    # by SB-4; consumed by the inline-refinement UI (SB-7+). Shape:
+    # {title?, description?, acceptance_criteria?: list[str], story_points?: int}
+    suggested_revision: dict | None = None
 
 
 class ScopeCopSummary(BaseModel):

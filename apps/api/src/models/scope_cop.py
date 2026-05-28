@@ -33,4 +33,9 @@ class TicketAnalysis(Base):
     )
     issues: Mapped[list | None] = mapped_column(_JSONB_OR_JSON, nullable=True)
     suggestions: Mapped[list | None] = mapped_column(_JSONB_OR_JSON, nullable=True)
+    # Initiative B / Wave 0 SB-1: Scope Cop's proposed revision payload.
+    # Shape: {title?, description?, acceptance_criteria?: list[str], story_points?: int}
+    # All keys optional — omitted when Scope Cop has no suggestion for that field.
+    # SB-4 will populate; SB-7 reads back for revision previews.
+    suggested_revision: Mapped[dict | None] = mapped_column(_JSONB_OR_JSON, nullable=True)
     analyzed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

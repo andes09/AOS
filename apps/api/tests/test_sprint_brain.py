@@ -897,3 +897,202 @@ class TestOverrideContextInjection:
             overrides_section="",
         )
         assert "Previous Sprint Overrides" not in msg
+
+
+# ---------------------------------------------------------------------------
+# Initiative B / SB-5: Scope Cop auto-run between plan generation and enrichment
+# ---------------------------------------------------------------------------
+
+
+class TestScopeCopAutoRunOnPlan:
+    """create_sprint_plan must run scope_cop.analyze_tickets against every
+    assigned key *before* _build_enrichment, with failures swallowed so the
+    plan response is never blocked."""
+
+    _TEAM_UUID = "11111111-2222-3333-4444-555555555555"
+
+    def _make_plan_output(self, ticket_ids):
+        return SprintBrainOutput(
+            assignments=[
+                {
+                    "ticket_id": tid,
+                    "developer_id": "dev-1",
+                    "reasoning": "n/a",
+                    "confidence": 0.9,
+                    "story_points": 3,
+                }
+                for tid in ticket_ids
+            ],
+            confidence_score=0.8,
+            summary="ok",
+            warnings=[],
+            what_if_dropped={},
+            insufficient_data_devs=[],
+        )
+
+    def _make_request(self):
+        from src.routers.sprint_brain import PlanRequest
+        return PlanRequest(
+            team_id=self._TEAM_UUID,
+            sprint_length_days=14,
+            sprint_start_date="2026-03-17",
+            pto_overrides={},
+        )
+
+    def _patch_collaborators(
+        self,
+        plan_output,
+        analyze_side_effect=None,
+    ):
+        """Returns a list of patch context managers covering every collaborator
+        the endpoint touches except `scope_cop.analyze_tickets` itself, which
+        callers configure separately so they can assert on it.
+        """
+        mock_connection = MagicMock()
+        mock_connection.is_active = True
+
+        mock_team = MagicMock()
+        import uuid as _uuid
+        mock_team.id = _uuid.UUID(self._TEAM_UUID)
+        mock_team.organization_id = _uuid.UUID("99999999-9999-9999-9999-999999999999")
+
+        # db.scalar called twice in the new code path: once for Team, once for
+        # JiraConnection. Provide both in order.
+        scalar_returns = [mock_team, mock_connection]
+
+        async def fake_scalar(_q):
+            if scalar_returns:
+                return scalar_returns.pop(0)
+            return None
+
+        patches = [
+            patch(
+                "src.routers.sprint_brain.get_anthropic_key",
+                new=AsyncMock(return_value="sk-test"),
+            ),
+            patch(
+                "src.routers.sprint_brain._resolve_team_id",
+                new=AsyncMock(return_value=self._TEAM_UUID),
+            ),
+            patch(
+                "src.routers.sprint_brain._build_brain_input",
+                new=AsyncMock(
+                    return_value=(
+                        SAMPLE_INPUT,
+                        "2026-03-17",
+                        [],  # dev profiles
+                        [],  # candidate tickets
+                    )
+                ),
+            ),
+            patch(
+                "src.routers.sprint_brain.generate_sprint_plan",
+                new=AsyncMock(return_value=plan_output),
+            ),
+            patch(
+                "src.routers.sprint_brain._build_enrichment",
+                new=AsyncMock(
+                    return_value=(
+                        [],  # scope_warnings
+                        [],  # dep_warnings
+                        None,  # enrichment_status
+                        [],  # historical_warnings
+                        [],  # pattern_descriptions (unused)
+                    )
+                ),
+            ),
+            patch(
+                "src.routers.sprint_brain._get_fresh_client_async",
+                new=AsyncMock(return_value=MagicMock(name="jira_client")),
+            ),
+        ]
+        return patches, fake_scalar
+
+    @pytest.mark.asyncio
+    async def test_scope_cop_runs_against_assigned_keys_and_sets_timestamp(self):
+        ticket_ids = ["PROJ-1", "PROJ-2", "PROJ-3"]
+        plan_output = self._make_plan_output(ticket_ids)
+        patches, fake_scalar = self._patch_collaborators(plan_output)
+
+        mock_db = MagicMock()
+        mock_db.scalar = AsyncMock(side_effect=fake_scalar)
+        # No RetroPattern rows — make scalars return an iterable
+        _empty = MagicMock()
+        _empty.all = MagicMock(return_value=[])
+        mock_db.scalars = AsyncMock(return_value=_empty)
+
+        analyze_mock = AsyncMock(return_value=[])
+        patches.append(
+            patch(
+                "src.routers.sprint_brain.scope_cop.analyze_tickets",
+                new=analyze_mock,
+            )
+        )
+
+        from src.routers.sprint_brain import create_sprint_plan
+
+        # Enter all patches
+        for p in patches:
+            p.start()
+        try:
+            response = await create_sprint_plan(
+                request=self._make_request(),
+                clerk_org_id="org_test",
+                db=mock_db,
+            )
+        finally:
+            for p in patches:
+                p.stop()
+
+        analyze_mock.assert_awaited_once()
+        call_args = analyze_mock.await_args
+        # Positional: (team_id, ticket_keys, jira_client, db)
+        assert call_args.args[0] == self._TEAM_UUID
+        assert set(call_args.args[1]) == set(ticket_ids)
+
+        assert response["scopeCopRanAt"] is not None
+        # ISO-8601 format with timezone
+        assert "T" in response["scopeCopRanAt"]
+        # Response body still populated
+        assert len(response["assignments"]) == len(ticket_ids)
+
+    @pytest.mark.asyncio
+    async def test_scope_cop_failure_does_not_block_plan(self):
+        ticket_ids = ["PROJ-1", "PROJ-2"]
+        plan_output = self._make_plan_output(ticket_ids)
+        patches, fake_scalar = self._patch_collaborators(plan_output)
+
+        mock_db = MagicMock()
+        mock_db.scalar = AsyncMock(side_effect=fake_scalar)
+        _empty = MagicMock()
+        _empty.all = MagicMock(return_value=[])
+        mock_db.scalars = AsyncMock(return_value=_empty)
+
+        # Scope Cop blows up — endpoint must still return.
+        analyze_mock = AsyncMock(side_effect=RuntimeError("claude went brrr"))
+        patches.append(
+            patch(
+                "src.routers.sprint_brain.scope_cop.analyze_tickets",
+                new=analyze_mock,
+            )
+        )
+
+        from src.routers.sprint_brain import create_sprint_plan
+
+        for p in patches:
+            p.start()
+        try:
+            response = await create_sprint_plan(
+                request=self._make_request(),
+                clerk_org_id="org_test",
+                db=mock_db,
+            )
+        finally:
+            for p in patches:
+                p.stop()
+
+        analyze_mock.assert_awaited_once()
+        assert response["scopeCopRanAt"] is None
+        # Plan body still populated despite Scope Cop failure
+        assert len(response["assignments"]) == len(ticket_ids)
+        assert response["summary"] == "ok"

@@ -62,6 +62,12 @@ class TicketAnalysisResult(BaseModel):
     # Populated by SB-4 (Wave 1); None until then. Shape:
     # {title?, description?, acceptance_criteria?: list[str], story_points?: int}
     suggested_revision: dict | None = None
+    # Initiative B / Wave 1 SB-6: Jira's ``fields.updated`` ISO-8601 timestamp
+    # captured at fetch time. Surfaced to the API response so the editor modal
+    # can echo it back on push for stale-write detection
+    # (see ``JiraClient.check_stale``). NOT persisted — lives in-memory for
+    # the duration of the analyze → review → push round-trip.
+    fetched_updated_at: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +188,38 @@ _SCOPE_COP_TOOL: dict = {
                             "items": {"type": "string"},
                             "description": "Actionable improvements to bring the ticket to ready.",
                         },
+                        "suggested_revision": {
+                            "type": "object",
+                            "description": (
+                                "Concrete content to apply if user accepts. "
+                                "Use null for fields you have no improvement for."
+                            ),
+                            "properties": {
+                                "title": {
+                                    "type": ["string", "null"],
+                                    "description": "Suggested replacement title; null if current is fine",
+                                },
+                                "description": {
+                                    "type": ["string", "null"],
+                                    "description": (
+                                        "Plain-text replacement description (no markdown); "
+                                        "null if current is fine"
+                                    ),
+                                },
+                                "acceptance_criteria": {
+                                    "type": ["array", "null"],
+                                    "items": {"type": "string"},
+                                    "description": (
+                                        "Bullet list of AC strings; null if current AC is fine"
+                                    ),
+                                },
+                                "story_points": {
+                                    "type": ["integer", "null"],
+                                    "description": "Revised point estimate; null if current is fine",
+                                },
+                            },
+                            "additionalProperties": False,
+                        },
                     },
                     "required": [
                         "ticketKey",
@@ -192,6 +230,7 @@ _SCOPE_COP_TOOL: dict = {
                         "suggestions",
                         "stack_alignment",
                         "matched_identifier_count",
+                        "suggested_revision",
                     ],
                     "additionalProperties": False,
                 },
@@ -234,7 +273,33 @@ Status derived from score:
 
 For each ticket, list concrete issues found and specific, actionable suggestions to fix them.
 Echo the per-ticket `matched_identifier_count` you were given back in the response \
-(use 0 if the prompt says "unknown" — but only after applying the neutral-10 rule above). \
+(use 0 if the prompt says "unknown" — but only after applying the neutral-10 rule above).
+
+## Suggested revision — produce fix CONTENT, not descriptions of issues
+
+For each ticket, you MUST populate the `suggested_revision` object with the *exact text* \
+a user could accept verbatim and push to Jira. This is the concrete fix, not a critique.
+
+Rules per field:
+- `title`: if the current title is fine, set to `null`. Otherwise return a sharper \
+  replacement title — ready to push as-is.
+- `description`: if the current description is fine, set to `null`. Otherwise return a \
+  plain-text replacement description (no markdown, no ADF — plain text only). Include \
+  context, scope boundaries, and any clarifying detail the user would normally write.
+- `acceptance_criteria`: if the ticket already has clear, testable AC, set to `null`. \
+  Otherwise return an array of 2–5 concrete AC bullet strings (each one a single \
+  testable success condition — plain strings, no leading "- " or numbering).
+- `story_points`: if the current estimate is set and sensible, set to `null`. Otherwise \
+  return a revised integer estimate (Fibonacci: 1, 2, 3, 5, 8, 13).
+
+Every field is nullable individually — set only what you'd actually change. But the \
+`suggested_revision` object itself is REQUIRED on every ticket. If you have no \
+improvements at all, return `{"title": null, "description": null, \
+"acceptance_criteria": null, "story_points": null}`.
+
+The `issues` and `suggestions` arrays remain unchanged in purpose — they describe what's \
+wrong and what to do. `suggested_revision` is the actual fix content the user can apply.
+
 Always respond by calling the score_tickets tool.\
 """
 
@@ -245,17 +310,28 @@ Always respond by calling the score_tickets tool.\
 
 
 async def _fetch_ticket(jira_client, key: str) -> dict:
-    """Fetch a single Jira issue: summary, description, story points."""
+    """Fetch a single Jira issue: summary, description, story points, updated.
+
+    The ``updated`` field is Jira's ISO-8601 last-modified timestamp, surfaced
+    to callers as ``fetched_updated_at`` for Initiative B stale-write detection
+    (SB-6).
+    """
     url = (
         f"https://api.atlassian.com/ex/jira/{jira_client.cloud_id}"
         f"/rest/api/3/issue/{key}"
-        "?fields=summary,description,story_points,customfield_10016,customfield_10028"
+        "?fields=summary,description,updated,story_points,customfield_10016,customfield_10028"
     )
     async with httpx.AsyncClient() as c:
         r = await c.get(url, headers=jira_client._headers())
         if r.status_code == 404:
             logger.warning("Jira issue %s not found — using stub entry", key)
-            return {"key": key, "summary": key, "description": None, "story_points": None}
+            return {
+                "key": key,
+                "summary": key,
+                "description": None,
+                "story_points": None,
+                "updated": None,
+            }
         r.raise_for_status()
         data = r.json()
 
@@ -274,6 +350,7 @@ async def _fetch_ticket(jira_client, key: str) -> dict:
         "summary": fields.get("summary") or key,
         "description": description,
         "story_points": story_points,
+        "updated": fields.get("updated"),
     }
 
 
@@ -312,7 +389,11 @@ def _build_prompt(
         lines.append(f"Description:\n{str(desc)[:1000]}")
         lines.append("")
     lines.append(
-        "Evaluate each ticket against the five readiness criteria and call score_tickets."
+        "Evaluate each ticket against the five readiness criteria and call score_tickets. "
+        "For every ticket, populate `suggested_revision` with the exact replacement content "
+        "(title / description / acceptance_criteria / story_points) the user could accept "
+        "verbatim and push to Jira. Use null on fields that need no change. "
+        "Plain text only in `description` — no markdown."
     )
     return "\n".join(lines)
 
@@ -423,6 +504,12 @@ async def analyze_tickets(
         ticket = await _fetch_ticket(jira_client, key)
         tickets.append(ticket)
 
+    # SB-6: snapshot each ticket's Jira ``updated`` stamp so the editor modal
+    # can echo it back on push for stale-write detection (check_stale).
+    fetched_updated_by_key: dict[str, str | None] = {
+        t["key"]: t.get("updated") for t in tickets
+    }
+
     # 1b. Pull matched-identifier counts so Claude can score `stack_alignment`.
     # Missing analysis rows → None → "unknown" in the prompt.
     match_counts = await _fetch_match_counts(team_id, ticket_keys, db)
@@ -491,23 +578,44 @@ async def analyze_tickets(
             *clean_suggestions,
         ]
 
+        # Initiative B / SB-4: Claude's proposed concrete revision content.
+        # Tolerate Claude omitting the key entirely (backward compat / safety net)
+        # — defaults to None which round-trips as SQL NULL.
+        raw_revision = item.get("suggested_revision")
+        suggested_revision: dict | None
+        if isinstance(raw_revision, dict):
+            # Keep only the four allowed keys; drop unknowns defensively.
+            suggested_revision = {
+                k: raw_revision.get(k)
+                for k in ("title", "description", "acceptance_criteria", "story_points")
+                if k in raw_revision
+            }
+            # If every field is missing, treat as None (nothing to persist).
+            if not suggested_revision:
+                suggested_revision = None
+        else:
+            suggested_revision = None
+
         await db.execute(
             text("""
                 INSERT INTO ticket_analyses
                     (id, team_id, ticket_key, ticket_title,
-                     readiness_score, status, issues, suggestions, analyzed_at)
+                     readiness_score, status, issues, suggestions,
+                     suggested_revision, analyzed_at)
                 VALUES
                     (:id, :team_id, :ticket_key, :ticket_title,
                      :readiness_score, :status,
-                     CAST(:issues AS jsonb), CAST(:suggestions AS jsonb), :analyzed_at)
+                     CAST(:issues AS jsonb), CAST(:suggestions AS jsonb),
+                     CAST(:suggested_revision AS jsonb), :analyzed_at)
                 ON CONFLICT (team_id, ticket_key)
                 DO UPDATE SET
-                    ticket_title    = EXCLUDED.ticket_title,
-                    readiness_score = EXCLUDED.readiness_score,
-                    status          = EXCLUDED.status,
-                    issues          = EXCLUDED.issues,
-                    suggestions     = EXCLUDED.suggestions,
-                    analyzed_at     = EXCLUDED.analyzed_at
+                    ticket_title       = EXCLUDED.ticket_title,
+                    readiness_score    = EXCLUDED.readiness_score,
+                    status             = EXCLUDED.status,
+                    issues             = EXCLUDED.issues,
+                    suggestions        = EXCLUDED.suggestions,
+                    suggested_revision = EXCLUDED.suggested_revision,
+                    analyzed_at        = EXCLUDED.analyzed_at
             """),
             {
                 "id": str(uuid.uuid4()),
@@ -518,6 +626,9 @@ async def analyze_tickets(
                 "status": derived_status,
                 "issues": json.dumps(item.get("issues", [])),
                 "suggestions": json.dumps(suggestions_to_persist),
+                "suggested_revision": (
+                    json.dumps(suggested_revision) if suggested_revision is not None else None
+                ),
                 "analyzed_at": now,
             },
         )
@@ -531,6 +642,8 @@ async def analyze_tickets(
                 suggestions=clean_suggestions,
                 stack_alignment=stack_alignment,
                 matched_identifier_count=matched_count,
+                suggested_revision=suggested_revision,
+                fetched_updated_at=fetched_updated_by_key.get(item["ticketKey"]),
             )
         )
 

@@ -67,6 +67,10 @@ class TicketAnalysisResult(BaseModel):
     # by SB-4; consumed by the inline-refinement UI (SB-7+). Shape:
     # {title?, description?, acceptance_criteria?: list[str], story_points?: int}
     suggested_revision: dict | None = None
+    # Initiative B / Wave 1 SB-6 — Jira ``fields.updated`` at fetch time, echoed
+    # back on push for stale-write detection. In-memory only (None for rows
+    # rehydrated from the DB cache).
+    fetched_updated_at: str | None = None
 
 
 class ScopeCopSummary(BaseModel):
@@ -201,6 +205,8 @@ async def analyze(
             suggestions=r.suggestions,
             stack_alignment=r.stack_alignment,
             matched_identifier_count=r.matched_identifier_count,
+            suggested_revision=r.suggested_revision,
+            fetched_updated_at=r.fetched_updated_at,
         )
         for r in raw_results
     ]
@@ -254,6 +260,7 @@ async def get_analyses(
                 suggestions=clean_suggestions,
                 stack_alignment=stack_alignment,
                 matched_identifier_count=matched_count,
+                suggested_revision=row.suggested_revision,
             )
         )
 

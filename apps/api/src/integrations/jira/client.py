@@ -232,17 +232,20 @@ class JiraClient:
     async def get_issue(self, issue_key: str) -> dict:
         """
         GET /rest/api/3/issue/{issue_key} with the fields needed for
-        identifier-bootstrap scanning.
+        identifier-bootstrap scanning and Initiative B optimistic-concurrency.
 
         Returns the raw Jira issue payload:
             {"key": "PROJ-123",
              "fields": {"summary", "description",
-                        "customfield_10014", "parent", "issuetype"}}
+                        "customfield_10014", "parent", "issuetype",
+                        "updated"}}
 
-        Only the fields required by the bootstrap corpus helper are requested
-        (``fields=description,customfield_10014,parent,summary,issuetype``) to
-        keep the payload small. Raises ``HTTPException(404)`` when the issue
-        is not found, mirroring :meth:`get_issue_links`.
+        ``updated`` is Jira's ISO-8601 last-modified timestamp; callers use it
+        as the ``fetched_updated_at`` value for stale-write detection on push
+        (see :meth:`check_stale`).
+
+        Raises ``HTTPException(404)`` when the issue is not found, mirroring
+        :meth:`get_issue_links`.
         """
         from fastapi import HTTPException
 
@@ -250,7 +253,12 @@ class JiraClient:
             r = await c.get(
                 f"{self.base_url}/issue/{issue_key}",
                 headers=self._headers(),
-                params={"fields": "description,customfield_10014,parent,summary,issuetype"},
+                params={
+                    "fields": (
+                        "description,customfield_10014,parent,summary,"
+                        "issuetype,updated"
+                    )
+                },
             )
             if r.status_code == 404:
                 raise HTTPException(status_code=404, detail=f"Issue {issue_key} not found in Jira")
@@ -261,6 +269,63 @@ class JiraClient:
                 )
             r.raise_for_status()
             return r.json()
+
+    async def check_stale(self, issue_key: str, fetched_updated_at: str) -> bool:
+        """Return ``True`` if Jira's ``fields.updated`` is newer than
+        ``fetched_updated_at`` — i.e. the issue has been modified since we
+        snapshotted it.
+
+        Used by Initiative B's inline-refinement push path to detect that
+        another writer (or a human editing directly in Jira) has touched the
+        ticket between Scope Cop generating a ``suggested_revision`` and the
+        user accepting it. If stale, the modal should warn before overwriting.
+
+        Comparison strategy:
+          * If both timestamps are ISO-8601 strings with the same shape
+            (Jira's ``YYYY-MM-DDTHH:MM:SS.sss+ZZZZ``), lexicographic compare
+            is correct.
+          * Otherwise, fall back to ``datetime.fromisoformat`` parsing.
+
+        Args:
+            issue_key:          Jira issue key (e.g. "PROJ-123").
+            fetched_updated_at: ISO-8601 timestamp snapshotted at fetch time.
+
+        Returns:
+            True if Jira's value is strictly newer; False if equal or older
+            (or if ``fetched_updated_at`` is empty/None — treated as "fresh").
+        """
+        if not fetched_updated_at:
+            return False
+
+        issue = await self.get_issue(issue_key)
+        jira_updated = (issue.get("fields") or {}).get("updated")
+        if not jira_updated:
+            # Jira didn't return an updated stamp — be conservative and treat
+            # as not-stale rather than blocking the write.
+            return False
+
+        # Fast path: both strings, same format → lexicographic compare works.
+        if isinstance(jira_updated, str) and isinstance(fetched_updated_at, str):
+            try:
+                return jira_updated > fetched_updated_at
+            except TypeError:
+                pass
+
+        # Fallback: parse to datetime (handles mixed TZ formats).
+        from datetime import datetime
+
+        def _parse(s: str):
+            # Jira uses +0000 (no colon) which fromisoformat <3.11 chokes on;
+            # normalize to +00:00.
+            if len(s) >= 5 and (s[-5] in ("+", "-")) and s[-3] != ":":
+                s = s[:-2] + ":" + s[-2:]
+            return datetime.fromisoformat(s)
+
+        try:
+            return _parse(jira_updated) > _parse(fetched_updated_at)
+        except (ValueError, TypeError):
+            # Can't parse — be conservative.
+            return False
 
     async def get_issue_links(self, issue_key: str) -> list[dict]:
         """

@@ -17,6 +17,7 @@ from src.integrations.jira import router as jira_router
 from src.routers import developers as developers_router
 from src.routers.users import users_router
 from src.routers.scope_cop import scope_cop_router
+from src.routers.scope_cop_revisions import scope_cop_revisions_router
 from src.routers.dependency_radar import dependency_radar_router
 from src.routers.retro import retro_router
 from src.routers.onboarding import onboarding_router, invitations_router
@@ -60,6 +61,7 @@ app.include_router(users_router, prefix="/api/users")
 app.include_router(exec_router, prefix="/api/exec")
 app.include_router(developers_router.router)
 app.include_router(scope_cop_router, prefix="/api/scope-cop")
+app.include_router(scope_cop_revisions_router, prefix="/api/scope-cop")
 app.include_router(dependency_radar_router, prefix="/api/dependency-radar")
 app.include_router(retro_router, prefix="/api/retro")
 app.include_router(onboarding_router, prefix="/api/onboarding")

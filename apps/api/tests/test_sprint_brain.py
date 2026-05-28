@@ -1096,3 +1096,305 @@ class TestScopeCopAutoRunOnPlan:
         # Plan body still populated despite Scope Cop failure
         assert len(response["assignments"]) == len(ticket_ids)
         assert response["summary"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# SB-8: batched commit endpoint  POST /api/sprint-brain/plans/{plan_id}/commit
+# ---------------------------------------------------------------------------
+class TestBatchedCommit:
+    """Tests for the batched plan-commit endpoint.
+
+    Uses the MagicMock-session + dependency-override pattern from
+    test_sprint_plan_overrides.py (no live DB). The Jira client and
+    connection resolution are mocked.
+    """
+
+    ORG_CLERK_ID = "org_commit_test"
+    ORG_ID = uuid.uuid4()
+    TEAM_ID = uuid.uuid4()
+    PLAN_ID = "plan-abc-123"
+    SPRINT_ID = "999"
+    LEAD_USER_ID = "user_lead_clerk"
+
+    @staticmethod
+    def _make_team(team_id, org_id):
+        t = MagicMock()
+        t.id = team_id
+        t.organization_id = org_id
+        return t
+
+    @staticmethod
+    def _make_connection():
+        c = MagicMock()
+        c.id = uuid.uuid4()
+        return c
+
+    def _setup_session(self, scalar_results, captured_adds):
+        session = MagicMock()
+        state = {"i": 0}
+
+        async def fake_scalar(_q):
+            i = state["i"]
+            state["i"] += 1
+            return scalar_results[i] if i < len(scalar_results) else None
+
+        async def fake_commit():
+            return None
+
+        session.scalar = fake_scalar
+        session.commit = fake_commit
+        session.add = captured_adds.append
+        return session
+
+    def _make_jira_client(self, stale_keys=None):
+        stale_keys = stale_keys or set()
+        client = MagicMock()
+
+        async def check_stale(key, fetched):
+            return key in stale_keys
+
+        async def get_issue(key):
+            return {
+                "key": key,
+                "fields": {"summary": key, "updated": "2026-05-27T00:00:00.000+0000"},
+            }
+
+        client.check_stale = AsyncMock(side_effect=check_stale)
+        client.get_issue = AsyncMock(side_effect=get_issue)
+        client.update_issue = AsyncMock(return_value={})
+        client.move_issues_to_sprint = AsyncMock(return_value=None)
+        client.assign_issue = AsyncMock(return_value=None)
+        return client
+
+    def _install_overrides(self, app, session, role="lead"):
+        from src.auth import get_current_org_id, get_current_user_id
+        from src.auth_roles import get_current_app_role
+        from src.database import get_db
+
+        async def _db():
+            yield session
+
+        async def _user():
+            return self.LEAD_USER_ID
+
+        async def _org():
+            return self.ORG_CLERK_ID
+
+        async def _role_dep():
+            return role
+
+        app.dependency_overrides[get_db] = _db
+        app.dependency_overrides[get_current_user_id] = _user
+        app.dependency_overrides[get_current_org_id] = _org
+        app.dependency_overrides[get_current_app_role] = _role_dep
+
+    @pytest.mark.asyncio
+    async def test_happy_path_mixed_approvals(self):
+        from httpx import ASGITransport, AsyncClient
+        from src.main import app
+
+        captured = []
+        # scalar order: Team, JiraConnection, then one TicketAnalysis per committed ticket.
+        session = self._setup_session(
+            [
+                self._make_team(self.TEAM_ID, self.ORG_ID),
+                self._make_connection(),
+                None,  # TicketAnalysis for edited ticket
+                None,  # TicketAnalysis for unedited ticket
+            ],
+            captured,
+        )
+        client_mock = self._make_jira_client()
+
+        self._install_overrides(app, session)
+        try:
+            with patch(
+                "src.routers.sprint_brain._get_fresh_client_async",
+                AsyncMock(return_value=client_mock),
+            ):
+                async with AsyncClient(
+                    transport=ASGITransport(app=app), base_url="http://test"
+                ) as ac:
+                    resp = await ac.post(
+                        f"/api/sprint-brain/plans/{self.PLAN_ID}/commit",
+                        json={
+                            "team_id": str(self.TEAM_ID),
+                            "sprint_id": self.SPRINT_ID,
+                            "approvals": [
+                                {
+                                    "ticket_key": "PROJ-1",
+                                    "revision": {"title": "New title", "story_points": 5},
+                                    "approved_at": "2026-05-27T10:00:00Z",
+                                    "fetched_updated_at": "2026-05-27T00:00:00.000+0000",
+                                    "assignee_account_id": "acct-1",
+                                },
+                                {
+                                    "ticket_key": "PROJ-2",
+                                    "revision": None,
+                                    "approved_at": "2026-05-27T10:01:00Z",
+                                    "assignee_account_id": "acct-2",
+                                },
+                            ],
+                        },
+                    )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert set(body["committed"]) == {"PROJ-1", "PROJ-2"}
+        assert body["conflicts"] == []
+        assert body["plan_id"] == self.PLAN_ID
+
+        # update_issue called exactly once (only for the edited ticket).
+        client_mock.update_issue.assert_awaited_once()
+        edited_key, edited_fields = client_mock.update_issue.await_args.args
+        assert edited_key == "PROJ-1"
+        assert edited_fields["summary"] == "New title"
+        assert edited_fields["customfield_10016"] == 5
+
+        # Sprint move + assignee set for BOTH tickets.
+        assert client_mock.move_issues_to_sprint.await_count == 2
+        assert client_mock.assign_issue.await_count == 2
+
+        # Two audit rows written.
+        revisions = [r for r in captured if r.__class__.__name__ == "TicketRevision"]
+        assert len(revisions) == 2
+
+    @pytest.mark.asyncio
+    async def test_partial_conflict_stale_ticket(self):
+        from httpx import ASGITransport, AsyncClient
+        from src.main import app
+
+        captured = []
+        session = self._setup_session(
+            [
+                self._make_team(self.TEAM_ID, self.ORG_ID),
+                self._make_connection(),
+                None,  # TicketAnalysis for the one committed ticket
+            ],
+            captured,
+        )
+        client_mock = self._make_jira_client(stale_keys={"PROJ-1"})
+
+        self._install_overrides(app, session)
+        try:
+            with patch(
+                "src.routers.sprint_brain._get_fresh_client_async",
+                AsyncMock(return_value=client_mock),
+            ):
+                async with AsyncClient(
+                    transport=ASGITransport(app=app), base_url="http://test"
+                ) as ac:
+                    resp = await ac.post(
+                        f"/api/sprint-brain/plans/{self.PLAN_ID}/commit",
+                        json={
+                            "team_id": str(self.TEAM_ID),
+                            "sprint_id": self.SPRINT_ID,
+                            "approvals": [
+                                {
+                                    "ticket_key": "PROJ-1",
+                                    "revision": {"title": "Edited"},
+                                    "approved_at": "2026-05-27T10:00:00Z",
+                                    "fetched_updated_at": "2026-05-27T00:00:00.000+0000",
+                                },
+                                {
+                                    "ticket_key": "PROJ-2",
+                                    "revision": None,
+                                    "approved_at": "2026-05-27T10:01:00Z",
+                                    "assignee_account_id": "acct-2",
+                                },
+                            ],
+                        },
+                    )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["committed"] == ["PROJ-2"]
+        assert body["conflicts"] == [{"ticket_key": "PROJ-1", "reason": "stale"}]
+
+        # Stale ticket's edit must NOT be pushed.
+        client_mock.update_issue.assert_not_awaited()
+        # Only the committed ticket got moved/assigned.
+        assert client_mock.move_issues_to_sprint.await_count == 1
+        revisions = [r for r in captured if r.__class__.__name__ == "TicketRevision"]
+        assert len(revisions) == 1
+        assert revisions[0].ticket_key == "PROJ-2"
+
+    @pytest.mark.asyncio
+    async def test_audit_rows_applied_revision_empty_for_unedited(self):
+        from httpx import ASGITransport, AsyncClient
+        from src.main import app
+
+        captured = []
+        session = self._setup_session(
+            [
+                self._make_team(self.TEAM_ID, self.ORG_ID),
+                self._make_connection(),
+                None,
+                None,
+            ],
+            captured,
+        )
+        client_mock = self._make_jira_client()
+
+        self._install_overrides(app, session)
+        try:
+            with patch(
+                "src.routers.sprint_brain._get_fresh_client_async",
+                AsyncMock(return_value=client_mock),
+            ):
+                async with AsyncClient(
+                    transport=ASGITransport(app=app), base_url="http://test"
+                ) as ac:
+                    resp = await ac.post(
+                        f"/api/sprint-brain/plans/{self.PLAN_ID}/commit",
+                        json={
+                            "team_id": str(self.TEAM_ID),
+                            "sprint_id": self.SPRINT_ID,
+                            "approvals": [
+                                {
+                                    "ticket_key": "PROJ-1",
+                                    "revision": {"description": "edited desc"},
+                                    "approved_at": "2026-05-27T10:00:00Z",
+                                },
+                                {
+                                    "ticket_key": "PROJ-2",
+                                    "approved_at": "2026-05-27T10:01:00Z",
+                                },
+                            ],
+                        },
+                    )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        revisions = [r for r in captured if r.__class__.__name__ == "TicketRevision"]
+        assert len(revisions) == 2
+        by_key = {r.ticket_key: r for r in revisions}
+        assert by_key["PROJ-1"].applied_revision == {"description": "edited desc"}
+        # Unedited ticket → applied_revision is the empty {} default.
+        assert by_key["PROJ-2"].applied_revision == {}
+
+    @pytest.mark.asyncio
+    async def test_non_lead_role_returns_403(self):
+        from httpx import ASGITransport, AsyncClient
+        from src.main import app
+
+        captured = []
+        session = self._setup_session([], captured)
+        self._install_overrides(app, session, role="developer")
+        try:
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as ac:
+                resp = await ac.post(
+                    f"/api/sprint-brain/plans/{self.PLAN_ID}/commit",
+                    json={"team_id": str(self.TEAM_ID), "approvals": []},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 403

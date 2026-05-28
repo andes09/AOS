@@ -47,6 +47,7 @@ from src.models.retro import RetroPattern
 from src.models.sprint import Sprint, SprintStatus
 from src.models.team import Team
 from src.models.ticket import Ticket, TicketStatus
+from src.models.ticket_revision import TicketRevision
 from src.services.ai_client import get_anthropic_key
 from src.services import scope_cop
 from src.services.sprint_brain import (
@@ -120,6 +121,27 @@ class EnrichmentStatus(BaseModel):
     scope_cop: Literal["not_analyzed", "all_ready", "has_issues"]
     dependency_radar: Literal["not_scanned", "no_risks", "has_risks"]
     retro_patterns: Literal["no_data", "no_active_patterns", "has_patterns"]
+
+
+class CommitApproval(BaseModel):
+    """A single approved ticket in a batched plan commit (Initiative B / SB-8)."""
+    ticket_key: str
+    # {title?, description?, acceptance_criteria?, story_points?} — None when the
+    # user accepted the ticket without any inline edit (sprint/assignee only).
+    revision: dict | None = None
+    approved_at: str
+    # ISO-8601 snapshot timestamp for optimistic-concurrency stale-write checks.
+    fetched_updated_at: str | None = None
+    # Jira account id to assign, when resolved client-side.
+    assignee_account_id: str | None = None
+    # Developer UUID to resolve server-side (mirrors push_to_jira's developerId).
+    developer_id: str | None = None
+
+
+class CommitPlanRequest(BaseModel):
+    team_id: str
+    sprint_id: str | None = None        # Jira sprint id to move tickets into
+    approvals: list[CommitApproval]
 
 
 # ---------------------------------------------------------------------------
@@ -822,3 +844,155 @@ async def push_to_jira(
         pushedTickets=len(issue_keys),
         unassignedWarnings=unassigned_warnings,
     )
+
+
+@router.post(
+    "/plans/{plan_id}/commit",
+    dependencies=[Depends(require_role("lead"))],
+)
+async def commit_plan(
+    plan_id: str,
+    request: CommitPlanRequest,
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Batch-commit an approved plan to Jira (Initiative B / SB-8).
+
+    For every approved ticket: optionally push an inline edit (when ``revision``
+    is present), then move it into the sprint and assign it — reusing the exact
+    ``move_issues_to_sprint`` / ``assign_issue`` mechanics from ``push_to_jira``.
+
+    Optimistic-concurrency: if a ticket carries ``fetched_updated_at`` and a
+    ``revision``, we re-check Jira's ``updated`` stamp first; a stale ticket is
+    skipped (no partial edit) and surfaced in ``conflicts``.
+
+    Atomic-ish: one ticket failing (stale or Jira error) does NOT abort the
+    batch — results are collected and returned as ``{committed, conflicts}``.
+    Requires 'lead' role or higher.
+    """
+    import uuid as _uuid
+
+    # 1. Resolve team + org-scoped Jira connection (mirrors push_to_jira).
+    resolved_team_id = await _resolve_team_id(request.team_id, clerk_org_id, db)
+    team = await db.scalar(select(Team).where(Team.id == _uuid.UUID(resolved_team_id)))
+    if not team:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found.")
+
+    connection = await db.scalar(
+        select(JiraConnection).where(
+            JiraConnection.organization_id == team.organization_id,
+            JiraConnection.is_active.is_(True),
+        )
+    )
+    if not connection:
+        raise HTTPException(
+            status_code=402,
+            detail="No active Jira connection. Connect Jira in Settings.",
+        )
+
+    try:
+        client = await _get_fresh_client_async(connection, db)
+    except JiraReauthRequired as exc:
+        raise HTTPException(status_code=402, detail=str(exc))
+
+    sprint_id_int: int | None = None
+    if request.sprint_id:
+        try:
+            sprint_id_int = int(request.sprint_id)
+        except (TypeError, ValueError):
+            sprint_id_int = None
+
+    committed: list[str] = []
+    conflicts: list[dict] = []
+
+    for approval in request.approvals:
+        ticket_key = approval.ticket_key
+        try:
+            # 1. Stale-write guard — only meaningful for edits.
+            if approval.revision and approval.fetched_updated_at:
+                is_stale = await client.check_stale(
+                    ticket_key, approval.fetched_updated_at
+                )
+                if is_stale:
+                    conflicts.append({"ticket_key": ticket_key, "reason": "stale"})
+                    continue
+
+            # 2. Snapshot pre-mutation state for rollback/audit.
+            original_jira_state: dict = {}
+            try:
+                snapshot = await client.get_issue(ticket_key)
+                original_jira_state = snapshot.get("fields", snapshot) or {}
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "[commit_plan] get_issue snapshot failed for %s: %s",
+                    ticket_key, exc,
+                )
+
+            # 3. Apply the inline edit (if any).
+            if approval.revision:
+                fields: dict = {}
+                rev = approval.revision
+                if rev.get("title") is not None:
+                    fields["summary"] = rev["title"]
+                # No dedicated acceptance-criteria custom field exists in this
+                # Jira config, so AC is folded into the description text as a
+                # bullet block (matching scope_cop_revisions._build_jira_fields)
+                # rather than dropped on push. Full AC is also kept in the audit
+                # row's applied_revision for traceability.
+                description = rev.get("description")
+                ac = rev.get("acceptance_criteria")
+                if ac:
+                    ac_block = "Acceptance Criteria:\n" + "\n".join(f"- {item}" for item in ac)
+                    description = f"{description}\n\n{ac_block}" if description else ac_block
+                if description is not None:
+                    fields["description"] = description
+                # Story points: same custom field the rest of the codebase uses
+                # (see scope_cop._fetch_ticket / jira sync — customfield_10016).
+                if rev.get("story_points") is not None:
+                    fields["customfield_10016"] = rev["story_points"]
+                if fields:
+                    await client.update_issue(ticket_key, fields)
+
+            # 4. Sprint + assignee for ALL approved tickets.
+            if sprint_id_int is not None:
+                await client.move_issues_to_sprint(sprint_id_int, [ticket_key])
+
+            account_id = approval.assignee_account_id
+            if not account_id and approval.developer_id:
+                account_id = await resolve_jira_account_id(
+                    approval.developer_id, str(team.id), db
+                )
+            if account_id:
+                await client.assign_issue(ticket_key, account_id)
+
+            # 5. Audit row.
+            suggested: dict = {}
+            try:
+                analysis = await db.scalar(
+                    select(TicketAnalysis).where(
+                        TicketAnalysis.team_id == team.id,
+                        TicketAnalysis.ticket_key == ticket_key,
+                    )
+                )
+                if analysis is not None and analysis.suggested_revision:
+                    suggested = analysis.suggested_revision
+            except Exception:  # noqa: BLE001
+                suggested = {}
+
+            db.add(
+                TicketRevision(
+                    team_id=team.id,
+                    ticket_key=ticket_key,
+                    suggested_revision=suggested or {},
+                    applied_revision=approval.revision or {},
+                    original_jira_state=original_jira_state,
+                )
+            )
+
+            committed.append(ticket_key)
+        except Exception as exc:  # noqa: BLE001 — one ticket's failure ≠ batch abort.
+            logger.warning("[commit_plan] ticket %s failed: %s", ticket_key, exc)
+            conflicts.append({"ticket_key": ticket_key, "reason": str(exc)})
+
+    await db.commit()
+    return {"plan_id": plan_id, "committed": committed, "conflicts": conflicts}

@@ -196,3 +196,358 @@ So Omada's signal is strongest on the two archetypes where plan_ok was 100% — 
 - Investigate the 3 unreliable cells: check apps/api logs at the time window meeting_heavy/struggling ran
 - Bump archetype `ticket_pool_size` so sprint 5 doesn't run out (current pools cover ~4 sprints only)
 - Wire `retro_ok_pct` — every cell shows 0%, suggesting retro generation is broken end-to-end
+
+---
+
+
+# # Initiative A — Identifier Associations + Skill Intensity Routing
+
+Status: **planning — pending verification before implementation**
+
+## Goal
+
+Bridge the gap between the abstract stack labels the scrum master selects in onboarding (e.g. `SQL`, `Java/Spring Boot`) and the concrete identifiers that actually appear in ticket text (e.g. `dbo.tile_metrics`, `ms-service`). Use the resulting team-specific glossary to produce per-ticket **skill-intensity vectors**, then route assignments in Sprint Brain by matching those vectors against per-developer skill ratings.
+
+## Why
+
+Sprint Brain today guesses `required_skills` from ticket prose alone (`apps/api/src/services/sprint_brain.py`), and the `velocity_breakdown` it sends to Claude is a stubbed single-row average. Developer fields `domain_strengths`, `seniority`, and `meeting_hours_bucket` are captured but ignored. Scope Cop has no way to know whether a ticket actually touches the team's stack. Identifier associations + intensity vectors give all three features real grounding.
+
+## Architecture
+
+```
+Onboarding ── scrum master picks stack ─────┐
+                                            ▼
+Jira history import ─► bootstrap scan ─► team_identifiers table
+                       (one Claude pass)        │
+                                                ▼
+                       per-ticket intensity ─► ticket_skill_analyses
+                       (regex match + verb       │
+                        context + effort)        ▼
+                                          Sprint Brain prompt
+                                          Scope Cop 5th criterion
+                                                ▲
+                            incremental refresh │
+                            (sprint-close hook) │
+```
+
+## Data model
+
+New tables (alembic migration 0017):
+
+**`team_identifiers`**
+- `id` uuid PK
+- `team_id` uuid FK → teams
+- `token` text (raw — `dbo.tile_metrics`)
+- `normalized_token` text (lowercase, indexed for fuzzy lookup)
+- `skill` text (one of team.tech_stack labels)
+- `domain` text nullable (`backend` / `frontend` / `infra` / `data`)
+- `confidence` float 0–1
+- `source` enum (`epic`, `ticket_description`, `ticket_title`, `label`, `component`)
+- `occurrence_count` int
+- `first_seen_at`, `last_seen_at` timestamps
+- UNIQUE (team_id, token)
+- INDEX (team_id, normalized_token)
+
+**`ticket_skill_analyses`**
+- `id` uuid PK
+- `ticket_id` uuid FK
+- `skill_vector` jsonb (`{"SQL": 0.8, "Java": 0.3}`)
+- `domain_vector` jsonb (`{"backend": 0.9, "frontend": 0.1}`)
+- `matched_identifiers` jsonb array (tokens that hit)
+- `analyzed_at` timestamp
+- UNIQUE (ticket_id)
+
+**Alter `developers`**
+- Add `skill_ratings` jsonb (`{"SQL": 0.9, "Java": 0.6}`, 0–1 scale)
+- Keep existing `domain_strengths` for back-compat; deprecate once UI migrates
+
+## Milestones
+
+### M1 — Extraction foundation (no LLM)
+- [ ] Alembic 0017: create `team_identifiers`, `ticket_skill_analyses`; add `developers.skill_ratings`
+- [ ] `src/models/identifier.py` — TeamIdentifier, TicketSkillAnalysis ORM models
+- [ ] `src/services/identifier_extraction.py` — regex tokenizer (`schema.table`, `kebab-case-service`, `snake_case`, `CamelCase` with ≥2 segments, path-like)
+- [ ] `src/services/identifier_extraction.py` — normalizer (lowercase, strip punctuation)
+- [ ] Tests: extraction edge cases (single words filtered, multi-segment kept, punctuation handled)
+
+### M2 — Bootstrap classifier (one Claude pass)
+- [ ] `src/services/identifier_classifier.py` — `classify_identifiers(tokens, team_stack, anthropic_key) → list[ClassifiedIdentifier]` (Claude tool_use, structured output)
+- [ ] `src/routers/identifiers.py` — POST `/api/identifiers/scan` (lead role); pulls closed-sprint tickets + epics for team, extracts tokens, batches to classifier, upserts to `team_identifiers`
+- [ ] GET `/api/identifiers/{team_id}` — list
+- [ ] PATCH `/api/identifiers/{id}` — manual correction
+- [ ] DELETE `/api/identifiers/{id}` — remove false positive
+- [ ] Tests: classifier prompt builds correctly, upsert behaves, scan handles empty history
+
+### M3 — Per-ticket intensity inference
+- [ ] `src/services/skill_intensity.py` — `compute_intensity(ticket, identifiers) → SkillVector`
+  - Identifier density (count of matches per skill)
+  - Verb context (verbs preceding identifier: `design|optimize|rewrite` → high; `read|fetch|select` → low) — small verb lookup table
+  - Effort multiplier (low/medium/high from existing complexity pass)
+- [ ] Cache results in `ticket_skill_analyses`
+- [ ] Tests: synthetic ticket → expected vector
+
+### M4 — Sprint Brain integration
+- [ ] Extend Onboarding `AddMembersStep` / `MemberForm` to capture `skill_ratings` per developer
+- [ ] `src/services/sprint_brain.py::_get_developer_profiles` — include `skill_ratings`
+- [ ] Compute real `velocity_breakdown` — group past tickets by skill (via `ticket_skill_analyses`), aggregate per-skill points per developer
+- [ ] Inject `skill_vector` into assignment prompt per ticket
+- [ ] Update `_SPRINT_PLAN_TOOL` schema: assignments include `skill_match_reasoning` field
+- [ ] Routing rules (in prompt + as warnings):
+  - All-low vector → unconstrained
+  - Single-high → narrow to qualified devs; warn if none rated ≥ 0.6
+  - Multi-high → assign to top combined-rating dev or pair-program candidate
+
+### M5 — Scope Cop fifth criterion
+- [ ] `src/services/scope_cop.py` — extend `_SCOPE_COP_TOOL` with `stack_alignment` score
+- [ ] Pass `matched_identifiers` count to Scope Cop prompt
+- [ ] Tickets with zero identifier matches → flag as `needs_work` even if other criteria pass
+
+### M6 — UI surfaces
+- [ ] Settings page: "Team Glossary" — table of known identifiers, inline edit skill/domain, bulk delete
+- [ ] Sprint Planner: per-ticket required-skills pills (color-coded by intensity)
+- [ ] Sprint Planner ticket detail: "matched identifiers" list with link to glossary
+- [ ] Onboarding: trigger scan automatically after `import_jira_sprint_history` completes; show progress; no extra wizard step
+
+### M7 — Incremental refresh
+- [ ] Background hook in sprint-close path: scan new tickets since last refresh, classify new tokens only (skip known)
+- [ ] Age-out: identifiers not seen in 6 months get `confidence *= 0.9` per refresh; pruned at < 0.1
+- [ ] Tests: refresh idempotency
+
+## Open questions
+
+1. **Initial `skill_ratings` source.** Self-declared in onboarding? Inferred from past tickets in `ticket_skill_analyses` once M3 lands? Both — self-declare in M4, then auto-recalibrate after one sprint?
+2. **LLM throughput for bootstrap scan.** A team with 500 closed tickets could yield thousands of candidate tokens. Cap at top-N most-frequent? Batch in chunks of 200 with explicit batching protocol?
+3. **Token extraction precision.** Generic `CamelCase` (e.g., `TaskList`) is noisy — require ≥2 segments or explicit punctuation (`.`, `_`, `-`, `/`) to qualify as identifier?
+4. **Cross-team identifier overlap.** Strictly team-scoped; no global table. Worth revisiting if multi-team orgs share repos.
+5. **Manual review of first scan.** Auto-persist with confidence, or require lead to approve the first batch? Default: auto-persist + surface low-confidence rows in the Glossary UI for review.
+
+## Verification gates
+
+Before merging M4 (the user-visible change):
+- [ ] Run omada-simulator on a balanced archetype with intensity routing enabled — confirm `plan_ok_pct` ≥ baseline
+- [ ] Spot-check 5 real assignments: does the cited skill_match_reasoning hold up under inspection?
+- [ ] No regression on Scope Cop `analyzed_at` cache behavior
+
+
+### M8 — Override capture + feedback loop
+
+Lands after M4 (which is what creates an overridable plan).
+
+**Principle:** AI proposes changes to `skill_ratings`, `team_identifiers`, and `domain_strengths` based on override *patterns*; lead approves. No silent mutation.
+
+#### M8a — Capture (low-cost, useful even without AI integration)
+- [ ] Alembic 0018: create `sprint_plan_overrides` table
+  - `id` uuid PK
+  - `sprint_id` uuid FK
+  - `ticket_id` uuid FK
+  - `action` enum (`reassign`, `remove`, `add`)
+  - `original_developer_id` uuid nullable
+  - `new_developer_id` uuid nullable
+  - `reason_code` enum nullable (`skill_fit`, `capacity`, `mentorship`, `pto`, `priority_change`, `other`)
+  - `reason_text` text nullable (free-form)
+  - `created_by` uuid (clerk user)
+  - `created_at` timestamp
+  - INDEX (sprint_id), INDEX (ticket_id, new_developer_id)
+- [ ] `src/models/sprint_plan_override.py` ORM model
+- [ ] `src/routers/sprints.py` — patch the assignment-edit endpoint to write an override row on every diff
+- [ ] UI: when lead reassigns/removes/adds in Sprint Planner, show optional reason chip picker (skippable, defaults to `null` — never block the save)
+- [ ] Tests: override row created on each action type; reason optional
+
+#### M8b — In-context feedback to next plan (cheap, immediate)
+- [ ] `src/services/sprint_brain.py::_build_assignment_message` — append a "Previous Sprint Overrides" section pulling the last sprint's `sprint_plan_overrides` for this team
+- [ ] Format: `"PROJ-123 reassigned Alice → Bob (reason: skill_fit)"` — include only the last 1–2 sprints to keep tokens bounded
+- [ ] Update `_SYSTEM_PROMPT` to instruct Claude to factor in recurring override patterns
+- [ ] Tests: prompt includes override context; empty overrides → section omitted
+
+#### M8c — Pattern-based recalibration proposals (the real learning)
+- [ ] `src/services/override_analyzer.py` — `detect_patterns(team_id, db) → list[RecalibrationProposal]`
+  - For each (developer, skill) pair: count `skill_fit`-tagged reassignments *away from* that dev on tickets where their `skill_vector[skill]` > 0.5
+  - Threshold: ≥3 same-direction overrides in trailing 90 days → emit proposal
+  - Proposal payload: `{developer_id, skill, current_rating, suggested_rating, evidence: list[override_id]}`
+- [ ] Also detect identifier misclassification: if tickets containing identifier X are repeatedly reassigned with reason `skill_fit`, propose reclassifying the identifier
+- [ ] New table `recalibration_proposals` — status enum (`pending`, `approved`, `dismissed`)
+- [ ] `src/routers/identifiers.py` (or new `recalibration.py`) — GET pending, POST approve/dismiss
+- [ ] UI: Settings → "Calibration Suggestions" card with evidence links to the specific overrides
+- [ ] On approval: mutate `developers.skill_ratings` or `team_identifiers.skill`; record audit row
+- [ ] Tests: 2 overrides → no proposal; 3 same-direction → proposal emitted; dismiss → no re-prompt for 30 days
+
+#### M8d — Plan-quality telemetry (the system-level metric)
+- [ ] `src/services/plan_quality.py` — compute per-plan override_rate = (override_count / total_assignments)
+- [ ] Persist on Sprint row: `plan_override_rate`, `plan_overrides_by_reason` jsonb
+- [ ] Exec Dashboard chart: trailing 8-sprint override rate per team — the *real* signal for whether Sprint Brain is getting better
+- [ ] Alert threshold: any sprint with `override_rate > 0.5` flagged in Exec view
+
+## Open questions (M8)
+
+1. **Reason chip UX.** Required vs optional? Optional makes adoption easier but kills the recalibration signal if leads skip. Compromise: optional, but show a one-time tooltip ("Add a reason to help Sprint Brain learn") on first 3 overrides.
+2. **Recalibration aggression.** 3 overrides in 90 days is conservative. Tune after M8c ships — too few proposals = no learning; too many = lead fatigue and dismissals.
+3. **Override-influenced velocity.** When Alice was assigned PROJ-123 but Bob actually did the work, whose velocity does the ticket count toward? Currently `Ticket.assignee_id` is the source of truth at sprint close. Confirm the override flow updates `assignee_id` (not just the plan record), or we double-count.
+4. **Identifier misclassification proposals.** Same threshold (3 events)? Or require lead to explicitly tag the override as "this ticket isn't really about \<identifier\>"? The latter is more precise but adds UI friction.
+
+---
+
+# Initiative B — Inline Ticket Refinement
+
+Status: **planning — pending verification before implementation**
+
+## Goal
+
+Turn Scope Cop from advisory into closed-loop. When a ticket scores `needs_work` or `blocked`, the lead opens an inline drawer showing the original Jira issue side-by-side with an AI-suggested revision (diff-highlighted), edits as needed, and pushes the corrected version back to Jira — replacing the faulty ticket in place. No round-trip through Jira's UI required.
+
+Sibling to the identifier-associations initiative above, not dependent on it.
+
+## Why
+
+Scope Cop today (`apps/api/src/services/scope_cop.py`) returns a readiness score plus `issues` and `suggestions` lists. Users read them, switch context to Jira, manually rewrite. Most don't bother. The score is information without action. Inline refinement closes the loop: the AI produces the *content* of the fix, not just a description of the problem.
+
+## Architecture
+
+```
+Sprint Brain generates plan
+        │
+        ▼
+B0: auto-run Scope Cop on assigned ticket keys (extended schema: issues,
+    suggestions, suggested_revision { title, description, AC, story_points })
+        │
+        ▼
+ticket_analyses populated for every assigned ticket
+        │
+        ▼
+┌────────────────────────────────────────────────────────────────┐
+│  Plan Review Modal (B8)  —  TRIAGE MODE                        │
+│  ┌────────────┬─────────────────────────────┬──────────────┐   │
+│  │ Left rail  │ Center: editor pane (B5)    │ Right rail   │   │
+│  │ all assign │  original | suggested+edit  │ assignee     │   │
+│  │ status pill│  diff highlight             │ velocity     │   │
+│  │ + avatar   │                             │ reasoning    │   │
+│  └────────────┴─────────────────────────────┴──────────────┘   │
+│  Bottom-right: [ Review and Commit ] button                    │
+└──────────────────────────┬─────────────────────────────────────┘
+                           │ (mandatory — no bypass)
+                           ▼
+┌────────────────────────────────────────────────────────────────┐
+│  Sign-off Carousel (B9)                                        │
+│  Full-screen takeover, one ticket at a time, progress 4 / 12.  │
+│  Per ticket: original + suggested + assignment + reasoning.    │
+│  Actions: [Approve] → next  /  [Go back to edit] → return to   │
+│  B8 with this ticket selected (prior approvals preserved).     │
+│  Bulk-approve: [Approve next 5] for streaks.                   │
+└──────────────────────────┬─────────────────────────────────────┘
+                           │ (all approved)
+                           ▼
+B10: batched Jira push (assign + sprint custom field, atomic-ish)
+        + ticket_revisions audit rows with approved_at/approved_by
+```
+
+## Milestones
+
+### B0 — Wire Sprint Brain → Scope Cop pipeline (prerequisite for the modal UX)
+- [ ] After `_extract_plan` returns assignments in `src/routers/sprint_brain.py`, call `scope_cop.analyze_tickets(team_id, assigned_keys, jira_client, db)` before `_build_enrichment`
+- [ ] Wrap in try/except — Scope Cop failure (rate limit, API error) must not block plan generation; log and continue
+- [ ] Add `scope_cop_ran_at: datetime | None` to the plan response so the modal knows the freshness of analyses it's reading
+- [ ] Tests: planning generates analyses for all assigned tickets; on Scope Cop failure, plan still returns
+
+### B1 — Scope Cop generates suggested revisions
+- [ ] Extend `_SCOPE_COP_TOOL` schema with `suggested_revision` object: `{title, description, acceptance_criteria[], story_points}`
+- [ ] Update `_SYSTEM_PROMPT` — instruct Claude to write the actual fix content per criterion, not just describe what's missing
+- [ ] Migration 0020: add `suggested_revision` jsonb column to `ticket_analyses` (bumped from 0019 — Initiative A claimed 0017–0019)
+- [ ] Update `TicketAnalysisResult` Pydantic model + `AnalyzeResponse`
+- [ ] Tests: fixture ticket with missing AC → response contains plausible AC strings
+
+### B2 — Jira write integration
+- [ ] Audit `apps/api/src/integrations/jira/oauth.py` — confirm whether current scopes include `write:jira-work`
+- [ ] If scope upgrade needed: add re-auth prompt for existing `JiraConnection` rows; new flow requests upgraded scope
+- [ ] `JiraClient.update_issue(key, fields)` method (PUT `/rest/api/3/issue/{key}`)
+- [ ] Plain-text description for v1 (let Jira parse); ADF round-tripping deferred to v2
+- [ ] Tests against Jira sandbox: title-only update, description update, story-point update, AC field update
+
+### B3 — Conflict detection + audit trail
+- [ ] Capture `fields.updated` timestamp when drawer opens (already in API response, just expose it)
+- [ ] At PATCH time: re-fetch issue, compare `updated`; return 409 if changed since fetch
+- [ ] Migration 0021: `ticket_revisions` table (bumped from 0020 — Initiative A claimed 0017–0019)
+  - `id` uuid PK
+  - `ticket_id` uuid FK
+  - `suggested_revision` jsonb (what Scope Cop proposed)
+  - `applied_revision` jsonb (what actually got pushed — may differ from suggestion if user edited)
+  - `original_jira_state` jsonb (snapshot before push, for rollback)
+  - `applied_at` timestamp
+  - `applied_by` uuid (clerk user)
+- [ ] `src/models/ticket_revision.py` ORM model
+- [ ] Tests: 409 on stale, audit row written on success
+
+### B4 — Backend endpoints
+- [ ] GET `/api/scope-cop/tickets/{key}/revision-preview` — returns `{original, suggested_revision, fetched_updated_at}`; uses cached `ticket_analyses.suggested_revision` or triggers a fresh Scope Cop run if absent
+- [ ] PATCH `/api/scope-cop/tickets/{key}` — body `{revision, fetched_updated_at}`; pushes to Jira, writes `ticket_revisions` row, re-runs Scope Cop scoring on the updated content
+- [ ] Lead role required on both
+- [ ] Tests: dirty check, conflict, audit row written, scoring re-runs
+
+### B5 — Editor pane component (used inside B8 modal, not a standalone drawer)
+- [ ] New component `TicketEditorPane` — center pane of the Plan Review Modal
+- [ ] Side-by-side layout: original Jira content (read-only, left) vs suggested revision (editable, right)
+- [ ] Diff highlight on changed fields (use `diff` npm package or simple per-field comparison)
+- [ ] Per-field "Reset to suggestion" button (lets user undo their edits)
+- [ ] Track `currentState` vs `originalState` per ticket — drives the modal's [Review and Commit] button state (enabled if *any* ticket in the plan has `current !== original`, since that's the only condition that produces a Jira write)
+- [ ] Toast on push success, 409 banner with "Reload from Jira" on conflict (raised by B10's batched push)
+- [ ] Tests (vitest): dirty logic per ticket, conflict handling
+
+### B6 — Surface points in existing UI
+- [ ] Scope Cop results table (wherever it lives in `apps/web/src/pages/`): each non-ready row gets a "Refine" button → opens drawer for that ticket
+- [ ] Sprint Planner: warnings from Scope Cop enrichment include the same "Refine" affordance inline
+- [ ] After successful push: re-fetch the analysis cache so the row's score updates in place
+
+### B7 — Telemetry on adoption + AI quality
+- [ ] Track per-team: `revisions_proposed`, `revisions_accepted_verbatim`, `revisions_edited_before_push`, `revisions_dismissed`
+- [ ] Per-field edit-rate: if leads consistently rewrite the `description` field heavily before pushing, prompt is failing on description — surface for tuning
+- [ ] Exec Dashboard: "Scope Cop revision acceptance rate" trailing 8 sprints
+- [ ] Alert: if acceptance rate < 30% for a team, surface "Scope Cop suggestions aren't landing — review the prompt"
+
+### B8 — Plan Review Modal: triage view
+- [ ] New top-level component `PlanReviewModal` — full-screen takeover, opens automatically after Sprint Brain plan generation (and B0's Scope Cop run) completes
+- [ ] Three-pane layout:
+  - **Left rail**: scrollable list of all assigned tickets. Each row: status pill (`ready` / `needs_work` / `blocked` from cached `ticket_analyses`), assignee avatar, ticket title, story points. Click to select.
+  - **Center**: `TicketEditorPane` (B5) for the selected ticket
+  - **Right rail**: assignee context — display name, current sprint load (assigned points / safe capacity), relevant velocity citation from Sprint Brain's `reasoning` field, link to "reassign" (opens minimal picker)
+- [ ] Bottom-right: **[ Review and Commit ]** button (replaces any "Push to Jira" naming elsewhere). Always enabled (no dirty gate) — clicking proceeds to B9 carousel regardless of edits
+- [ ] Top-right: secondary [ Save Draft ] button — persists current edits without committing; user can come back later
+- [ ] Keyboard: `j`/`k` or `↑`/`↓` to move between tickets in the left rail; `Cmd+Enter` to open carousel
+- [ ] Tests (vitest): rail renders with correct status pills, selection routing, "Review and Commit" navigation
+
+### B9 — Sign-off Carousel (mandatory, with approval memory + bulk-approve)
+- [ ] New component `SignOffCarousel` — full-screen, triggered exclusively from B8's [Review and Commit] button. No skip-review escape hatch.
+- [ ] One-ticket-per-screen layout:
+  - Header: progress indicator (`Ticket 4 of 12`) + ticket key + assignee chip
+  - Body: original Jira content + revised content (if edited in B8) + Sprint Brain reasoning citation
+  - Footer actions: **[Approve]** (next), **[Go back to edit]** (returns to B8 with this ticket selected), **[Approve next 5]** (only shown when ≥5 unapproved tickets remain; bulk action still records individual `approved_at` per ticket for audit)
+- [ ] **Session-scoped approval memory**: per-ticket approval state (`{ticket_id: approved_at}`) lives in the modal's React state for the planning session. Going back to edit ticket #4 does *not* reset approvals on #1–#3. Editing a ticket *does* clear its own prior approval — re-approve required if content changed.
+- [ ] Final screen after all tickets approved: commit summary card showing `N tickets to push`, `M ticket-revision audit rows to write`, single **[Push to Jira]** button triggers B10
+- [ ] Backing out (Esc or "Back to Triage") preserves approvals so the lead can fix one issue and resume
+- [ ] Tests (vitest): approval memory across navigation, edit-invalidates-own-approval, bulk-approve records N audit timestamps, final screen gating
+
+### B10 — Batched commit to Jira
+- [ ] New endpoint `POST /api/sprint-brain/plans/{plan_id}/commit` — body `{ approvals: [{ticket_key, revision?, approved_at, fetched_updated_at}] }`
+- [ ] For each ticket: if `revision` present, call Jira `PUT /rest/api/3/issue/{key}` with the revised fields; for all tickets, set Jira sprint custom field + assignee from the plan
+- [ ] Write `ticket_revisions` row per ticket — `approved_at`, `approved_by`, `applied_revision` (null if no revision), `original_jira_state` snapshot
+- [ ] Atomic-ish semantics: collect per-ticket success/failure; if any single push 409s, return `{committed: [...], conflicts: [...]}` so the carousel can surface "3 tickets pushed, 1 conflict — review and retry"
+- [ ] Lead role required
+- [ ] Tests: happy path (all push), partial conflict (some 409), audit rows written
+
+## Open questions
+
+1. **Editor reachable on ready tickets too?** All tickets in the plan land in B8's left rail regardless of score. Editing a `ready` ticket is allowed but soft-discouraged via styling (muted "this ticket is already ready" hint above the editor). No hard gate.
+2. **ADF vs plain text.** v1 is plain text in/out. Lossy for users who format with checklists, code blocks, mentions. Decide whether to invest in ADF round-tripping now or after measuring whether anyone complains.
+3. **Bulk-approve threshold.** B9's [Approve next 5] uses a hardcoded 5. Should the threshold be team-configurable (some leads might want 10), or tied to a runtime heuristic (e.g. only show when next N tickets are all `ready`)? Default: hardcoded 5 for v1; revisit after a quarter of usage.
+4. **Story-point change side-effects.** If the lead bumps points from 3 to 5 in the editor, that changes Sprint Brain's capacity math for any sprint this ticket lands in. Auto-trigger a re-plan, or just persist quietly and let the next planning run pick it up? Default: persist quietly; surface a banner in the modal "ticket points changed — re-plan capacity?" before [Review and Commit].
+5. **Assignee / mentions.** If Scope Cop suggests "assign to backend-team," do we round-trip Jira mention syntax? Out of scope for v1; description-only.
+6. **30-ticket-sprint UX.** A team with very large sprints clicks Approve 30 times. Bulk-approve mitigates but doesn't eliminate. Monitor B7 telemetry on session-completion time; if it exceeds ~3 minutes for the median lead, revisit the carousel cadence or introduce smarter bulk grouping (e.g. "approve all `ready` tickets at once").
+7. **Save Draft semantics.** B8's [Save Draft] persists edits without committing. Does a draft expire? Does generating a new plan invalidate the draft? Default: drafts tied to a `plan_id` UUID; new plan generation = new id = old draft is orphaned but kept for 30 days for recovery.
+
+## Verification gates
+
+Before merging B8 (the first user-facing surface):
+- [ ] B0 verified: planning a sprint produces `ticket_analyses` rows for every assigned ticket
+- [ ] B5 + B8 together: open the Plan Review Modal on a real generated plan, navigate the left rail, edit a ticket, confirm dirty state surfaces in the editor pane
+- [ ] B9 carousel: approve all tickets, confirm progress indicator advances, confirm `[Approve next 5]` records 5 distinct `approved_at` timestamps
+- [ ] B9 approval memory: approve 3, go back to edit ticket #4, return to carousel — confirm #1–#3 still approved
+- [ ] B10 batched push: commit a plan with mixed edited/unedited tickets — confirm Jira reflects edits, sprint assignment lands for all, audit rows written
+- [ ] B10 conflict: edit a ticket in Jira UI mid-flow, attempt push — confirm 409 surfaces per-ticket and the carousel allows resuming after fix
+- [ ] Audit row spot-check — `original_jira_state` snapshot is complete enough to support a future rollback feature

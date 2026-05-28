@@ -184,13 +184,16 @@ def sync_jira_team(self, team_id: str):
         )
         from src.models.sprint import Sprint as SprintModel
 
+        closed_sprint_ids: list[uuid.UUID] = []
         for jira_sprint in sprints:
-            sprint_obj = _upsert_sprint(db, team, jira_sprint)
+            sprint_obj, just_closed = _upsert_sprint(db, team, jira_sprint)
             issues = asyncio.get_event_loop().run_until_complete(
                 client.get_sprint_issues(str(jira_sprint["id"]))
             )
             if sprint_obj:
                 _upsert_issues(db, team, sprint_obj, issues)
+                if just_closed:
+                    closed_sprint_ids.append(sprint_obj.id)
 
         # Sync backlog issues (not in any sprint). SprintBrain's candidate
         # query in _get_candidate_tickets returns Tickets with sprint_id IS
@@ -228,12 +231,48 @@ def sync_jira_team(self, team_id: str):
         db.commit()
         logger.info("Full Jira sync complete for team %s", team_id)
 
+        # Initiative A: fire sprint-close hooks for any sprint that transitioned
+        # to COMPLETED in this sync. Hooks are best-effort — failures are logged
+        # but never block sync completion.
+        if closed_sprint_ids:
+            _fire_sprint_close_hooks(team_id, closed_sprint_ids)
+
     except Exception as exc:
         db.rollback()
         logger.exception("Jira sync failed for team %s: %s", team_id, exc)
         raise self.retry(exc=exc)
     finally:
         db.close()
+
+
+def _fire_sprint_close_hooks(team_id: str, closed_sprint_ids: list[uuid.UUID]) -> None:
+    """Best-effort Initiative A hooks. Opens its own AsyncSessionLocal per hook.
+    All exceptions logged and swallowed so sync results stay durable.
+    """
+    from src.database import AsyncSessionLocal
+    from src.services.identifier_refresh_service import refresh_after_sprint_close
+    from src.services.plan_quality import persist_plan_quality
+
+    loop = asyncio.get_event_loop()
+
+    async def _run_refresh():
+        async with AsyncSessionLocal() as adb:
+            await refresh_after_sprint_close(uuid.UUID(team_id), None, adb)
+
+    async def _run_plan_quality(sprint_id: uuid.UUID):
+        async with AsyncSessionLocal() as adb:
+            await persist_plan_quality(str(sprint_id), adb)
+
+    try:
+        loop.run_until_complete(_run_refresh())
+    except Exception:
+        logger.exception("sprint_close_hook: identifier refresh failed for team %s", team_id)
+
+    for sid in closed_sprint_ids:
+        try:
+            loop.run_until_complete(_run_plan_quality(sid))
+        except Exception:
+            logger.exception("sprint_close_hook: persist_plan_quality failed for sprint %s", sid)
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
@@ -321,6 +360,13 @@ def _upsert_team_members(db: Session, team, jira_users: list[dict]):
 
 
 def _upsert_sprint(db: Session, team, jira_sprint: dict):
+    """Upsert a Jira sprint row.
+
+    Returns (sprint, transitioned_to_completed) — the bool is True only when this
+    call observed the sprint transitioning INTO COMPLETED (newly created and
+    already closed, or updated from a non-COMPLETED state). Used by sync_jira_team
+    to fire Initiative A's sprint-close hooks (identifier refresh + plan_quality).
+    """
     from src.models.sprint import Sprint, SprintStatus
 
     jira_id = str(jira_sprint["id"])
@@ -339,6 +385,8 @@ def _upsert_sprint(db: Session, team, jira_sprint: dict):
     }
     status = status_map.get(state, SprintStatus.PLANNING)
 
+    old_status = sprint.status if sprint is not None else None
+
     if sprint is None:
         sprint = Sprint(
             team_id=team.id,
@@ -356,7 +404,8 @@ def _upsert_sprint(db: Session, team, jira_sprint: dict):
         sprint.end_date = _parse_date(jira_sprint.get("endDate")) or sprint.end_date
 
     db.flush()
-    return sprint
+    transitioned = status == SprintStatus.COMPLETED and old_status != SprintStatus.COMPLETED
+    return sprint, transitioned
 
 
 def _upsert_issues(db: Session, team, sprint, jira_issues: list[dict]):

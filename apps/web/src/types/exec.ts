@@ -26,3 +26,13 @@ export interface PlanQualityPoint {
   overrideRate: number | null;
   overridesByReason: Record<string, number> | null;
 }
+
+export interface RevisionAcceptancePoint {
+  sprintId: string;
+  sprintName: string;
+  completedAt: string | null;
+  proposed: number;
+  acceptedVerbatim: number;
+  edited: number;
+  acceptanceRate: number;
+}

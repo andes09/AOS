@@ -10,12 +10,14 @@ import { PlanReasoningPanel } from '../components/sprint/PlanReasoningPanel'
 import { ScopeCopPanel } from '../components/sprint/ScopeCopPanel'
 import { CapacitySettingsPanel } from '../components/sprint/CapacitySettingsPanel'
 import { MeetingLoadWarning } from '../components/sprint/MeetingLoadWarning'
+import { PlanReviewModal } from '../components/sprint/PlanReviewModal'
 import { Button } from '../components/ui/Button'
 import { Alert } from '../components/ui/Alert'
 import { Card, CardBody } from '../components/ui/Card'
 import { useFeature } from '../featureFlags'
 import { useNavigate } from 'react-router-dom'
 import type { SprintPlanResponse, WhatIfResponse, Ticket, PushToJiraResponse } from '../types/sprint'
+import type { CommitApproval, CommitPlanRequest, CommitPlanResponse } from '../types/inlineRefinement'
 import type { AnalyzeResponse } from '../types/scopeCop'
 import type { TeamCapacityResponse } from '../types/capacity'
 
@@ -73,6 +75,7 @@ export function SprintPlannerPage() {
   const { post, get } = useApi()
   const navigate = useNavigate()
   const canPushToJira = useFeature('push_to_jira')
+  const canInlineRefine = useFeature('scope_check_v2')
 
   const [plan, setPlan] = useState<SprintPlanResponse | null>(() => {
     try {
@@ -94,6 +97,8 @@ export function SprintPlannerPage() {
   const [pushError, setPushError] = useState<string | null>(null)
   const [droppedIds, setDroppedIds] = useState<Set<string>>(new Set())
   const [capacityOpen, setCapacityOpen] = useState(false)
+  const [reviewOpen, setReviewOpen] = useState(false)
+  const [commitResult, setCommitResult] = useState<CommitPlanResponse | null>(null)
 
   const capacityQuery = useQuery({
     queryKey: ['capacity', 'team', 'default'],
@@ -128,6 +133,30 @@ export function SprintPlannerPage() {
       setConfidence(data.confidence_score)
       setWarnings(data.warnings)
       setDroppedIds(new Set())
+      // Inline-refinement rollout: auto-open the review modal so the lead can
+      // refine + commit. Gated behind scope_check_v2 — when off, behave as today.
+      if (canInlineRefine) {
+        setCommitResult(null)
+        setReviewOpen(true)
+      }
+    },
+  })
+
+  const commitMutation = useMutation({
+    mutationFn: (approvals: CommitApproval[]) => {
+      const planId = encodeURIComponent(`${plan!.team_id}:${plan!.sprint_start}`)
+      return post<CommitPlanResponse>(`/api/sprint-brain/plans/${planId}/commit`, {
+        team_id: plan!.team_id,
+        sprint_id: null,
+        approvals,
+      } satisfies CommitPlanRequest)
+    },
+    onSuccess: (data) => {
+      setCommitResult(data)
+      // No conflicts → close the modal. With conflicts, keep it open so the
+      // carousel's final screen can surface them (PlanReviewModal forwards
+      // pushResult into the carousel).
+      if (data.conflicts.length === 0) setReviewOpen(false)
     },
   })
 
@@ -262,7 +291,9 @@ export function SprintPlannerPage() {
             {generatePlan.isPending ? 'Generating...' : 'Generate Plan'}
           </Button>
 
-          {plan && canPushToJira && (
+          {/* Legacy push CTA — hidden when inline refinement is on; the modal's
+              Review-and-Commit flow supersedes it. */}
+          {plan && canPushToJira && !canInlineRefine && (
             <Button
               variant="secondary"
               onClick={() => pushMutation.mutate()}
@@ -270,6 +301,16 @@ export function SprintPlannerPage() {
               style={{ color: 'var(--color-success)', borderColor: 'var(--color-success)' }}
             >
               {pushMutation.isPending ? 'Pushing...' : 'Push to Jira'}
+            </Button>
+          )}
+
+          {plan && canInlineRefine && (
+            <Button
+              variant="secondary"
+              onClick={() => setReviewOpen(true)}
+              style={{ color: 'var(--color-success)', borderColor: 'var(--color-success)' }}
+            >
+              Review &amp; Refine
             </Button>
           )}
         </div>
@@ -345,6 +386,12 @@ export function SprintPlannerPage() {
               ))}
             </ul>
           )}
+        </Alert>
+      )}
+
+      {commitResult && commitResult.conflicts.length === 0 && commitResult.committed.length > 0 && (
+        <Alert variant="success" style={{ marginBottom: 16 }}>
+          Committed {commitResult.committed.length} ticket{commitResult.committed.length === 1 ? '' : 's'} to Jira.
         </Alert>
       )}
 
@@ -444,6 +491,17 @@ export function SprintPlannerPage() {
             Click "Generate Plan" to start sprint planning
           </div>
         </div>
+      )}
+
+      {plan && canInlineRefine && (
+        <PlanReviewModal
+          plan={plan}
+          open={reviewOpen}
+          onClose={() => setReviewOpen(false)}
+          onCommit={(approvals) => commitMutation.mutate(approvals)}
+          isPushing={commitMutation.isPending}
+          pushResult={commitResult}
+        />
       )}
     </div>
   )

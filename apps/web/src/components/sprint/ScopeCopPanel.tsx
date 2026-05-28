@@ -4,11 +4,17 @@ import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
 import type { BadgeVariant } from '../ui/Badge'
 import type { AnalyzeResponse, TicketAnalysisResult } from '../../types/scopeCop'
+import { useFeature } from '../../featureFlags'
+import { TicketRefineDrawer } from './TicketRefineDrawer'
 
 interface Props {
   response: AnalyzeResponse
   onReanalyze: () => void
   isPending?: boolean
+  // The team to refine tickets against. Defaults to 'default' so the planner
+  // (SprintPlannerPage, owned by SB-12) doesn't have to change yet; it will
+  // pass the real team id once SB-12 wires it through.
+  teamId?: string
 }
 
 const STATUS_VARIANT: Record<TicketAnalysisResult['status'], BadgeVariant> = {
@@ -29,7 +35,15 @@ function scoreColor(score: number): string {
   return 'var(--color-danger)'
 }
 
-function TicketRow({ ticket }: { ticket: TicketAnalysisResult }) {
+function TicketRow({
+  ticket,
+  canRefine,
+  onRefine,
+}: {
+  ticket: TicketAnalysisResult
+  canRefine: boolean
+  onRefine: () => void
+}) {
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -58,6 +72,19 @@ function TicketRow({ ticket }: { ticket: TicketAnalysisResult }) {
         <span style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', color: 'var(--color-text-primary)', flex: 1 }}>
           {ticket.ticketTitle}
         </span>
+        {canRefine && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={e => {
+              e.stopPropagation()
+              onRefine()
+            }}
+            title="Refine this ticket and push the fix to Jira"
+          >
+            Refine
+          </Button>
+        )}
         <span style={{ color: 'var(--color-text-muted)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)' }}>
           {expanded ? '▲' : '▼'}
         </span>
@@ -91,8 +118,10 @@ function TicketRow({ ticket }: { ticket: TicketAnalysisResult }) {
   )
 }
 
-export function ScopeCopPanel({ response, onReanalyze, isPending }: Props) {
+export function ScopeCopPanel({ response, onReanalyze, isPending, teamId = 'default' }: Props) {
   const { summary, results } = response
+  const refineEnabled = useFeature('scope_check_v2')
+  const [refiningKey, setRefiningKey] = useState<string | null>(null)
 
   return (
     <Card style={{ marginBottom: 12 }}>
@@ -112,10 +141,25 @@ export function ScopeCopPanel({ response, onReanalyze, isPending }: Props) {
         </div>
         <div>
           {results.map(ticket => (
-            <TicketRow key={ticket.ticketKey} ticket={ticket} />
+            <TicketRow
+              key={ticket.ticketKey}
+              ticket={ticket}
+              canRefine={refineEnabled && ticket.status !== 'ready'}
+              onRefine={() => setRefiningKey(ticket.ticketKey)}
+            />
           ))}
         </div>
       </CardBody>
+
+      {refiningKey && (
+        <TicketRefineDrawer
+          ticketKey={refiningKey}
+          teamId={teamId}
+          open
+          onClose={() => setRefiningKey(null)}
+          onRefined={onReanalyze}
+        />
+      )}
     </Card>
   )
 }

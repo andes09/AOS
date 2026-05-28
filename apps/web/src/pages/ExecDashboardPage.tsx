@@ -4,6 +4,7 @@ import { useApi, ApiError } from '../lib/api'
 import { SectorHealthBanner } from '../components/exec/SectorHealthBanner'
 import { TeamHealthCard } from '../components/exec/TeamHealthCard'
 import { PlanQualityChart } from '../components/exec/PlanQualityChart'
+import { RevisionAcceptanceChart } from '../components/exec/RevisionAcceptanceChart'
 import { Alert } from '../components/ui/Alert'
 import { SectorOverviewResponse } from '../types/exec'
 
@@ -90,6 +91,9 @@ export function ExecDashboardPage() {
           )}
           {data.teams.length > 0 && (
             <PlanQualityChart teams={data.teams} />
+          )}
+          {data.teams.length > 0 && (
+            <RevisionAcceptanceChart teams={data.teams} />
           )}
         </>
       )}

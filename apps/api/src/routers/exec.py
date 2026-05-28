@@ -28,6 +28,7 @@ from src.services.plan_quality import (
     get_trailing_override_rates,
     persist_plan_quality,
 )
+from src.services.revision_telemetry import get_revision_acceptance_rates
 
 exec_router = APIRouter(tags=["exec"])
 
@@ -304,3 +305,40 @@ async def recompute_plan_quality(
     for sprint in completed:
         await persist_plan_quality(sprint.id, db)
     return PlanQualityRecomputeResponse(recomputed_count=len(completed))
+
+
+# ---------------------------------------------------------------------------
+# Revision-acceptance telemetry (Initiative B, Wave 4 — SB-14)
+# ---------------------------------------------------------------------------
+
+
+class RevisionAcceptancePoint(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    sprint_id: str
+    sprint_name: str
+    completed_at: date | None
+    proposed: int
+    accepted_verbatim: int
+    edited: int
+    acceptance_rate: float
+
+
+@exec_router.get(
+    "/revision-acceptance/{team_id}",
+    response_model=list[RevisionAcceptancePoint],
+)
+async def get_revision_acceptance(
+    team_id: str,
+    n: int = 8,
+    _: str = Depends(require_role("lead")),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Trailing N completed-sprint Scope Cop revision-acceptance rates
+    (oldest → newest). Gated behind the exec_dashboard feature flag."""
+    if not settings.is_feature_enabled("exec_dashboard"):
+        raise HTTPException(status_code=404, detail="Feature not available")
+    await _resolve_team_in_org(team_id, clerk_org_id, db)
+    points = await get_revision_acceptance_rates(team_id, db, n_sprints=n)
+    return [RevisionAcceptancePoint(**p) for p in points]

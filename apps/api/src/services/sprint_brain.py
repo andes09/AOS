@@ -23,6 +23,7 @@ from src.models.capacity import DeveloperCapacityOverride
 from src.models.ticket import Ticket, TicketStatus
 from src.models.identifier import TicketSkillAnalysis
 from src.models.sprint_plan_override import SprintPlanOverride
+from src.services.cost_tracker import record_generation_cost
 
 logger = logging.getLogger(__name__)
 
@@ -376,10 +377,11 @@ def _extract_complexity(response: anthropic.types.Message) -> list[dict]:
 async def _analyse_ticket_complexity(
     tickets: list[dict],
     client: anthropic.AsyncAnthropic,
-) -> list[dict]:
+) -> tuple[list[dict], object]:
     """
     Claude Call 1: analyse ticket complexity without developer context.
-    Returns a list of per-ticket complexity dicts.
+    Returns (per-ticket complexity dicts, response usage) so the caller can
+    aggregate cost across the full generation.
     """
     response = await client.messages.create(
         model=_MODEL,
@@ -389,7 +391,7 @@ async def _analyse_ticket_complexity(
         tools=[_COMPLEXITY_TOOL],
         tool_choice={"type": "tool", "name": "analyse_tickets"},
     )
-    return _extract_complexity(response)
+    return _extract_complexity(response), response.usage
 
 
 def _format_skill_inline(skill_map: dict, threshold: float = 0.2) -> str:
@@ -879,7 +881,9 @@ async def generate_sprint_plan(
 
     try:
         # --- Call 1: ticket complexity analysis ---
-        complexity_analysis = await _analyse_ticket_complexity(inp.candidate_tickets, client)
+        complexity_analysis, complexity_usage = await _analyse_ticket_complexity(
+            inp.candidate_tickets, client
+        )
 
         # --- Call 2: assignment generation with historical citations ---
         assignment_message = _build_assignment_message(
@@ -909,6 +913,16 @@ async def generate_sprint_plan(
 
     plan = _extract_plan(response)
     plan.insufficient_data_devs = insufficient_data_devs
+
+    record_generation_cost(
+        "sprint_plan",
+        complexity_usage,
+        response.usage,
+        model=_MODEL,
+        team_id=inp.team_id,
+        ticket_count=len(inp.candidate_tickets),
+    )
+
     return plan
 
 

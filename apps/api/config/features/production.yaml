@@ -12,3 +12,4 @@ features:
   omada_simulator: false
   onboarding: true
   allow_team_creation_via_api: false
+  cost_tracking: false

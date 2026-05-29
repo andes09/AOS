@@ -362,13 +362,14 @@ async def test_analyse_ticket_complexity_calls_claude():
     mock_client = MagicMock()
     mock_client.messages.create = AsyncMock(return_value=mock_response)
 
-    result = await _analyse_ticket_complexity(SAMPLE_TICKETS[:1], mock_client)
+    analyses, usage = await _analyse_ticket_complexity(SAMPLE_TICKETS[:1], mock_client)
 
     mock_client.messages.create.assert_called_once()
     call_kwargs = mock_client.messages.create.call_args.kwargs
     assert call_kwargs["tool_choice"] == {"type": "tool", "name": "analyse_tickets"}
-    assert len(result) == 1
-    assert result[0]["ticket_id"] == "PROJ-1"
+    assert len(analyses) == 1
+    assert analyses[0]["ticket_id"] == "PROJ-1"
+    assert usage is mock_response.usage
 
 
 # ---------------------------------------------------------------------------

@@ -1,13 +1,13 @@
 """identifier associations for skill inference
 
 Revision ID: 0017
-Revises: 0016
+Revises: 0015
 Create Date: 2026-05-26
 """
 from alembic import op
 
 revision = '0017'
-down_revision = '0016'
+down_revision = '0015'
 branch_labels = None
 depends_on = None
 

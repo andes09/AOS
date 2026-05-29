@@ -1,486 +1,80 @@
-"""
-Startup migration script that bypasses Alembic's file-discovery to handle
-the case where alembic_version records a revision the container can't find.
+"""Production migration entrypoint (Railway preDeployCommand).
 
-Runs the actual SQL for each migration idempotently (IF NOT EXISTS / ADD COLUMN
-with existence check), then stamps alembic_version to the correct head.
-"""
-print("=== MIGRATE.PY RUNNING (commit 2026-03-28) ===", flush=True)
+Alembic is the single source of truth for schema. This script does NOT carry
+its own SQL or a hardcoded head — it only:
 
-import asyncio
+  1. Self-heals a corrupted ``alembic_version`` table. The previous version of
+     this file ran ``INSERT INTO alembic_version ... ON CONFLICT DO NOTHING``
+     once per revision, which violates Alembic's invariant that the table holds
+     exactly one row (the current head). That left databases with one row per
+     applied revision, after which ``alembic upgrade head`` aborts with
+     "Requested revision X overlaps with other requested revisions ...". We
+     collapse any such tangle down to the single most-advanced applied revision.
+  2. Runs ``alembic upgrade head``.
+
+Step 1 is idempotent: once the table holds <=1 row it is a no-op.
+"""
 import sys
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlalchemy import text
+from pathlib import Path
+
+from alembic import command
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+from sqlalchemy import create_engine, text
+
+API_DIR = Path(__file__).resolve().parent
+ALEMBIC_INI = API_DIR / "alembic.ini"
 
 
-HEAD = "0019"
-
-MIGRATIONS = [
-    # (revision_id, sql_statements)
-    ("init001", [
-        """
-        DO $$ BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'sprintstatus') THEN
-                CREATE TYPE sprintstatus AS ENUM ('PLANNING','ACTIVE','COMPLETED','CANCELLED');
-            END IF;
-        END $$
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS organizations (
-            id                       UUID PRIMARY KEY,
-            clerk_org_id             VARCHAR(255) NOT NULL UNIQUE,
-            name                     VARCHAR(255) NOT NULL,
-            slug                     VARCHAR(100) NOT NULL UNIQUE,
-            encrypted_anthropic_key  TEXT,
-            use_managed_key          BOOLEAN   NOT NULL DEFAULT FALSE,
-            created_at               TIMESTAMP NOT NULL DEFAULT NOW(),
-            updated_at               TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS ix_organizations_clerk_org_id ON organizations(clerk_org_id)""",
-        """CREATE INDEX IF NOT EXISTS ix_organizations_slug ON organizations(slug)""",
-        """
-        CREATE TABLE IF NOT EXISTS teams (
-            id                  UUID PRIMARY KEY,
-            organization_id     UUID NOT NULL REFERENCES organizations(id),
-            name                VARCHAR(255) NOT NULL,
-            jira_board_id       VARCHAR(100),
-            sprint_length_days  INTEGER   NOT NULL DEFAULT 14,
-            created_at          TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS ix_teams_organization_id ON teams(organization_id)""",
-        """
-        CREATE TABLE IF NOT EXISTS developers (
-            id              UUID PRIMARY KEY,
-            team_id         UUID NOT NULL REFERENCES teams(id),
-            clerk_user_id   VARCHAR(255),
-            name            VARCHAR(255) NOT NULL,
-            email           VARCHAR(255),
-            role            VARCHAR(100),
-            is_active       BOOLEAN   NOT NULL DEFAULT TRUE,
-            created_at      TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS ix_developers_team_id ON developers(team_id)""",
-        """CREATE INDEX IF NOT EXISTS ix_developers_clerk_user_id ON developers(clerk_user_id)""",
-        """
-        CREATE TABLE IF NOT EXISTS jira_connections (
-            id                        UUID PRIMARY KEY,
-            organization_id           UUID NOT NULL REFERENCES organizations(id),
-            jira_cloud_id             VARCHAR(255) NOT NULL,
-            jira_cloud_url            VARCHAR(500) NOT NULL,
-            encrypted_access_token    TEXT NOT NULL,
-            encrypted_refresh_token   TEXT NOT NULL,
-            token_expires_at          TIMESTAMP,
-            scopes                    JSON,
-            is_active                 BOOLEAN   NOT NULL DEFAULT TRUE,
-            last_synced_at            TIMESTAMP,
-            created_at                TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS ix_jira_connections_organization_id ON jira_connections(organization_id)""",
-        """
-        CREATE TABLE IF NOT EXISTS sprints (
-            id                 UUID PRIMARY KEY,
-            team_id            UUID NOT NULL REFERENCES teams(id),
-            jira_sprint_id     VARCHAR(100),
-            name               VARCHAR(255) NOT NULL,
-            start_date         DATE,
-            end_date           DATE,
-            committed_points   FLOAT,
-            delivered_points   FLOAT,
-            status             sprintstatus NOT NULL DEFAULT 'PLANNING',
-            created_at         TIMESTAMP    NOT NULL DEFAULT NOW()
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS ix_sprints_team_id ON sprints(team_id)""",
-        """CREATE INDEX IF NOT EXISTS ix_sprints_jira_sprint_id ON sprints(jira_sprint_id)""",
-        """
-        CREATE TABLE IF NOT EXISTS sprint_tickets (
-            id                UUID PRIMARY KEY,
-            sprint_id         UUID NOT NULL REFERENCES sprints(id),
-            ticket_id         VARCHAR(100) NOT NULL,
-            assignee_id       UUID REFERENCES developers(id),
-            estimated_points  FLOAT,
-            actual_points     FLOAT,
-            completed         BOOLEAN   NOT NULL DEFAULT FALSE,
-            slip_cause        VARCHAR(100),
-            created_at        TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS ix_sprint_tickets_sprint_id ON sprint_tickets(sprint_id)""",
-        """CREATE INDEX IF NOT EXISTS ix_sprint_tickets_ticket_id ON sprint_tickets(ticket_id)""",
-        """CREATE INDEX IF NOT EXISTS ix_sprint_tickets_assignee_id ON sprint_tickets(assignee_id)""",
-        """
-        CREATE TABLE IF NOT EXISTS developer_velocity_profiles (
-            id                     UUID PRIMARY KEY,
-            developer_id           UUID NOT NULL REFERENCES developers(id),
-            team_id                UUID NOT NULL REFERENCES teams(id),
-            ticket_type            VARCHAR(100),
-            domain                 VARCHAR(255),
-            mean_completion_days   FLOAT,
-            std_dev                FLOAT,
-            sample_size            INTEGER   NOT NULL DEFAULT 0,
-            sprint_count           INTEGER   NOT NULL DEFAULT 0,
-            created_at             TIMESTAMP NOT NULL DEFAULT NOW(),
-            updated_at             TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS ix_dev_velocity_developer_id ON developer_velocity_profiles(developer_id)""",
-        """CREATE INDEX IF NOT EXISTS ix_dev_velocity_team_id ON developer_velocity_profiles(team_id)""",
-    ]),
-    # init002 historically attempted `ALTER TABLE sprints ADD COLUMN alert_sent`,
-    # but no such column exists on the Sprint model — sprint_alerts is a separate
-    # table created in revision 0015 below.
-    ("init002", []),
-    ("init003", [
-        """ALTER TABLE teams ADD COLUMN IF NOT EXISTS jira_project_key VARCHAR(100)""",
-    ]),
-    ("init004", [
-        """
-        CREATE TABLE IF NOT EXISTS team_members (
-            id UUID PRIMARY KEY,
-            team_id UUID NOT NULL REFERENCES teams(id),
-            jira_account_id VARCHAR(255) NOT NULL,
-            display_name VARCHAR(255) NOT NULL,
-            email VARCHAR(255)
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS ix_team_members_team_id ON team_members(team_id)""",
-        """CREATE INDEX IF NOT EXISTS ix_team_members_jira_account_id ON team_members(jira_account_id)""",
-        """
-        DO $$ BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ticketstatus') THEN
-                CREATE TYPE ticketstatus AS ENUM ('TODO','IN_PROGRESS','IN_REVIEW','DONE','CANCELLED');
-            END IF;
-        END $$
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS tickets (
-            id UUID PRIMARY KEY,
-            sprint_id UUID NOT NULL REFERENCES sprints(id),
-            team_id UUID NOT NULL REFERENCES teams(id),
-            assignee_id UUID REFERENCES team_members(id),
-            jira_issue_id VARCHAR(100) NOT NULL UNIQUE,
-            jira_issue_key VARCHAR(50),
-            title TEXT NOT NULL,
-            status ticketstatus NOT NULL DEFAULT 'TODO',
-            ticket_type VARCHAR(100),
-            story_points_estimated FLOAT,
-            time_estimate_hours FLOAT,
-            time_actual_hours FLOAT,
-            labels JSON,
-            components JSON,
-            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-            completed_at TIMESTAMP,
-            jira_updated_at TIMESTAMP
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS ix_tickets_sprint_id ON tickets(sprint_id)""",
-        """CREATE INDEX IF NOT EXISTS ix_tickets_team_id ON tickets(team_id)""",
-        """CREATE INDEX IF NOT EXISTS ix_tickets_assignee_id ON tickets(assignee_id)""",
-        """CREATE INDEX IF NOT EXISTS ix_tickets_jira_issue_id ON tickets(jira_issue_id)""",
-    ]),
-    ("init005", [
-        """ALTER TABLE tickets ALTER COLUMN sprint_id DROP NOT NULL""",
-    ]),
-    ("0005", [
-        """
-        DO $$ BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM pg_constraint
-                WHERE conname = 'uq_team_member_jira'
-                  AND conrelid = 'team_members'::regclass
-            ) THEN
-                ALTER TABLE team_members ADD CONSTRAINT uq_team_member_jira
-                    UNIQUE (team_id, jira_account_id);
-            END IF;
-        END $$
-        """,
-    ]),
-    ("0006", [
-    "ALTER TABLE developers ADD COLUMN IF NOT EXISTS app_role VARCHAR(20) NOT NULL DEFAULT 'developer'"
-    ]),
-    ("0007", [
-        """
-        CREATE TABLE IF NOT EXISTS ticket_analyses (
-          id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          team_id         UUID NOT NULL REFERENCES teams(id),
-          ticket_key      VARCHAR(50) NOT NULL,
-          ticket_title    TEXT,
-          readiness_score INT,
-          status          VARCHAR(20) NOT NULL,
-          issues          JSONB,
-          suggestions     JSONB,
-          analyzed_at     TIMESTAMP NOT NULL DEFAULT now(),
-          CONSTRAINT uq_ticket_analysis UNIQUE (team_id, ticket_key)
-        )
-        """,
-    ]),
-    ("0008", [
-        """
-        CREATE TABLE IF NOT EXISTS dependencies (
-          id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          team_id         UUID NOT NULL REFERENCES teams(id),
-          ticket_key      VARCHAR(50) NOT NULL,
-          ticket_title    TEXT,
-          blocked_by_key  VARCHAR(50),
-          dependency_type VARCHAR(30) NOT NULL,
-          risk_level      VARCHAR(10) NOT NULL,
-          description     TEXT,
-          source          VARCHAR(10) NOT NULL DEFAULT 'manual',
-          resolved_at     TIMESTAMP,
-          created_at      TIMESTAMP NOT NULL DEFAULT now()
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS idx_dep_team_resolved ON dependencies(team_id, resolved_at)""",
-    ]),
-    ("0009", [
-        """
-        CREATE TABLE IF NOT EXISTS retrospectives (
-          id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          sprint_id        UUID NOT NULL UNIQUE REFERENCES sprints(id),
-          team_id          UUID NOT NULL REFERENCES teams(id),
-          generated_at     TIMESTAMP NOT NULL DEFAULT now(),
-          went_well        JSONB,
-          went_poorly      JSONB,
-          action_items     JSONB,
-          velocity_summary JSONB
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS retro_patterns (
-          id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          team_id               UUID NOT NULL REFERENCES teams(id),
-          pattern_type          VARCHAR(30) NOT NULL,
-          description           TEXT,
-          occurrence_count      INT NOT NULL DEFAULT 1,
-          first_seen_sprint_id  UUID REFERENCES sprints(id),
-          last_seen_sprint_id   UUID REFERENCES sprints(id),
-          status                VARCHAR(10) NOT NULL DEFAULT 'active',
-          affected_sprint_names JSONB
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS idx_retro_patterns_team_status ON retro_patterns(team_id, status)""",
-    ]),
-    ("0010", [
-        """ALTER TABLE tickets ADD COLUMN IF NOT EXISTS components JSON""",
-    ]),
-    ("0011", [
-        """ALTER TABLE organizations ADD COLUMN IF NOT EXISTS onboarding_completed_at TIMESTAMP""",
-        """ALTER TABLE teams ADD COLUMN IF NOT EXISTS jira_import_status VARCHAR(20) NOT NULL DEFAULT 'pending'""",
-        """ALTER TABLE teams ADD COLUMN IF NOT EXISTS jira_import_sprints_imported INTEGER""",
-        """
-        CREATE TABLE IF NOT EXISTS invitations (
-            id              UUID PRIMARY KEY,
-            organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-            team_id         UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-            inviter_id      VARCHAR(255) NOT NULL,
-            email           VARCHAR(255) NOT NULL,
-            role            VARCHAR(20)  NOT NULL DEFAULT 'developer',
-            token           VARCHAR(64)  NOT NULL,
-            status          VARCHAR(20)  NOT NULL DEFAULT 'pending',
-            accepted_at     TIMESTAMP,
-            expires_at      TIMESTAMP    NOT NULL,
-            created_at      TIMESTAMP    NOT NULL DEFAULT NOW()
-        )
-        """,
-        """CREATE UNIQUE INDEX IF NOT EXISTS uq_invitation_token ON invitations(token)""",
-        """CREATE INDEX IF NOT EXISTS ix_invitations_org_id ON invitations(organization_id)""",
-        """CREATE INDEX IF NOT EXISTS ix_invitations_email ON invitations(email)""",
-    ]),
-    ("0012", [
-        """ALTER TABLE teams ADD COLUMN IF NOT EXISTS meeting_overhead_pct FLOAT NOT NULL DEFAULT 0.0""",
-        """
-        CREATE TABLE IF NOT EXISTS developer_capacity_overrides (
-            id           UUID PRIMARY KEY,
-            developer_id UUID NOT NULL REFERENCES developers(id) ON DELETE CASCADE,
-            sprint_id    UUID REFERENCES sprints(id) ON DELETE CASCADE,
-            capacity_pct FLOAT,
-            pto_days     FLOAT,
-            notes        TEXT,
-            created_by   VARCHAR(255) NOT NULL,
-            created_at   TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-        """,
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_dev_capacity_sprint
-            ON developer_capacity_overrides(developer_id, sprint_id)
-            WHERE sprint_id IS NOT NULL
-        """,
-        """CREATE INDEX IF NOT EXISTS ix_dev_capacity_dev_id ON developer_capacity_overrides(developer_id)""",
-    ]),
-    ("0014", [
-        """
-        CREATE TABLE IF NOT EXISTS team_access_grants (
-            id           UUID PRIMARY KEY,
-            developer_id UUID NOT NULL REFERENCES developers(id) ON DELETE CASCADE,
-            team_id      UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-            granted_by   VARCHAR(255) NOT NULL,
-            granted_at   TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-        """,
-        """CREATE UNIQUE INDEX IF NOT EXISTS uq_team_access_grant ON team_access_grants(developer_id, team_id)""",
-        """CREATE INDEX IF NOT EXISTS ix_team_access_dev_id ON team_access_grants(developer_id)""",
-        """
-        CREATE TABLE IF NOT EXISTS slack_configs (
-            id          UUID PRIMARY KEY,
-            team_id     UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-            webhook_url TEXT NOT NULL,
-            channel     VARCHAR(100),
-            alert_types JSONB NOT NULL DEFAULT '["high_risk_dependency","sprint_at_risk","retro_action_overdue"]',
-            is_active   BOOLEAN NOT NULL DEFAULT TRUE,
-            created_at  TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-        """,
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_slack_config_team
-            ON slack_configs(team_id) WHERE is_active = TRUE
-        """,
-    ]),
-    ("0015", [
-        """
-        DO $$ BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'alerttype') THEN
-                CREATE TYPE alerttype AS ENUM (
-                    'stalled_ticket','over_capacity','dependency_risk','spillover_prediction'
-                );
-            END IF;
-        END $$
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS sprint_alerts (
-            id                  UUID PRIMARY KEY,
-            sprint_id           UUID NOT NULL REFERENCES sprints(id),
-            team_id             UUID NOT NULL REFERENCES teams(id),
-            type                alerttype NOT NULL,
-            description         TEXT NOT NULL,
-            recommended_action  TEXT NOT NULL,
-            dismissed           BOOLEAN   NOT NULL DEFAULT FALSE,
-            created_at          TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS ix_sprint_alerts_sprint_id ON sprint_alerts(sprint_id)""",
-        """CREATE INDEX IF NOT EXISTS ix_sprint_alerts_team_id ON sprint_alerts(team_id)""",
-    ]),
-    ("0017", [
-        """
-        CREATE TABLE IF NOT EXISTS team_identifiers (
-            id                UUID PRIMARY KEY,
-            team_id           UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-            token             TEXT NOT NULL,
-            normalized_token  TEXT NOT NULL,
-            skill             VARCHAR(100) NOT NULL,
-            domain            VARCHAR(50) NULL,
-            confidence        FLOAT NOT NULL DEFAULT 0.5,
-            source            VARCHAR(30) NOT NULL,
-            occurrence_count  INTEGER NOT NULL DEFAULT 1,
-            first_seen_at     TIMESTAMP NOT NULL DEFAULT NOW(),
-            last_seen_at      TIMESTAMP NOT NULL DEFAULT NOW(),
-            CONSTRAINT uq_team_identifier_token UNIQUE (team_id, token)
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS ix_team_identifiers_team_id ON team_identifiers(team_id)""",
-        """CREATE INDEX IF NOT EXISTS ix_team_identifiers_team_normalized ON team_identifiers(team_id, normalized_token)""",
-        """
-        CREATE TABLE IF NOT EXISTS ticket_skill_analyses (
-            id                  UUID PRIMARY KEY,
-            ticket_id           UUID NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-            skill_vector        JSONB NOT NULL DEFAULT '{}'::jsonb,
-            domain_vector       JSONB NOT NULL DEFAULT '{}'::jsonb,
-            matched_identifiers JSONB NOT NULL DEFAULT '[]'::jsonb,
-            analyzed_at         TIMESTAMP NOT NULL DEFAULT NOW(),
-            CONSTRAINT uq_ticket_skill_analysis UNIQUE (ticket_id)
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS ix_ticket_skill_analyses_ticket_id ON ticket_skill_analyses(ticket_id)""",
-        """ALTER TABLE developers ADD COLUMN IF NOT EXISTS skill_ratings JSONB NULL""",
-    ]),
-    ("0018", [
-        """
-        CREATE TABLE IF NOT EXISTS sprint_plan_overrides (
-            id                       UUID PRIMARY KEY,
-            sprint_id                UUID NOT NULL REFERENCES sprints(id) ON DELETE CASCADE,
-            ticket_id                UUID NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-            action                   VARCHAR(20) NOT NULL,
-            original_developer_id    UUID NULL REFERENCES developers(id) ON DELETE SET NULL,
-            new_developer_id         UUID NULL REFERENCES developers(id) ON DELETE SET NULL,
-            reason_code              VARCHAR(30) NULL,
-            reason_text              TEXT NULL,
-            created_by               UUID NULL,
-            created_at               TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS ix_sprint_plan_overrides_sprint_id ON sprint_plan_overrides(sprint_id)""",
-        """CREATE INDEX IF NOT EXISTS ix_sprint_plan_overrides_ticket_new ON sprint_plan_overrides(ticket_id, new_developer_id)""",
-        """ALTER TABLE sprints ADD COLUMN IF NOT EXISTS plan_override_rate FLOAT NULL""",
-        """ALTER TABLE sprints ADD COLUMN IF NOT EXISTS plan_overrides_by_reason JSONB NULL""",
-    ]),
-    ("0019", [
-        """
-        CREATE TABLE IF NOT EXISTS recalibration_proposals (
-            id               UUID PRIMARY KEY,
-            team_id          UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-            kind             VARCHAR(20) NOT NULL,
-            developer_id     UUID NULL REFERENCES developers(id) ON DELETE CASCADE,
-            identifier_id    UUID NULL REFERENCES team_identifiers(id) ON DELETE CASCADE,
-            skill            VARCHAR(100) NULL,
-            current_value    FLOAT NULL,
-            suggested_value  FLOAT NULL,
-            suggested_skill  VARCHAR(100) NULL,
-            evidence         JSONB NOT NULL DEFAULT '[]'::jsonb,
-            status           VARCHAR(15) NOT NULL DEFAULT 'pending',
-            decided_at       TIMESTAMP NULL,
-            decided_by       UUID NULL,
-            created_at       TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-        """,
-        """CREATE INDEX IF NOT EXISTS ix_recalibration_proposals_team_status ON recalibration_proposals(team_id, status)""",
-        """CREATE INDEX IF NOT EXISTS ix_recalibration_proposals_target ON recalibration_proposals(developer_id, identifier_id, skill)""",
-    ]),
-]
+def _alembic_config() -> Config:
+    return Config(str(ALEMBIC_INI))
 
 
-async def run():
+def _heal_version_table(cfg: Config) -> None:
+    """Collapse a multi-row alembic_version down to its true tip."""
     from src.config import settings
-    engine = create_async_engine(settings.database_url)
 
-    async with engine.begin() as conn:
-        # Ensure alembic_version table exists
-        await conn.execute(text(
-            "CREATE TABLE IF NOT EXISTS alembic_version "
-            "(version_num VARCHAR(32) NOT NULL, CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))"
-        ))
+    script = ScriptDirectory.from_config(cfg)
+    head_to_base = [rev.revision for rev in script.walk_revisions()]  # head .. base
 
-        result = await conn.execute(text("SELECT version_num FROM alembic_version"))
-        applied = {row[0] for row in result.fetchall()}
-        print(f"[migrate] Applied revisions in DB: {applied}")
+    engine = create_engine(settings.database_url_sync)
+    try:
+        with engine.begin() as conn:
+            if conn.execute(text("SELECT to_regclass('public.alembic_version')")).scalar() is None:
+                return  # fresh DB; alembic will create and stamp it
 
-        for revision_id, stmts in MIGRATIONS:
-            if revision_id in applied:
-                print(f"[migrate] {revision_id} already applied — skipping")
-                continue
-            print(f"[migrate] Applying {revision_id}...")
-            for stmt in stmts:
-                stmt = stmt.strip()
-                if stmt:
-                    await conn.execute(text(stmt))
-            await conn.execute(
-                text("INSERT INTO alembic_version (version_num) VALUES (:v) ON CONFLICT DO NOTHING"),
-                {"v": revision_id},
+            rows = [r[0] for r in conn.execute(text("SELECT version_num FROM alembic_version"))]
+            if len(rows) <= 1:
+                return
+
+            present = set(rows)
+            keep = next((rev for rev in head_to_base if rev in present), None)
+            if keep is None:
+                # All rows are unknown to the current script tree — don't guess;
+                # let `alembic upgrade` surface a clear error instead.
+                return
+
+            print(
+                f"[migrate] alembic_version had {len(rows)} rows {sorted(rows)}; "
+                f"collapsing to '{keep}' (legacy migrate.py corruption)",
+                flush=True,
             )
-            print(f"[migrate] {revision_id} done")
+            conn.execute(
+                text("DELETE FROM alembic_version WHERE version_num != :keep"),
+                {"keep": keep},
+            )
+    finally:
+        engine.dispose()
 
-        # Ensure DB is stamped at HEAD even if it was already there
-        await conn.execute(
-            text("INSERT INTO alembic_version (version_num) VALUES (:v) ON CONFLICT DO NOTHING"),
-            {"v": HEAD},
-        )
-        print(f"[migrate] DB is at head ({HEAD})")
 
-    await engine.dispose()
+def main() -> int:
+    cfg = _alembic_config()
+    _heal_version_table(cfg)
+    print("[migrate] running: alembic upgrade head", flush=True)
+    command.upgrade(cfg, "head")
+    print("[migrate] alembic upgrade head complete", flush=True)
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    sys.exit(main())

@@ -1,4 +1,6 @@
 [deploy]
+# migrate.py self-heals a legacy-corrupted alembic_version then runs
+# `alembic upgrade head`. Alembic is the single source of truth for schema.
 preDeployCommand = "python migrate.py"
 startCommand = "sh -c 'uvicorn src.main:app --host 0.0.0.0 --port $PORT'"
 healthcheckPath = "/health"

@@ -46,7 +46,17 @@ app.add_middleware(
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     logger.exception("Unhandled exception for %s %s", request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    response = JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    # ServerErrorMiddleware sits OUTSIDE CORSMiddleware, so 500s skip the CORS
+    # layer and reach the browser without CORS headers — surfacing as a
+    # misleading "blocked by CORS policy" error. Re-add them here so the real
+    # 500 is visible to the frontend.
+    origin = request.headers.get("origin")
+    if origin and origin in settings.allowed_origins:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Vary"] = "Origin"
+    return response
 
 
 app.include_router(sprint_brain_router.router)

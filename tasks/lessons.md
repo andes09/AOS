@@ -200,9 +200,9 @@
 
 **Rules:**
 1. Pick one migration system from day one and never switch mid-project without fully retiring the other
-2. `migrate.py` (idempotent, bypasses alembic file-discovery) is more reliable for Railway than `alembic upgrade head` — use it as `preDeployCommand` from the start
-3. Every time you manually patch the DB, immediately run: `INSERT INTO alembic_version (version_num) VALUES ('initXXX') ON CONFLICT DO NOTHING`
-4. Before debugging any 4xx/5xx, run `SELECT * FROM alembic_version` first — a missing migration explains most runtime failures faster than any other check
+2. ~~`migrate.py` ... use it as `preDeployCommand`~~ **SUPERSEDED — see "The dual migration system IS the recurring bug" at the bottom of this file. migrate.py is the root cause, not the cure.**
+3. ~~Every time you manually patch the DB, run `INSERT INTO alembic_version ... ON CONFLICT DO NOTHING`~~ **SUPERSEDED — this is WRONG and is the exact mechanism that corrupts `alembic_version`. Alembic keeps ONE row; per-revision INSERTs break `alembic upgrade` permanently. Use `alembic stamp <rev>` (which UPDATEs the single row), never a raw INSERT.**
+4. Before debugging any 4xx/5xx, run `SELECT * FROM alembic_version` first — a missing migration explains most runtime failures faster than any other check. If it returns MORE THAN ONE row, the table is corrupted (see bottom of file).
 5. Write all migrations idempotent (`IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) so re-running is always safe
 
 ---
@@ -351,4 +351,36 @@
 3. **Pre-merge checklist for model PRs:** open `apps/api/migrate.py` and confirm (a) a new entry exists in `MIGRATIONS`, (b) `HEAD` is bumped to that revision, (c) the SQL uses `ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS` so it's idempotent. If any of those are missing, the deploy will crash.
 4. **Don't add experiment/simulator columns to core product tables.** If a feature is local/dev-only (TAWOS importer, simulator, internal tooling), the columns belong in a separate table or schema that the core API doesn't query. Attaching them to `Organization`/`Ticket`/etc. means every production request now depends on local-only schema being present.
 5. **For the next outage of this shape:** the fix is fast — remove the offending columns from the SQLAlchemy models and redeploy. SQLAlchemy will stop selecting them and the crash stops immediately. The DB itself doesn't need a rollback. Do the model edit first, deploy, then clean up the orphan migration files.
+
+---
+
+## The dual migration system IS the recurring bug — stop patching symptoms
+
+**This supersedes the earlier advice in this file that treats `migrate.py` as authoritative or tells you to `INSERT` into `alembic_version`. Those "lessons" were symptom-patches that kept the disease alive. Read this one instead.**
+
+**The symptom (keeps coming back in different costumes):** API endpoints 500 with `column X does not exist`, browser shows it as a CORS error (the custom exception handler returns a response with no CORS headers, so the browser blames CORS). Or `alembic upgrade head` refuses to run with `Requested revision NNNN overlaps with other requested revisions ...`.
+
+**The actual root cause — one disease, not many incidents:** this repo runs TWO migration systems against the same database:
+- real Alembic (`alembic/versions/*.py`, run via `alembic upgrade head`), and
+- `apps/api/migrate.py` — a hand-rolled runner with a hardcoded `MIGRATIONS` list, a hardcoded `HEAD`, and (critically) `INSERT INTO alembic_version (version_num) VALUES (:v) ON CONFLICT DO NOTHING` per revision. It's Railway's `preDeployCommand`.
+
+Two things break, every time:
+1. **`migrate.py` violates Alembic's core invariant.** `alembic_version` is supposed to hold exactly ONE row = the current head. Alembic moves forward by `UPDATE`-ing that single row. `migrate.py` `INSERT`s a new row per revision, so the table accumulates one row per migration (I found 16). Once that happens, `alembic upgrade head` can never compute a path and dies with "overlaps". The DB is wedged until someone manually collapses the rows.
+2. **The two lists drift.** `migrate.py`'s `HEAD`/`MIGRATIONS` are hand-copied and always lag the real `alembic/versions/` head (found `HEAD="0019"` while alembic head was `0021`). New columns/tables silently never get applied → the `column does not exist` 500s. "Add every schema change to BOTH systems" is not a fix; it's a standing invitation to forget one.
+
+**Why I keep getting fooled:** the browser error says CORS, the failing request says 500, and the old lessons point me at "add it to migrate.py too / INSERT the version row." All three lead me to patch a symptom and declare victory, leaving the dual system — and the next outage — intact.
+
+**The emergency stop (when a DB is already wedged):**
+1. `SELECT version_num FROM alembic_version` — if >1 row, it's corrupted.
+2. Figure out the highest revision whose schema is actually present, collapse to that single row: `DELETE FROM alembic_version WHERE version_num != '<rev>'`.
+3. `alembic upgrade head`. Verify `alembic current` == `alembic heads` and the table has exactly one row.
+This is a band-aid. It will re-corrupt the moment `migrate.py` runs again.
+
+**The permanent fix (shipped 2026-05-29):** `migrate.py` was gutted of its hand-written SQL and hardcoded `HEAD`. It is now a thin shim that (1) self-heals a multi-row `alembic_version` by collapsing it to the most-advanced revision actually present (walks `ScriptDirectory.walk_revisions()` head→base, keeps the first present one), then (2) calls `command.upgrade(cfg, "head")`. Alembic is now the single source of truth; the shim carries no schema. The self-heal step is required because prod's `alembic_version` is already corrupted from the old per-revision INSERTs — a bare `alembic upgrade head` as `preDeployCommand` would fail the deploy with "overlaps" before anyone could clean it. The heal is idempotent (no-op once the table holds ≤1 row), so once prod is healed the shim is effectively just `alembic upgrade head`. The original reason the old migrate.py existed — alembic skipping the base migration on Railway because revision IDs `'0000'/'0001'` were treated as falsy — is already fixed elsewhere in this file, so its hand-rolled SQL had no remaining justification. If you ever must stamp a revision by hand, use `alembic stamp <rev>` (it UPDATEs the one row); NEVER raw-`INSERT` into `alembic_version`.
+
+**Rules for myself:**
+1. When I see `column does not exist`, `overlaps`, or a CORS error that's really a 500 on this repo, my FIRST move is `SELECT version_num FROM alembic_version` + compare `alembic current` vs `alembic heads`. Multiple rows = corruption from migrate.py, not an app bug.
+2. Never recommend or write per-revision `INSERT INTO alembic_version`. That is the corruption, not the cure.
+3. Don't "fix" a migration drift by syncing the two systems. Name the dual-system root cause out loud and push to retire `migrate.py`. Syncing is patching a symptom — exactly the loop this file kept repeating.
+4. After any emergency `alembic_version` cleanup, explicitly tell the user it's temporary and that the durable fix is killing the second migration path — don't let the band-aid masquerade as the fix.
 

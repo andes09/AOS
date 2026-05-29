@@ -51,6 +51,7 @@ interface InvitationItem {
 export function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const showSlackAlerts = useFeature('slack_alerts')
+  const showGlossary = useFeature('skill_based_assignment')
   const [status, setStatus] = useState<JiraStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -489,7 +490,7 @@ export function SettingsPage() {
       )}
 
       {/* Team Glossary */}
-      {isLead && (
+      {isLead && showGlossary && (
         <Card style={sectionGap}>
           <CardHeader>
             <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>

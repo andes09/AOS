@@ -76,6 +76,7 @@ export function SprintPlannerPage() {
   const navigate = useNavigate()
   const canPushToJira = useFeature('push_to_jira')
   const canInlineRefine = useFeature('scope_check_v2')
+  const canScanDependencies = useFeature('dependency_radar')
 
   const [plan, setPlan] = useState<SprintPlanResponse | null>(() => {
     try {
@@ -300,7 +301,7 @@ export function SprintPlannerPage() {
               variant="primary"
               onClick={() => setReviewOpen(true)}
             >
-              ✦ Review & Refine
+              ✦ Review
             </Button>
           )}
         </div>
@@ -405,11 +406,6 @@ export function SprintPlannerPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
 
           {/* Scope Check status */}
-          {plan.enrichmentStatus.scopeCop === 'not_analyzed' && !scopeAnalysisMutation.data && (
-            <Alert variant="warning">
-              Scope not analyzed — open Review & Refine to analyze before planning
-            </Alert>
-          )}
           {plan.enrichmentStatus.scopeCop === 'all_ready' && (
             <Alert variant="success">All tickets scope-ready</Alert>
           )}
@@ -423,7 +419,7 @@ export function SprintPlannerPage() {
           ))}
 
           {/* Dependency Radar status */}
-          {plan.enrichmentStatus.dependencyRadar === 'not_scanned' && (
+          {canScanDependencies && plan.enrichmentStatus.dependencyRadar === 'not_scanned' && (
             <Alert variant="warning">
               Dependencies not scanned —{' '}
               <button

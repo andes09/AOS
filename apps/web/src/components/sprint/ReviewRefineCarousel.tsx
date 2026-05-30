@@ -1564,7 +1564,7 @@ export function ReviewRefineCarousel({
               </span>
               <span style={{ color: 'var(--color-text-muted)' }}>·</span>
               <span style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
-                Review &amp; Refine
+                Review
               </span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

@@ -1,6 +1,6 @@
 // apps/web/src/types/inlineRefinement.ts
 // Initiative B — Inline Ticket Refinement. Shared contracts consumed by
-// TicketEditorPane, PlanReviewModal, SignOffCarousel, and the planner wiring.
+// ReviewRefineCarousel and the planner wiring.
 
 // The persisted Scope Cop suggestion. Inner keys are snake_case because the
 // payload is stored verbatim from Claude's tool output (see

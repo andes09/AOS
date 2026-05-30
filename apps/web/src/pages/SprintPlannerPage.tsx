@@ -10,7 +10,7 @@ import { PlanReasoningPanel } from '../components/sprint/PlanReasoningPanel'
 import { ScopeCopPanel } from '../components/sprint/ScopeCopPanel'
 import { CapacitySettingsPanel } from '../components/sprint/CapacitySettingsPanel'
 import { MeetingLoadWarning } from '../components/sprint/MeetingLoadWarning'
-import { PlanReviewModal } from '../components/sprint/PlanReviewModal'
+import { ReviewRefineCarousel } from '../components/sprint/ReviewRefineCarousel'
 import { Button } from '../components/ui/Button'
 import { Alert } from '../components/ui/Alert'
 import { Card, CardBody } from '../components/ui/Card'
@@ -154,8 +154,7 @@ export function SprintPlannerPage() {
     onSuccess: (data) => {
       setCommitResult(data)
       // No conflicts → close the modal. With conflicts, keep it open so the
-      // carousel's final screen can surface them (PlanReviewModal forwards
-      // pushResult into the carousel).
+      // carousel's Done screen can surface them.
       if (data.conflicts.length === 0) setReviewOpen(false)
     },
   })
@@ -276,14 +275,6 @@ export function SprintPlannerPage() {
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <Button
-            variant="secondary"
-            onClick={() => scopeAnalysisMutation.mutate()}
-            disabled={scopeAnalysisMutation.isPending}
-          >
-            {scopeAnalysisMutation.isPending ? 'Analyzing...' : 'Analyze Scope'}
-          </Button>
-
-          <Button
             variant="primary"
             onClick={() => generatePlan.mutate()}
             disabled={generatePlan.isPending}
@@ -306,11 +297,10 @@ export function SprintPlannerPage() {
 
           {plan && canInlineRefine && (
             <Button
-              variant="secondary"
+              variant="primary"
               onClick={() => setReviewOpen(true)}
-              style={{ color: 'var(--color-success)', borderColor: 'var(--color-success)' }}
             >
-              Review &amp; Refine
+              ✦ Review & Refine
             </Button>
           )}
         </div>
@@ -417,7 +407,7 @@ export function SprintPlannerPage() {
           {/* Scope Check status */}
           {plan.enrichmentStatus.scopeCop === 'not_analyzed' && !scopeAnalysisMutation.data && (
             <Alert variant="warning">
-              Scope not analyzed — run Analyze Scope before planning
+              Scope not analyzed — open Review & Refine to analyze before planning
             </Alert>
           )}
           {plan.enrichmentStatus.scopeCop === 'all_ready' && (
@@ -494,7 +484,7 @@ export function SprintPlannerPage() {
       )}
 
       {plan && canInlineRefine && (
-        <PlanReviewModal
+        <ReviewRefineCarousel
           plan={plan}
           open={reviewOpen}
           onClose={() => setReviewOpen(false)}

@@ -34,6 +34,11 @@ Thumbs.db
 
 # Claude Code
 .claude/settings.local.json
+.claude/worktrees/
+
+# Runtime cost log (regenerated on every sprint generation)
+sprint_cost_log.csv
+apps/api/sprint_cost_log.csv
 
 # Docker
 postgres_data/

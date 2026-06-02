@@ -312,6 +312,26 @@ class JiraDriver:
             for p in resp.json()
         ]
 
+    def list_all_boards(self) -> list[dict]:
+        """Return all boards visible to the authenticated user (paginated)."""
+        boards: list[dict] = []
+        start_at = 0
+        while True:
+            resp = self._request(
+                "GET",
+                f"/rest/agile/1.0/board?startAt={start_at}&maxResults=50",
+            )
+            data = resp.json()
+            values = data.get("values") or []
+            boards.extend(values)
+            if data.get("isLast", True):
+                break
+            start_at += len(values)
+        return boards
+
+    def delete_board(self, board_id: int) -> None:
+        self._request("DELETE", f"/rest/agile/1.0/board/{board_id}")
+
     def close(self) -> None:
         self._client.close()
 

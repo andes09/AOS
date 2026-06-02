@@ -921,6 +921,7 @@ async def generate_sprint_plan(
         model=_MODEL,
         team_id=inp.team_id,
         ticket_count=len(inp.candidate_tickets),
+        assigned_count=len(plan.assignments),
     )
 
     return plan

@@ -1,42 +1,13 @@
 // apps/web/src/pages/onboarding/ConnectJiraStep.tsx
 
-import { useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { useApi } from '../../lib/api'
+import { useJiraOAuth } from '../../hooks/useJiraOAuth'
 
 interface ConnectJiraStepProps {
   onNext: (connectionId: string) => void
 }
 
 export function ConnectJiraStep({ onNext }: ConnectJiraStepProps) {
-  const [searchParams, setSearchParams] = useSearchParams()
-  const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle')
-  const [error, setError] = useState<string | null>(null)
-  const { get } = useApi()
-
-  // Backend redirects back here with ?connection_id= after successful OAuth.
-  // Dependency array is intentionally empty — this must run exactly once on mount.
-  // Adding searchParams/onNext as deps would cause a re-entrant loop on each render.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    const connectionId = searchParams.get('connection_id')
-    if (connectionId) {
-      setSearchParams({}, { replace: true }) // strip param from URL
-      onNext(connectionId)
-    }
-  }, [])
-
-  async function handleConnect() {
-    setStatus('loading')
-    setError(null)
-    try {
-      const data = await get<{ auth_url: string }>('/api/integrations/jira/connect')
-      window.location.href = data.auth_url
-    } catch (err) {
-      setStatus('error')
-      setError(err instanceof Error ? err.message : 'Failed to initiate Jira connection')
-    }
-  }
+  const { connect, isConnecting, error } = useJiraOAuth('/onboarding', onNext)
 
   return (
     <div>
@@ -51,11 +22,11 @@ export function ConnectJiraStep({ onNext }: ConnectJiraStepProps) {
         <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 12 }}>{error}</div>
       )}
       <button
-        onClick={handleConnect}
-        disabled={status === 'loading'}
-        style={primaryButtonStyle(status === 'loading' ? '#374151' : '#6366f1')}
+        onClick={connect}
+        disabled={isConnecting}
+        style={primaryButtonStyle(isConnecting ? '#374151' : '#6366f1')}
       >
-        {status === 'loading' ? 'Redirecting...' : 'Connect Atlassian Account →'}
+        {isConnecting ? 'Redirecting...' : 'Connect Atlassian Account →'}
       </button>
     </div>
   )

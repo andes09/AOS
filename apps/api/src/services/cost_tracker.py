@@ -14,11 +14,17 @@ https://www.anthropic.com/pricing.
 
 from __future__ import annotations
 
+import csv
 import logging
+import os
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Iterable
 
 from src.config import settings
+
+_CSV_PATH = Path(__file__).resolve().parent.parent.parent / "sprint_cost_log.csv"
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +88,32 @@ def is_enabled() -> bool:
         return False
 
 
+_CSV_HEADERS = [
+    "date", "model", "total_tokens", "input_tokens", "output_tokens",
+    "total_price_usd", "price_per_ticket_usd",
+]
+
+
+def _append_csv_row(breakdown: CostBreakdown, model: str, assigned_count: int) -> None:
+    total_tokens = breakdown.input_tokens + breakdown.output_tokens
+    price_per_ticket = round(breakdown.cost_usd / assigned_count, 6) if assigned_count else 0.0
+    row = {
+        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "model": model,
+        "total_tokens": total_tokens,
+        "input_tokens": breakdown.input_tokens,
+        "output_tokens": breakdown.output_tokens,
+        "total_price_usd": breakdown.cost_usd,
+        "price_per_ticket_usd": price_per_ticket,
+    }
+    write_header = not _CSV_PATH.exists() or os.path.getsize(_CSV_PATH) == 0
+    with open(_CSV_PATH, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=_CSV_HEADERS)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+
+
 def record_generation_cost(
     operation: str,
     *usages,
@@ -113,6 +145,15 @@ def record_generation_cost(
             "".join(f" {k}={v}" for k, v in context.items()),
             extra={"ai_cost": {"operation": operation, **asdict(breakdown), **context}},
         )
+        if operation == "sprint_plan":
+            try:
+                _append_csv_row(
+                    breakdown,
+                    model=context.get("model", "unknown"),
+                    assigned_count=context.get("assigned_count", 0),
+                )
+            except Exception:
+                logger.warning("cost_tracker._append_csv_row failed", exc_info=True)
         return breakdown
     except Exception:
         logger.warning("cost_tracker.record_generation_cost failed", exc_info=True)

@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import get_current_user_id, get_current_org_id
@@ -32,25 +32,31 @@ from src.integrations.jira.oauth import (
     refresh_access_token,
 )
 from src.models.jira_connection import JiraConnection
+from src.models.oauth_state import OAuthState
 from src.models.organization import Organization
 from src.models.team import Team
 from src.services.encryption import decrypt, encrypt
 
 router = APIRouter(prefix="/api/integrations/jira", tags=["jira"])
 
-# In-process state store: state_token → {user_id, org_id}
-# Replace with Redis in production for multi-instance deployments.
-_oauth_states: dict[str, dict] = {}
-
 
 @router.get("/connect")
 async def jira_connect(
+    return_to: str = Query(default="/onboarding"),
     user_id: str = Depends(get_current_user_id),
     clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
 ):
     """Return the Atlassian OAuth2 authorization URL."""
     state = secrets.token_urlsafe(32)
-    _oauth_states[state] = {"user_id": user_id, "org_id": clerk_org_id}
+    db.add(OAuthState(
+        state=state,
+        user_id=user_id,
+        org_id=clerk_org_id,
+        return_to=return_to,
+        expires_at=datetime.utcnow() + timedelta(minutes=10),
+    ))
+    await db.commit()
     return {"auth_url": get_authorization_url(state)}
 
 
@@ -65,11 +71,21 @@ async def jira_callback(
     Exchanges the code for tokens, resolves the real org_id from the state
     token, and persists the JiraConnection.
     """
-    state_data = _oauth_states.pop(state, None)
-    if not state_data:
-        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+    try:
+        await db.execute(delete(OAuthState).where(OAuthState.expires_at < datetime.utcnow()))
+    except Exception:
+        pass
 
-    clerk_org_id = state_data["org_id"]
+    state_row = await db.scalar(select(OAuthState).where(OAuthState.state == state))
+    if not state_row:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+    if state_row.expires_at < datetime.utcnow():
+        await db.delete(state_row)
+        await db.commit()
+        raise HTTPException(status_code=400, detail="OAuth state expired — please try again")
+    clerk_org_id = state_row.org_id
+    return_to = state_row.return_to
+    await db.delete(state_row)
 
     org = await db.scalar(
         select(Organization).where(Organization.clerk_org_id == clerk_org_id)
@@ -115,9 +131,7 @@ async def jira_callback(
     await db.commit()
 
     frontend_base = settings.frontend_url.split(",")[0].strip()
-    return RedirectResponse(
-        f"{frontend_base}/onboarding?connection_id={connection.id}"
-    )
+    return RedirectResponse(f"{frontend_base}{return_to}?connection_id={connection.id}")
 
 
 @router.get("/status")

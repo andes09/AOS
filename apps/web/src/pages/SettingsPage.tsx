@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { useApi, ApiError } from '../lib/api'
 import { useAppRole } from '../hooks/useAppRole'
+import { useJiraOAuth } from '../hooks/useJiraOAuth'
 import { Card, CardHeader, CardBody } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
@@ -49,7 +51,6 @@ interface InvitationItem {
 }
 
 export function SettingsPage() {
-  const [searchParams, setSearchParams] = useSearchParams()
   const showSlackAlerts = useFeature('slack_alerts')
   const showGlossary = useFeature('skill_based_assignment')
   const [status, setStatus] = useState<JiraStatus | null>(null)
@@ -80,6 +81,11 @@ export function SettingsPage() {
   const { get, del, post, put } = useApi()
   const { appRole } = useAppRole()
   const isLead = appRole === 'lead' || appRole === 'exec' || appRole === 'admin'
+  const queryClient = useQueryClient()
+  const { connect: connectJira, isConnecting: jiraConnecting, error: jiraConnectError } = useJiraOAuth(
+    '/app/settings',
+    () => queryClient.invalidateQueries({ queryKey: ['jira-status'] })
+  )
 
   async function fetchStatus() {
     try {
@@ -162,9 +168,6 @@ export function SettingsPage() {
     fetchAnthropicStatus()
     fetchSlackConfig()
     fetchInvitations()
-    if (searchParams.get('connection_id')) {
-      setSearchParams({}, { replace: true })
-    }
   }, [])
 
   async function handleSaveSlack() {
@@ -252,18 +255,6 @@ export function SettingsPage() {
     }
   }
 
-  async function handleConnect() {
-    setActionLoading(true)
-    setActionError(null)
-    try {
-      const data = await get<{ auth_url: string }>('/api/integrations/jira/connect')
-      window.location.href = data.auth_url
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to initiate connection')
-      setActionLoading(false)
-    }
-  }
-
   async function handleSaveAnthropicKey() {
     if (!anthropicKey.trim()) return
     setAnthropicSaving(true)
@@ -342,13 +333,13 @@ export function SettingsPage() {
               <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: '0 0 16px' }}>
                 Connect your Atlassian account to enable sprint syncing.
               </p>
-              {actionError && (
+              {jiraConnectError && (
                 <div style={{ color: 'var(--color-danger)', fontSize: 'var(--text-sm)', marginBottom: 8 }}>
-                  {actionError}
+                  {jiraConnectError}
                 </div>
               )}
-              <Button variant="primary" size="sm" onClick={handleConnect} disabled={actionLoading}>
-                {actionLoading ? 'Redirecting...' : 'Connect Jira'}
+              <Button variant="primary" size="sm" onClick={connectJira} disabled={jiraConnecting}>
+                {jiraConnecting ? 'Redirecting...' : 'Connect Jira'}
               </Button>
             </div>
           )}

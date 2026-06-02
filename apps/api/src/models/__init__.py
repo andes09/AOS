@@ -17,6 +17,7 @@ from src.models.slack_config import SlackConfig
 from src.models.sprint_plan_override import SprintPlanOverride, OverrideAction, OverrideReason
 from src.models.recalibration_proposal import RecalibrationProposal, ProposalKind, ProposalStatus
 from src.models.ticket_revision import TicketRevision
+from src.models.oauth_state import OAuthState
 
 __all__ = [
     "Organization",
@@ -57,4 +58,5 @@ __all__ = [
     "ProposalKind",
     "ProposalStatus",
     "TicketRevision",
+    "OAuthState",
 ]

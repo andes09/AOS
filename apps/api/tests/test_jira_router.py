@@ -62,15 +62,15 @@ async def test_jira_callback_invalid_state():
 @pytest.mark.asyncio
 async def test_jira_callback_stores_real_org_id(tmp_db):
     """Callback resolves org_id from state and saves JiraConnection with real organization_id."""
-    from src.integrations.jira import router as jira_router
     import uuid
 
-    # Pre-seed an org and the state entry
+    # Pre-seed an org and the DB-backed OAuth state entry
     org_clerk_id = "org_test_123"
     fake_state = "test_state_token"
-    jira_router._oauth_states[fake_state] = {"user_id": "user_1", "org_id": org_clerk_id}
 
+    from datetime import datetime, timedelta
     from src.database import get_db
+    from src.models.oauth_state import OAuthState
     from src.models.organization import Organization
 
     async for db in app.dependency_overrides[get_db]():
@@ -82,6 +82,13 @@ async def test_jira_callback_stores_real_org_id(tmp_db):
             use_managed_key=False,
         )
         db.add(org)
+        db.add(OAuthState(
+            state=fake_state,
+            user_id="user_1",
+            org_id=org_clerk_id,
+            return_to="/onboarding",
+            expires_at=datetime.utcnow() + timedelta(minutes=10),
+        ))
         await db.commit()
         org_id = org.id
         break

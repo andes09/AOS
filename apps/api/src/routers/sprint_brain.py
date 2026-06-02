@@ -20,12 +20,14 @@ following upstream tracks land:
   _get_candidate_tickets()  → needs Ticket model (Track C) + Jira sync (Track D)
 """
 
+import asyncio
+import json
 import logging
 from datetime import date, datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,8 +53,10 @@ from src.models.ticket_revision import TicketRevision
 from src.services.ai_client import get_anthropic_key
 from src.services import scope_cop
 from src.services.sprint_brain import (
+    OnStage,
     SprintBrainInput,
     SprintBrainOutput,
+    _emit_stage,
     generate_sprint_plan,
     simulate_what_if,
 )
@@ -563,18 +567,19 @@ async def _build_brain_input(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/plan")
-async def create_sprint_plan(
+async def _run_plan_pipeline(
     request: PlanRequest,
-    clerk_org_id: str = Depends(get_current_org_id),
-    db: AsyncSession = Depends(get_db),
-):
+    clerk_org_id: str,
+    db: AsyncSession,
+    on_stage: OnStage | None = None,
+) -> dict:
     """
-    Generate an AI-powered sprint plan.
+    Full sprint-plan pipeline shared by both the JSON and SSE endpoints.
 
-    Fetches the team's velocity profiles and unstarted Jira tickets, then
-    asks Claude to assign tickets to developers and return a confidence score,
-    plain-English summary, risk warnings, and what-if analysis for each ticket.
+    Emits stage events (when `on_stage` is provided) at:
+      complexity_start / complexity_done  (inside generate_sprint_plan)
+      assigning_start / assigning_done    (inside generate_sprint_plan)
+      enrichment_start / enrichment_done  (bracketing scope_cop + enrichment here)
     """
     api_key = await get_anthropic_key(clerk_org_id, db)
     team_id = await _resolve_team_id(request.team_id, clerk_org_id, db)
@@ -603,7 +608,7 @@ async def create_sprint_plan(
         pass  # non-UUID team_id or DB error — proceed without patterns
 
     try:
-        plan = await generate_sprint_plan(brain_input, api_key, db=db)
+        plan = await generate_sprint_plan(brain_input, api_key, db=db, on_stage=on_stage)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except RuntimeError as exc:
@@ -613,6 +618,8 @@ async def create_sprint_plan(
 
     # Post-plan enrichment queries (Tracks 22 + 23)
     assigned_keys = [a.get("ticket_id", "") for a in plan.assignments if a.get("ticket_id")]
+
+    await _emit_stage(on_stage, "enrichment_start", assigned_count=len(assigned_keys))
 
     # Initiative B (SB-5): auto-run Scope Cop against every assigned ticket *before*
     # enrichment so the PlanReviewModal opening after planning has fresh
@@ -662,6 +669,8 @@ async def create_sprint_plan(
         await _build_enrichment(team_id, assigned_keys, db)
     )
 
+    await _emit_stage(on_stage, "enrichment_done")
+
     return _sprint_plan_response(
         team_id, sprint_start, plan, dev_profiles, tickets,
         scope_warnings=scope_warnings,
@@ -671,6 +680,72 @@ async def create_sprint_plan(
         scope_cop_ran_at=scope_cop_ran_at,
         scope_cop_results=scope_cop_results,
     )
+
+
+def _sse_format(event: str, data: dict) -> str:
+    """Format a single SSE event. `default=str` covers datetime / UUID stragglers."""
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+async def _plan_event_stream(
+    request: PlanRequest,
+    clerk_org_id: str,
+    db: AsyncSession,
+):
+    """SSE generator that streams stage events and a final `result` (or `error`)."""
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def on_stage(name: str, payload: dict) -> None:
+        await queue.put(("stage", {"name": name, **payload}))
+
+    async def runner() -> None:
+        try:
+            result = await _run_plan_pipeline(request, clerk_org_id, db, on_stage=on_stage)
+            await queue.put(("result", result))
+        except HTTPException as e:
+            await queue.put(("error", {"message": str(e.detail), "status": e.status_code}))
+        except Exception as e:
+            logger.exception("[plan_stream] runner failed")
+            await queue.put(("error", {"message": str(e) or "Sprint generation failed"}))
+        finally:
+            await queue.put(None)  # sentinel
+
+    task = asyncio.create_task(runner())
+    try:
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            event, data = item
+            yield _sse_format(event, data)
+    finally:
+        if not task.done():
+            task.cancel()
+
+
+@router.post("/plan")
+async def create_sprint_plan(
+    request: PlanRequest,
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+    accept: str | None = Header(default=None),
+):
+    """
+    Generate an AI-powered sprint plan.
+
+    Negotiation: when the client sends `Accept: text/event-stream`, the response
+    is a stream of SSE events (`stage`, then `result` or `error`). Otherwise the
+    response is the same JSON payload the endpoint has always returned.
+    """
+    # `accept` may be the `Header(...)` sentinel when this function is called
+    # directly (e.g. from tests) rather than via FastAPI's dependency injection.
+    if isinstance(accept, str) and "text/event-stream" in accept:
+        return StreamingResponse(
+            _plan_event_stream(request, clerk_org_id, db),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+    return await _run_plan_pipeline(request, clerk_org_id, db)
 
 
 @router.post("/what-if")

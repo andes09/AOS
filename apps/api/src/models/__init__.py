@@ -18,6 +18,7 @@ from src.models.sprint_plan_override import SprintPlanOverride, OverrideAction, 
 from src.models.recalibration_proposal import RecalibrationProposal, ProposalKind, ProposalStatus
 from src.models.ticket_revision import TicketRevision
 from src.models.oauth_state import OAuthState
+from src.models.ticket_complexity_cache import TicketComplexityCache
 
 __all__ = [
     "Organization",
@@ -59,4 +60,5 @@ __all__ = [
     "ProposalStatus",
     "TicketRevision",
     "OAuthState",
+    "TicketComplexityCache",
 ]

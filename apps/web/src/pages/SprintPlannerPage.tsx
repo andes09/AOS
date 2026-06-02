@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
+import { useAuth } from '@clerk/clerk-react'
 import { useApi, ApiError } from '../lib/api'
 import { VelocityCard } from '../components/sprint/VelocityCard'
 import { ConfidenceGauge } from '../components/sprint/ConfidenceGauge'
@@ -32,6 +33,17 @@ function deriveCommitted(assignments: SprintPlanResponse['assignments']): Map<st
 }
 
 const DEFAULT_CAPACITY = 40
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
+const STAGE_LABELS: Record<string, string> = {
+  complexity_start: 'Analyzing ticket complexity…',
+  complexity_done: 'Complexity ready',
+  assigning_start: 'Assigning developers…',
+  assigning_done: 'Assignments ready',
+  enrichment_start: 'Enriching with scope/dependency data…',
+  enrichment_done: 'Almost there…',
+}
 
 function RecurringIssuesPanel({ warnings }: { warnings: string[] }) {
   const [open, setOpen] = useState(warnings.length <= 2)
@@ -73,6 +85,7 @@ function RecurringIssuesPanel({ warnings }: { warnings: string[] }) {
 
 export function SprintPlannerPage() {
   const { post, get } = useApi()
+  const { getToken } = useAuth()
   const navigate = useNavigate()
   const canPushToJira = useFeature('push_to_jira')
   const canInlineRefine = useFeature('scope_check_v2')
@@ -100,6 +113,8 @@ export function SprintPlannerPage() {
   const [capacityOpen, setCapacityOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [commitResult, setCommitResult] = useState<CommitPlanResponse | null>(null)
+  const [currentStage, setCurrentStage] = useState<{ name: string; startedAt: number } | null>(null)
+  const planAbortRef = useRef<AbortController | null>(null)
 
   const capacityQuery = useQuery({
     queryKey: ['capacity', 'team', 'default'],
@@ -122,13 +137,83 @@ export function SprintPlannerPage() {
     }
   }, [plan])
 
-  const generatePlan = useMutation({
-    mutationFn: () =>
-      post<SprintPlanResponse>('/api/sprint-brain/plan', {
-        team_id: 'default',
-        sprint_length_days: 14,
-        pto_overrides: {},
-      }),
+  const generatePlan = useMutation<SprintPlanResponse, Error, void>({
+    mutationFn: async () => {
+      // Abort any in-flight stream before starting a new one.
+      planAbortRef.current?.abort()
+      const controller = new AbortController()
+      planAbortRef.current = controller
+
+      const token = await getToken()
+      if (!token) throw new Error('Not authenticated')
+
+      const response = await fetch(`${API_URL}/api/sprint-brain/plan`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          team_id: 'default',
+          sprint_length_days: 14,
+          pto_overrides: {},
+        }),
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        const errBody = await response.json().catch(() => ({}))
+        throw new ApiError(
+          (errBody as { detail?: string }).detail || `API error ${response.status}`,
+          response.status,
+        )
+      }
+      if (!response.body) throw new Error('No response body for SSE stream')
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let result: SprintPlanResponse | null = null
+      let streamError: string | null = null
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const events = buffer.split('\n\n')
+          buffer = events.pop() ?? ''
+          for (const evt of events) {
+            const lines = evt.split('\n')
+            const eventLine = lines.find(l => l.startsWith('event:'))?.slice(6).trim()
+            const dataLine = lines.find(l => l.startsWith('data:'))?.slice(5).trim()
+            if (!eventLine || !dataLine) continue
+            let data: unknown
+            try {
+              data = JSON.parse(dataLine)
+            } catch {
+              continue
+            }
+            if (eventLine === 'stage') {
+              const stage = data as { name: string }
+              setCurrentStage({ name: stage.name, startedAt: Date.now() })
+            } else if (eventLine === 'result') {
+              result = data as SprintPlanResponse
+            } else if (eventLine === 'error') {
+              streamError = (data as { message?: string }).message || 'Sprint plan stream failed'
+            }
+          }
+        }
+      } finally {
+        setCurrentStage(null)
+        if (planAbortRef.current === controller) planAbortRef.current = null
+      }
+
+      if (streamError) throw new Error(streamError)
+      if (!result) throw new Error('Stream ended without a result event')
+      return result
+    },
     onSuccess: data => {
       setPlan(data)
       setConfidence(data.confidence_score)
@@ -141,7 +226,19 @@ export function SprintPlannerPage() {
         setReviewOpen(true)
       }
     },
+    onError: err => {
+      setCurrentStage(null)
+      setWarnings([err instanceof Error ? err.message : 'Failed to generate plan.'])
+    },
   })
+
+  // Abort the SSE stream if the component unmounts mid-flight.
+  useEffect(() => {
+    return () => {
+      planAbortRef.current?.abort()
+      planAbortRef.current = null
+    }
+  }, [])
 
   const commitMutation = useMutation({
     mutationFn: (approvals: CommitApproval[]) => {
@@ -282,6 +379,35 @@ export function SprintPlannerPage() {
           >
             {generatePlan.isPending ? 'Generating...' : 'Generate Plan'}
           </Button>
+
+          {currentStage && (
+            <span
+              aria-live="polite"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '4px 10px',
+                borderRadius: 999,
+                background: 'var(--color-surface-alt, rgba(255,255,255,0.06))',
+                border: '1px solid var(--color-border, rgba(255,255,255,0.12))',
+                color: 'var(--color-text-secondary)',
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--text-xs)',
+              }}
+            >
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: 'var(--color-accent)',
+                  animation: 'pulse 1.2s ease-in-out infinite',
+                }}
+              />
+              {STAGE_LABELS[currentStage.name] ?? currentStage.name}
+            </span>
+          )}
 
           {/* Legacy push CTA — hidden when inline refinement is on; the modal's
               Review-and-Commit flow supersedes it. */}

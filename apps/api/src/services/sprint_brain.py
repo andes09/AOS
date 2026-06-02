@@ -8,12 +8,17 @@ BYOK model: the Anthropic API key is always supplied by the caller (fetched
 from the Organisation record), never from environment.
 """
 
+import hashlib
+import json
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
+from typing import Awaitable, Callable
 
 import anthropic
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.developer import Developer
@@ -23,11 +28,25 @@ from src.models.capacity import DeveloperCapacityOverride
 from src.models.ticket import Ticket, TicketStatus
 from src.models.identifier import TicketSkillAnalysis
 from src.models.sprint_plan_override import SprintPlanOverride
+from src.models.ticket_complexity_cache import TicketComplexityCache
 from src.services.cost_tracker import record_generation_cost
 
 logger = logging.getLogger(__name__)
 
 _MODEL = "claude-sonnet-4-6"
+
+# Optional progress callback: (stage_name, payload_dict) -> awaitable
+OnStage = Callable[[str, dict], Awaitable[None]]
+
+
+async def _emit_stage(on_stage: OnStage | None, name: str, **payload) -> None:
+    """Fire a stage event, swallowing callback errors so they never break planning."""
+    if on_stage is None:
+        return
+    try:
+        await on_stage(name, payload)
+    except Exception:
+        logger.warning("on_stage callback failed for %s", name, exc_info=True)
 
 # ---------------------------------------------------------------------------
 # Tool schema — forces Claude to return structured sprint plan output
@@ -374,24 +393,159 @@ def _extract_complexity(response: anthropic.types.Message) -> list[dict]:
     return analyses
 
 
+def _ticket_content_hash(ticket: dict) -> str:
+    """sha256 of the prompt-relevant fields. Mirrors what _build_complexity_message sends."""
+    payload = {
+        "title": ticket.get("summary") or ticket.get("title") or "",
+        "story_points": ticket.get("story_points") or ticket.get("points"),
+        "priority": ticket.get("priority", "medium"),
+        "labels": sorted(ticket.get("labels") or []),
+        "description": str(ticket.get("description") or "")[:200],
+    }
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+async def _load_complexity_cache(
+    db: AsyncSession,
+    content_hashes: list[str],
+    model: str,
+) -> dict[str, dict]:
+    """Return {content_hash: complexity_json} for rows that exist in cache."""
+    if not content_hashes:
+        return {}
+    try:
+        rows = (await db.scalars(
+            select(TicketComplexityCache).where(
+                TicketComplexityCache.content_hash.in_(content_hashes),
+                TicketComplexityCache.model == model,
+            )
+        )).all()
+        return {r.content_hash: r.complexity_json for r in rows}
+    except Exception:
+        logger.warning("complexity_cache lookup failed; proceeding without cache", exc_info=True)
+        return {}
+
+
+async def _save_complexity_cache(
+    db: AsyncSession,
+    entries: list[tuple[str, dict]],
+    model: str,
+) -> None:
+    """Upsert (hash, complexity_json) pairs. Best-effort — never raises."""
+    if not entries:
+        return
+    try:
+        for content_hash, complexity_json in entries:
+            stmt = pg_insert(TicketComplexityCache).values(
+                content_hash=content_hash,
+                model=model,
+                complexity_json=complexity_json,
+            ).on_conflict_do_nothing(index_elements=["content_hash", "model"])
+            await db.execute(stmt)
+        await db.commit()
+    except Exception:
+        logger.warning("complexity_cache write failed", exc_info=True)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+
 async def _analyse_ticket_complexity(
     tickets: list[dict],
     client: anthropic.AsyncAnthropic,
-) -> tuple[list[dict], object]:
+    db: AsyncSession | None = None,
+    on_stage: OnStage | None = None,
+) -> tuple[list[dict], object | None]:
     """
     Claude Call 1: analyse ticket complexity without developer context.
-    Returns (per-ticket complexity dicts, response usage) so the caller can
-    aggregate cost across the full generation.
+
+    Cache-aware: hashes each ticket's prompt-relevant fields, fills from
+    `ticket_complexity_cache` where possible, and only sends Claude the
+    uncached tickets. Returns (per-ticket complexity dicts, response usage).
+    Usage is None when every ticket hit cache (no Claude call made).
     """
+    started = time.monotonic()
+    await _emit_stage(on_stage, "complexity_start", ticket_count=len(tickets))
+
+    # 1. Hash each ticket and partition into cached vs. uncached.
+    hash_by_ticket_id: dict[str, str] = {}
+    for i, ticket in enumerate(tickets, 1):
+        tid = ticket.get("id") or ticket.get("ticket_id") or f"ticket-{i}"
+        hash_by_ticket_id[tid] = _ticket_content_hash(ticket)
+
+    cache_hits: dict[str, dict] = {}
+    if db is not None:
+        cache_hits = await _load_complexity_cache(db, list(hash_by_ticket_id.values()), _MODEL)
+
+    cached_analyses: list[dict] = []
+    uncached_tickets: list[dict] = []
+    uncached_hashes: list[tuple[str, str]] = []  # (ticket_id, content_hash) for save-back
+
+    for i, ticket in enumerate(tickets, 1):
+        tid = ticket.get("id") or ticket.get("ticket_id") or f"ticket-{i}"
+        content_hash = hash_by_ticket_id[tid]
+        if content_hash in cache_hits:
+            # Stored analysis used a possibly-different ticket_id; rewrite to current.
+            entry = {**cache_hits[content_hash], "ticket_id": tid}
+            cached_analyses.append(entry)
+        else:
+            uncached_tickets.append(ticket)
+            uncached_hashes.append((tid, content_hash))
+
+    logger.info(
+        "complexity_cache: %d hits, %d misses (of %d tickets)",
+        len(cached_analyses), len(uncached_tickets), len(tickets),
+    )
+
+    # 2. Skip Claude entirely if everything's cached.
+    if not uncached_tickets:
+        await _emit_stage(
+            on_stage, "complexity_done",
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+            cache_hits=len(cached_analyses),
+            cache_misses=0,
+            skipped_claude=True,
+        )
+        return cached_analyses, None
+
+    # 3. Call Claude with only the uncached tickets. System+tools are cached
+    # via Anthropic prompt caching (1a) so warm runs are also cheap on input.
     response = await client.messages.create(
         model=_MODEL,
         max_tokens=8192,
-        system=_COMPLEXITY_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": _build_complexity_message(tickets)}],
-        tools=[_COMPLEXITY_TOOL],
+        system=[{"type": "text", "text": _COMPLEXITY_SYSTEM_PROMPT}],
+        messages=[{"role": "user", "content": _build_complexity_message(uncached_tickets)}],
+        tools=[{**_COMPLEXITY_TOOL, "cache_control": {"type": "ephemeral"}}],
         tool_choice={"type": "tool", "name": "analyse_tickets"},
     )
-    return _extract_complexity(response), response.usage
+    fresh_analyses = _extract_complexity(response)
+
+    # 4. Save new analyses to cache, keyed by their ticket-content hash.
+    if db is not None and fresh_analyses:
+        # Build hash lookup by ticket_id so we can persist by content_hash.
+        hash_by_tid = dict(uncached_hashes)
+        save_entries: list[tuple[str, dict]] = []
+        for analysis in fresh_analyses:
+            tid = analysis.get("ticket_id")
+            content_hash = hash_by_tid.get(tid)
+            if content_hash:
+                # Strip ticket_id before persisting — it's not part of the cache key
+                # and would mislead future readers (the same content_hash may map
+                # to different ticket_ids across teams/rebrands).
+                persisted = {k: v for k, v in analysis.items() if k != "ticket_id"}
+                save_entries.append((content_hash, persisted))
+        await _save_complexity_cache(db, save_entries, _MODEL)
+
+    await _emit_stage(
+        on_stage, "complexity_done",
+        elapsed_ms=int((time.monotonic() - started) * 1000),
+        cache_hits=len(cached_analyses),
+        cache_misses=len(uncached_tickets),
+        skipped_claude=False,
+    )
+    return cached_analyses + fresh_analyses, response.usage
 
 
 def _format_skill_inline(skill_map: dict, threshold: float = 0.2) -> str:
@@ -542,12 +696,19 @@ def _format_overrides_section(overrides: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _build_assignment_message(
+def _build_assignment_message_parts(
     inp: SprintBrainInput,
     complexity_analysis: list[dict],
     eligible_profiles: list[dict],
     overrides_section: str = "",
-) -> str:
+) -> tuple[str, str]:
+    """
+    Build the assignment-call user message in two halves so the stable prefix
+    (header + dev profiles + overrides) can sit under a cache_control breakpoint
+    while the variable suffix (candidate tickets + patterns + citation) stays
+    outside the cache. Within a planning session, re-plans and what-ifs share
+    identical prefixes and get cache_read pricing on the prefix.
+    """
     # Index complexity by ticket_id for quick lookup
     complexity_map = {c["ticket_id"]: c for c in complexity_analysis}
 
@@ -602,7 +763,11 @@ def _build_assignment_message(
         # patterns alongside developer + ticket context.
         lines.append(overrides_section)
 
-    lines += ["## Candidate Tickets (with complexity analysis)", ""]
+    # Everything above is stable within a planning session (re-plan / what-if)
+    # and gets a cache breakpoint. Tickets + patterns + citation are variable.
+    stable_prefix = "\n".join(lines)
+
+    suffix_lines: list[str] = ["## Candidate Tickets (with complexity analysis)", ""]
     for i, ticket in enumerate(inp.candidate_tickets, 1):
         tid = ticket.get("id") or ticket.get("ticket_id") or f"ticket-{i}"
         title = ticket.get("summary") or ticket.get("title") or "(no title)"
@@ -611,36 +776,49 @@ def _build_assignment_message(
         labels = ticket.get("labels") or []
         analysis = complexity_map.get(tid, {})
 
-        lines.append(f"{i}. [{tid}] {title}")
-        lines.append(f"   Points: {points} | Priority: {priority}")
+        suffix_lines.append(f"{i}. [{tid}] {title}")
+        suffix_lines.append(f"   Points: {points} | Priority: {priority}")
         if labels:
-            lines.append(f"   Labels: {', '.join(labels)}")
+            suffix_lines.append(f"   Labels: {', '.join(labels)}")
         if analysis:
-            lines.append(f"   Effort    : {analysis.get('effort', '?')}")
-            lines.append(f"   Est. days : {analysis.get('estimated_days', '?')}")
-            lines.append(f"   Skills    : {', '.join(analysis.get('required_skills', []))}")
-            lines.append(f"   Notes     : {analysis.get('complexity_notes', '')}")
+            suffix_lines.append(f"   Effort    : {analysis.get('effort', '?')}")
+            suffix_lines.append(f"   Est. days : {analysis.get('estimated_days', '?')}")
+            suffix_lines.append(f"   Skills    : {', '.join(analysis.get('required_skills', []))}")
+            suffix_lines.append(f"   Notes     : {analysis.get('complexity_notes', '')}")
 
         # Per-ticket skill_vector from TicketSkillAnalysis (optional enrichment).
         ticket_skill_line = _format_skill_inline(ticket.get("skill_vector") or {})
         if ticket_skill_line:
-            lines.append(f"   Required skills: {ticket_skill_line}")
-        lines.append("")
+            suffix_lines.append(f"   Required skills: {ticket_skill_line}")
+        suffix_lines.append("")
 
     if inp.historical_patterns:
-        lines += ["## Known Recurring Team Issues (factor into assignments)", ""]
+        suffix_lines += ["## Known Recurring Team Issues (factor into assignments)", ""]
         for pattern in inp.historical_patterns:
-            lines.append(f"- {pattern}")
-        lines.append("")
+            suffix_lines.append(f"- {pattern}")
+        suffix_lines.append("")
 
-    lines += [
+    suffix_lines += [
         _CITATION_INSTRUCTION,
         "",
         "Please create the optimal sprint plan. For each ticket, assign it to the "
         "best-fit developer and include a citation of the specific historical data "
         "supporting your decision. Populate what_if_dropped for each assigned ticket.",
     ]
-    return "\n".join(lines)
+    return stable_prefix, "\n".join(suffix_lines)
+
+
+def _build_assignment_message(
+    inp: SprintBrainInput,
+    complexity_analysis: list[dict],
+    eligible_profiles: list[dict],
+    overrides_section: str = "",
+) -> str:
+    """Backward-compat wrapper: join the parts into a single string."""
+    prefix, suffix = _build_assignment_message_parts(
+        inp, complexity_analysis, eligible_profiles, overrides_section=overrides_section,
+    )
+    return f"{prefix}\n{suffix}"
 
 
 # ---------------------------------------------------------------------------
@@ -839,6 +1017,7 @@ async def generate_sprint_plan(
     inp: SprintBrainInput,
     anthropic_api_key: str,
     db: AsyncSession | None = None,
+    on_stage: OnStage | None = None,
 ) -> SprintBrainOutput:
     """
     Generate an AI-powered sprint plan using a two-step Claude Opus 4.6 pipeline.
@@ -880,24 +1059,37 @@ async def generate_sprint_plan(
             overrides_section = ""
 
     try:
-        # --- Call 1: ticket complexity analysis ---
+        # --- Call 1: ticket complexity analysis (cache-aware) ---
         complexity_analysis, complexity_usage = await _analyse_ticket_complexity(
-            inp.candidate_tickets, client
+            inp.candidate_tickets, client, db=db, on_stage=on_stage,
         )
 
         # --- Call 2: assignment generation with historical citations ---
-        assignment_message = _build_assignment_message(
+        assigning_started = time.monotonic()
+        await _emit_stage(on_stage, "assigning_start", ticket_count=len(inp.candidate_tickets))
+        stable_prefix, variable_suffix = _build_assignment_message_parts(
             inp, complexity_analysis, eligible_profiles, overrides_section=overrides_section,
         )
+        # Two cache breakpoints: (1) on tools — covers system+tools, (2) on the
+        # stable user prefix — covers system+tools+dev_profiles+overrides. The
+        # variable suffix (tickets + patterns + citation) stays outside the cache
+        # so what-if and re-plan share the heavy prefix as a cache_read.
         response = await client.messages.create(
             model=_MODEL,
             max_tokens=16384,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": assignment_message}],
-            tools=[_SPRINT_PLAN_TOOL],
+            system=[{"type": "text", "text": _SYSTEM_PROMPT}],
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": stable_prefix, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": variable_suffix},
+            ]}],
+            tools=[{**_SPRINT_PLAN_TOOL, "cache_control": {"type": "ephemeral"}}],
             # Note: thinking={"type": "adaptive"} is intentionally omitted here.
             # Forced tool_choice is incompatible with extended thinking in the Anthropic API.
             tool_choice={"type": "tool", "name": "create_sprint_plan"},
+        )
+        await _emit_stage(
+            on_stage, "assigning_done",
+            elapsed_ms=int((time.monotonic() - assigning_started) * 1000),
         )
 
     except anthropic.AuthenticationError as exc:

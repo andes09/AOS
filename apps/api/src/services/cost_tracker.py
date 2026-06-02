@@ -145,7 +145,7 @@ def record_generation_cost(
             "".join(f" {k}={v}" for k, v in context.items()),
             extra={"ai_cost": {"operation": operation, **asdict(breakdown), **context}},
         )
-        if operation == "sprint_plan":
+        if operation in ("sprint_plan", "scope_cop"):
             try:
                 _append_csv_row(
                     breakdown,

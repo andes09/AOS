@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.identifier import TicketSkillAnalysis
 from src.models.organization import Organization
 from src.models.team import Team
+from src.services.cost_tracker import record_generation_cost
 from src.services.encryption import decrypt
 
 logger = logging.getLogger(__name__)
@@ -537,6 +538,14 @@ async def analyze_tickets(
         ) from exc
     except anthropic.APIError as exc:
         raise RuntimeError(f"Anthropic API error: {exc.message}") from exc
+
+    record_generation_cost(
+        "scope_cop",
+        response.usage,
+        model=_MODEL,
+        team_id=str(team_id),
+        assigned_count=len(tickets),
+    )
 
     # 3. Extract Claude's structured tool call output
     tool_block = next(

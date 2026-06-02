@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useApi, ApiError } from '../lib/api'
 import { useAppRole } from '../hooks/useAppRole'
 import { useJiraOAuth } from '../hooks/useJiraOAuth'
+import { SelectBoardStep } from './onboarding/SelectBoardStep'
 import { Card, CardHeader, CardBody } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
@@ -78,13 +79,14 @@ export function SettingsPage() {
   const [inviteLink, setInviteLink] = useState<string | null>(null)
   const [invitations, setInvitations] = useState<InvitationItem[]>([])
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [pendingConnectionId, setPendingConnectionId] = useState<string | null>(null)
   const { get, del, post, put } = useApi()
   const { appRole } = useAppRole()
   const isLead = appRole === 'lead' || appRole === 'exec' || appRole === 'admin'
   const queryClient = useQueryClient()
   const { connect: connectJira, isConnecting: jiraConnecting, error: jiraConnectError } = useJiraOAuth(
     '/app/settings',
-    () => queryClient.invalidateQueries({ queryKey: ['jira-status'] })
+    (connectionId: string) => setPendingConnectionId(connectionId)
   )
 
   async function fetchStatus() {
@@ -292,7 +294,17 @@ export function SettingsPage() {
           )}
         </CardHeader>
         <CardBody>
-          {loading ? (
+          {pendingConnectionId ? (
+            <SelectBoardStep
+              connectionId={pendingConnectionId}
+              onNext={() => {
+                setPendingConnectionId(null)
+                queryClient.invalidateQueries({ queryKey: ['jira-status'] })
+                fetchStatus()
+              }}
+              onBack={() => setPendingConnectionId(null)}
+            />
+          ) : loading ? (
             <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>Loading...</div>
           ) : status?.connected ? (
             <div>

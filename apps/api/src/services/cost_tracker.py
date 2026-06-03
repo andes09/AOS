@@ -96,15 +96,15 @@ _CSV_HEADERS = [
 
 def _append_csv_row(breakdown: CostBreakdown, model: str, assigned_count: int) -> None:
     total_tokens = breakdown.input_tokens + breakdown.output_tokens
-    price_per_ticket = round(breakdown.cost_usd / assigned_count, 6) if assigned_count else 0.0
+    price_per_ticket = breakdown.cost_usd / assigned_count if assigned_count else 0.0
     row = {
         "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "model": model,
         "total_tokens": total_tokens,
         "input_tokens": breakdown.input_tokens,
         "output_tokens": breakdown.output_tokens,
-        "total_price_usd": breakdown.cost_usd,
-        "price_per_ticket_usd": price_per_ticket,
+        "total_price_usd": f"${breakdown.cost_usd:.2f}",
+        "price_per_ticket_usd": f"${price_per_ticket:.2f}",
     }
     write_header = not _CSV_PATH.exists() or os.path.getsize(_CSV_PATH) == 0
     with open(_CSV_PATH, "a", newline="") as f:

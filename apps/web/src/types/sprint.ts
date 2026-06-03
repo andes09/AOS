@@ -73,6 +73,7 @@ export interface JiraBoard {
   id: string
   name: string
   project_key: string
+  connection_id: string
 }
 
 export interface PushToJiraResponse {

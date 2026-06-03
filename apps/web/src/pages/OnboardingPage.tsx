@@ -4,7 +4,6 @@ import { CSSProperties, useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { OnboardingLayout } from '../layouts/OnboardingLayout'
 import { ConnectJiraStep } from './onboarding/ConnectJiraStep'
-import { SelectSiteStep, type PendingSite } from './onboarding/SelectSiteStep'
 import { SelectBoardStep } from './onboarding/SelectBoardStep'
 import { Button } from '../components/ui/Button'
 import { Card, CardBody } from '../components/ui/Card'
@@ -25,7 +24,6 @@ export function OnboardingPage() {
     return saved ? parseInt(saved, 10) : 0
   })
   const [connectionId, setConnectionId] = useState<string | null>(null)
-  const [pendingSites, setPendingSites] = useState<PendingSite[] | null>(null)
 
   const [sprintCount, setSprintCount] = useState(3)
   const [importStatus, setImportStatus] = useState<OnboardingStatus['importStatus']>('pending')
@@ -160,18 +158,7 @@ export function OnboardingPage() {
         })}
       </div>
 
-      {step === 0 && !pendingSites && (
-        <ConnectJiraStep onNext={(result) => {
-          if (result.type === 'single') { setConnectionId(result.connectionId); goTo(1) }
-          else setPendingSites(result.sites)
-        }} />
-      )}
-      {step === 0 && pendingSites && (
-        <SelectSiteStep
-          sites={pendingSites}
-          onNext={(cid) => { setPendingSites(null); setConnectionId(cid); goTo(1) }}
-        />
-      )}
+      {step === 0 && <ConnectJiraStep onNext={advance} />}
       {step === 1 && <SelectBoardStep connectionId={connectionId ?? ''} onNext={advance} onBack={back} />}
 
       {step === 2 && (

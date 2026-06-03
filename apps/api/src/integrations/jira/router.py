@@ -204,55 +204,83 @@ async def jira_disconnect(
 
 @router.get("/boards")
 async def get_jira_boards(
-    connection_id: str = Query(...),
+    connection_id: str = Query(default=None),
+    connection_ids: str = Query(default=None),
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """List scrum boards for a Jira connection."""
-    try:
-        conn_uuid = uuid.UUID(connection_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid connection_id")
+    """List scrum boards.
 
-    connection = await db.get(JiraConnection, conn_uuid)
-    if not connection or not connection.is_active:
-        raise HTTPException(status_code=404, detail="Jira connection not found")
+    Accepts either ?connection_id=<uuid> (single active connection) or
+    ?connection_ids=<uuid1>,<uuid2>,... (pending connections from multi-site
+    OAuth). In the latter case boards from all connections are aggregated and
+    each board carries a connection_id field so board-selection can activate
+    the right connection transparently.
+    """
+    import asyncio as _asyncio
+    import logging as _logging
 
-    org = await db.scalar(
-        select(Organization).where(Organization.clerk_org_id == clerk_org_id)
-    )
-    if not org or connection.organization_id != org.id:
+    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+    if not org:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    access_token = decrypt(connection.encrypted_access_token)
+    # Resolve the list of connections to query.
+    if connection_ids:
+        ids = [s.strip() for s in connection_ids.split(",") if s.strip()]
+        result = await db.execute(
+            select(JiraConnection).where(
+                JiraConnection.id.in_([uuid.UUID(i) for i in ids]),
+                JiraConnection.organization_id == org.id,
+            )
+        )
+        connections = result.scalars().all()
+    elif connection_id:
+        try:
+            conn_uuid = uuid.UUID(connection_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid connection_id")
+        connection = await db.get(JiraConnection, conn_uuid)
+        if not connection or connection.organization_id != org.id:
+            raise HTTPException(status_code=404, detail="Jira connection not found")
+        connections = [connection]
+    else:
+        raise HTTPException(status_code=400, detail="connection_id or connection_ids required")
 
-    if connection.token_expires_at and connection.token_expires_at <= datetime.utcnow():
-        refresh_tok = decrypt(connection.encrypted_refresh_token)
-        tokens = await refresh_access_token(refresh_tok)
-        access_token = tokens["access_token"]
-        connection.encrypted_access_token = encrypt(access_token)
-        if "refresh_token" in tokens:
-            connection.encrypted_refresh_token = encrypt(tokens["refresh_token"])
-        if "expires_in" in tokens:
-            connection.token_expires_at = datetime.utcnow() + timedelta(seconds=tokens["expires_in"])
-        await db.commit()
+    async def _boards_for_connection(conn: JiraConnection) -> list[dict]:
+        access_token = decrypt(conn.encrypted_access_token)
+        if conn.token_expires_at and conn.token_expires_at <= datetime.utcnow():
+            try:
+                refresh_tok = decrypt(conn.encrypted_refresh_token)
+                tokens = await refresh_access_token(refresh_tok)
+                access_token = tokens["access_token"]
+                conn.encrypted_access_token = encrypt(access_token)
+                if "refresh_token" in tokens:
+                    conn.encrypted_refresh_token = encrypt(tokens["refresh_token"])
+                if "expires_in" in tokens:
+                    conn.token_expires_at = datetime.utcnow() + timedelta(seconds=tokens["expires_in"])
+            except Exception:
+                return []
+        client = JiraClient(cloud_id=conn.jira_cloud_id, access_token=access_token)
+        try:
+            raw = await client.get_boards()
+        except Exception as exc:
+            _logging.getLogger(__name__).error("get_boards failed for %s: %s", conn.jira_cloud_url, exc)
+            return []
+        return [
+            {
+                "id": str(b["id"]),
+                "name": b["name"],
+                "project_key": b.get("location", {}).get("projectKey", ""),
+                "connection_id": str(conn.id),
+            }
+            for b in raw
+        ]
 
-    client = JiraClient(cloud_id=connection.jira_cloud_id, access_token=access_token)
-    try:
-        boards = await client.get_boards()
-    except Exception as exc:
-        import logging
-        logging.getLogger(__name__).error("get_boards failed: %s", exc)
-        raise HTTPException(status_code=502, detail=f"Jira API error: {exc}")
+    results = await _asyncio.gather(*[_boards_for_connection(c) for c in connections])
+    await db.commit()
 
-    return [
-        {
-            "id": str(b["id"]),
-            "name": b["name"],
-            "project_key": b.get("location", {}).get("projectKey", ""),
-        }
-        for b in boards
-    ]
+    all_boards = [board for site_boards in results for board in site_boards]
+    return all_boards
 
 
 class ActivateConnectionRequest(BaseModel):
@@ -301,7 +329,7 @@ async def save_board_selection(
         raise HTTPException(status_code=400, detail="Invalid connection_id")
 
     connection = await db.get(JiraConnection, conn_uuid)
-    if not connection or not connection.is_active:
+    if not connection:
         raise HTTPException(status_code=404, detail="Jira connection not found")
 
     org = await db.scalar(
@@ -309,6 +337,16 @@ async def save_board_selection(
     )
     if not org or connection.organization_id != org.id:
         raise HTTPException(status_code=403, detail="Access denied")
+
+    # If the chosen connection is still pending (inactive), activate it and
+    # deactivate all others — this is the multi-site path where the user
+    # implicitly chose a site by picking a board on it.
+    if not connection.is_active:
+        all_conns = await db.execute(
+            select(JiraConnection).where(JiraConnection.organization_id == org.id)
+        )
+        for conn in all_conns.scalars().all():
+            conn.is_active = conn.id == conn_uuid
 
     team = await db.scalar(
         select(Team).where(Team.organization_id == connection.organization_id)

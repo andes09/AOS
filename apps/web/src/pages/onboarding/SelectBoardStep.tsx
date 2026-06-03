@@ -6,6 +6,7 @@ import { useApi } from '../../lib/api'
 import type { JiraBoard } from '../../types/sprint'
 
 interface SelectBoardStepProps {
+  /** Single active connection_id, or comma-separated pending IDs from multi-site OAuth. */
   connectionId: string
   onNext: () => void
   onBack: () => void
@@ -17,9 +18,14 @@ export function SelectBoardStep({ connectionId, onNext, onBack }: SelectBoardSte
   const [saveError, setSaveError] = useState<string | null>(null)
   const { get, post } = useApi()
 
+  const isMulti = connectionId.includes(',')
+  const queryParam = isMulti
+    ? `connection_ids=${connectionId}`
+    : `connection_id=${connectionId}`
+
   const { data: boards, isLoading, error: fetchError, refetch } = useQuery({
     queryKey: ['jira-boards', connectionId],
-    queryFn: () => get<JiraBoard[]>(`/api/integrations/jira/boards?connection_id=${connectionId}`),
+    queryFn: () => get<JiraBoard[]>(`/api/integrations/jira/boards?${queryParam}`),
     enabled: !!connectionId,
   })
 
@@ -31,7 +37,7 @@ export function SelectBoardStep({ connectionId, onNext, onBack }: SelectBoardSte
     setSaveError(null)
     try {
       await post('/api/integrations/jira/board-selection', {
-        connection_id: connectionId,
+        connection_id: board.connection_id,
         board_id: board.id,
         project_key: board.project_key,
       })

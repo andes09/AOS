@@ -5,7 +5,6 @@ import { useApi, ApiError } from '../lib/api'
 import { useAppRole } from '../hooks/useAppRole'
 import { useJiraOAuth } from '../hooks/useJiraOAuth'
 import { SelectBoardStep } from './onboarding/SelectBoardStep'
-import { SelectSiteStep, type PendingSite } from './onboarding/SelectSiteStep'
 import { Card, CardHeader, CardBody } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
@@ -80,7 +79,6 @@ export function SettingsPage() {
   const [inviteLink, setInviteLink] = useState<string | null>(null)
   const [invitations, setInvitations] = useState<InvitationItem[]>([])
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [pendingSites, setPendingSites] = useState<PendingSite[] | null>(null)
   const [pendingConnectionId, setPendingConnectionId] = useState<string | null>(null)
   const { get, del, post, put } = useApi()
   const { appRole } = useAppRole()
@@ -88,10 +86,7 @@ export function SettingsPage() {
   const queryClient = useQueryClient()
   const { connect: connectJira, isConnecting: jiraConnecting, error: jiraConnectError } = useJiraOAuth(
     '/app/settings',
-    (result) => {
-      if (result.type === 'single') setPendingConnectionId(result.connectionId)
-      else setPendingSites(result.sites)
-    }
+    (connectionId) => setPendingConnectionId(connectionId)
   )
 
   async function fetchStatus() {
@@ -299,12 +294,7 @@ export function SettingsPage() {
           )}
         </CardHeader>
         <CardBody>
-          {pendingSites ? (
-            <SelectSiteStep
-              sites={pendingSites}
-              onNext={(connectionId) => { setPendingSites(null); setPendingConnectionId(connectionId) }}
-            />
-          ) : pendingConnectionId ? (
+          {pendingConnectionId ? (
             <SelectBoardStep
               connectionId={pendingConnectionId}
               onNext={() => {

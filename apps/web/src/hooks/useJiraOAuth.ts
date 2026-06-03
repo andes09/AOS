@@ -2,21 +2,34 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useApi } from '../lib/api'
 
-export function useJiraOAuth(returnTo: string, onSuccess?: (connectionId: string) => void) {
+export interface PendingSite { id: string; url: string }
+
+export type OAuthResult =
+  | { type: 'single'; connectionId: string }
+  | { type: 'multi'; sites: PendingSite[] }
+
+export function useJiraOAuth(returnTo: string, onSuccess?: (result: OAuthResult) => void) {
   const [searchParams, setSearchParams] = useSearchParams()
   const [isConnecting, setIsConnecting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { get } = useApi()
 
-  // Backend redirects back here with ?connection_id= after successful OAuth.
-  // Dependency array is intentionally empty — this must run exactly once on mount.
-  // Adding searchParams/onSuccess as deps would cause a re-entrant loop on each render.
+  // Runs exactly once on mount — intentionally empty deps to avoid re-entrant loop.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const connectionId = searchParams.get('connection_id')
+    const pendingSites = searchParams.get('pending_sites')
+
     if (connectionId) {
       setSearchParams({}, { replace: true })
-      onSuccess?.(connectionId)
+      onSuccess?.({ type: 'single', connectionId })
+    } else if (pendingSites) {
+      setSearchParams({}, { replace: true })
+      const sites: PendingSite[] = pendingSites.split(',').map(entry => {
+        const [id, url] = entry.split('|')
+        return { id, url }
+      })
+      onSuccess?.({ type: 'multi', sites })
     }
   }, [])
 

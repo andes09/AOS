@@ -5,6 +5,7 @@ import { useApi, ApiError } from '../lib/api'
 import { useAppRole } from '../hooks/useAppRole'
 import { useJiraOAuth } from '../hooks/useJiraOAuth'
 import { SelectBoardStep } from './onboarding/SelectBoardStep'
+import { SelectSiteStep } from './onboarding/SelectSiteStep'
 import { Card, CardHeader, CardBody } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
@@ -79,6 +80,7 @@ export function SettingsPage() {
   const [inviteLink, setInviteLink] = useState<string | null>(null)
   const [invitations, setInvitations] = useState<InvitationItem[]>([])
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [pendingSiteIds, setPendingSiteIds] = useState<string[] | null>(null)
   const [pendingConnectionId, setPendingConnectionId] = useState<string | null>(null)
   const { get, del, post, put } = useApi()
   const { appRole } = useAppRole()
@@ -86,7 +88,10 @@ export function SettingsPage() {
   const queryClient = useQueryClient()
   const { connect: connectJira, isConnecting: jiraConnecting, error: jiraConnectError } = useJiraOAuth(
     '/app/settings',
-    (connectionId: string) => setPendingConnectionId(connectionId)
+    (result) => {
+      if (result.type === 'single') setPendingConnectionId(result.connectionId)
+      else setPendingSiteIds(result.connectionIds)
+    }
   )
 
   async function fetchStatus() {
@@ -294,7 +299,16 @@ export function SettingsPage() {
           )}
         </CardHeader>
         <CardBody>
-          {pendingConnectionId ? (
+          {pendingSiteIds ? (
+            <SelectSiteStep
+              connectionIds={pendingSiteIds}
+              onNext={(connectionId) => {
+                setPendingSiteIds(null)
+                setPendingConnectionId(connectionId)
+              }}
+              onBack={() => setPendingSiteIds(null)}
+            />
+          ) : pendingConnectionId ? (
             <SelectBoardStep
               connectionId={pendingConnectionId}
               onNext={() => {
@@ -302,7 +316,9 @@ export function SettingsPage() {
                 queryClient.invalidateQueries({ queryKey: ['jira-status'] })
                 fetchStatus()
               }}
-              onBack={() => setPendingConnectionId(null)}
+              onBack={() => {
+                setPendingConnectionId(null)
+              }}
             />
           ) : loading ? (
             <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>Loading...</div>

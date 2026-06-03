@@ -1,9 +1,9 @@
 // apps/web/src/pages/onboarding/ConnectJiraStep.tsx
 
-import { useJiraOAuth } from '../../hooks/useJiraOAuth'
+import { useJiraOAuth, type OAuthResult } from '../../hooks/useJiraOAuth'
 
 interface ConnectJiraStepProps {
-  onNext: (connectionId: string) => void
+  onNext: (result: OAuthResult) => void
 }
 
 export function ConnectJiraStep({ onNext }: ConnectJiraStepProps) {

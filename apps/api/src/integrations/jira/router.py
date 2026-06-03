@@ -102,36 +102,52 @@ async def jira_callback(
     if not resources:
         raise HTTPException(status_code=400, detail="No accessible Jira sites found")
 
-    resource = resources[0]
-
     expires_at = None
     if "expires_in" in tokens:
         expires_at = datetime.utcnow() + timedelta(seconds=tokens["expires_in"])
 
-    # Deactivate any existing connection for this cloud site (re-auth case)
-    existing = await db.execute(
-        select(JiraConnection).where(
-            JiraConnection.jira_cloud_id == resource["id"],
-            JiraConnection.is_active == True,
+    # Create one inactive connection per accessible resource so the user can
+    # pick which site to use. Deactivate any pre-existing active connection
+    # for the same cloud site to avoid duplicates.
+    connection_ids = []
+    for resource in resources:
+        existing = await db.execute(
+            select(JiraConnection).where(
+                JiraConnection.jira_cloud_id == resource["id"],
+                JiraConnection.organization_id == org.id,
+                JiraConnection.is_active == True,
+            )
         )
-    )
-    for conn in existing.scalars().all():
-        conn.is_active = False
+        for conn in existing.scalars().all():
+            conn.is_active = False
 
-    connection = JiraConnection(
-        organization_id=org.id,
-        jira_cloud_id=resource["id"],
-        jira_cloud_url=resource["url"],
-        encrypted_access_token=encrypt(tokens["access_token"]),
-        encrypted_refresh_token=encrypt(tokens.get("refresh_token", "")),
-        token_expires_at=expires_at,
-        scopes=tokens.get("scope", "").split(),
-    )
-    db.add(connection)
+        connection = JiraConnection(
+            organization_id=org.id,
+            jira_cloud_id=resource["id"],
+            jira_cloud_url=resource["url"],
+            encrypted_access_token=encrypt(tokens["access_token"]),
+            encrypted_refresh_token=encrypt(tokens.get("refresh_token", "")),
+            token_expires_at=expires_at,
+            scopes=tokens.get("scope", "").split(),
+            is_active=False,
+        )
+        db.add(connection)
+        await db.flush()
+        connection_ids.append(str(connection.id))
+
     await db.commit()
 
     frontend_base = settings.frontend_url.split(",")[0].strip()
-    return RedirectResponse(f"{frontend_base}{return_to}?connection_id={connection.id}")
+    if len(connection_ids) == 1:
+        # Single site — skip the site picker, activate immediately
+        conn = await db.get(JiraConnection, uuid.UUID(connection_ids[0]))
+        conn.is_active = True
+        await db.commit()
+        return RedirectResponse(f"{frontend_base}{return_to}?connection_id={connection_ids[0]}")
+
+    return RedirectResponse(
+        f"{frontend_base}{return_to}?connection_ids={','.join(connection_ids)}"
+    )
 
 
 @router.get("/status")
@@ -239,6 +255,57 @@ async def get_jira_boards(
         }
         for b in boards
     ]
+
+
+@router.get("/sites")
+async def get_sites(
+    connection_ids: str = Query(...),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return site name/URL for a comma-separated list of connection IDs."""
+    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+
+    ids = [uuid.UUID(cid.strip()) for cid in connection_ids.split(",") if cid.strip()]
+    result = await db.execute(
+        select(JiraConnection).where(
+            JiraConnection.id.in_(ids),
+            JiraConnection.organization_id == org.id,
+        )
+    )
+    conns = result.scalars().all()
+    return [{"id": str(c.id), "url": c.jira_cloud_url} for c in conns]
+
+
+class ActivateConnectionRequest(BaseModel):
+    connection_id: str
+
+
+@router.post("/activate")
+async def activate_connection(
+    body: ActivateConnectionRequest,
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Activate one connection and deactivate all others for this org."""
+    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+
+    try:
+        target_id = uuid.UUID(body.connection_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid connection_id")
+
+    result = await db.execute(
+        select(JiraConnection).where(JiraConnection.organization_id == org.id)
+    )
+    for conn in result.scalars().all():
+        conn.is_active = conn.id == target_id
+    await db.commit()
+    return {"activated": body.connection_id}
 
 
 class BoardSelectionRequest(BaseModel):

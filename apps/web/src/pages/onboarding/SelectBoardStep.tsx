@@ -44,32 +44,32 @@ export function SelectBoardStep({ connectionId, onNext, onBack }: SelectBoardSte
 
   return (
     <div>
-      <h2 style={{ color: '#e2e8f0', fontSize: '1.25rem', fontWeight: 700, margin: '0 0 8px' }}>
+      <h2 style={{ color: 'var(--color-text-primary)', fontSize: '1.25rem', fontWeight: 700, margin: '0 0 8px' }}>
         Select Board
       </h2>
-      <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: '1.5rem', lineHeight: 1.6 }}>
+      <p style={{ color: 'var(--color-text-secondary)', fontSize: 14, marginBottom: '1.5rem', lineHeight: 1.6 }}>
         Choose the Jira board Omada will use for sprint planning.
       </p>
 
       {isLoading && (
-        <div style={{ color: '#64748b', fontSize: 14, marginBottom: '1.5rem' }}>Loading boards...</div>
+        <div style={{ color: 'var(--color-text-muted)', fontSize: 14, marginBottom: '1.5rem' }}>Loading boards...</div>
       )}
       {fetchError && (
         <div style={{ marginBottom: 12 }}>
-          <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 8 }}>
+          <div style={{ color: 'var(--color-danger)', fontSize: 13, marginBottom: 8 }}>
             Failed to load boards. Check your Jira connection.
           </div>
           <button onClick={() => refetch()} style={ghostButtonStyle}>Retry</button>
         </div>
       )}
       {saveError && (
-        <div style={{ color: '#ef4444', fontSize: 13, marginBottom: 12 }}>{saveError}</div>
+        <div style={{ color: 'var(--color-danger)', fontSize: 13, marginBottom: 12 }}>{saveError}</div>
       )}
 
       {boards && (
         <div style={{ marginBottom: '1.5rem' }}>
           {boards.length === 0 ? (
-            <div style={{ color: '#64748b', fontSize: 14 }}>
+            <div style={{ color: 'var(--color-text-muted)', fontSize: 14 }}>
               No boards found. Make sure your Jira account has access to at least one project board.
             </div>
           ) : (
@@ -81,14 +81,14 @@ export function SelectBoardStep({ connectionId, onNext, onBack }: SelectBoardSte
                   style={{
                     padding: '0.75rem 1rem',
                     borderRadius: 6,
-                    border: `2px solid ${selectedBoardId === board.id ? '#6366f1' : '#2d2f45'}`,
-                    background: selectedBoardId === board.id ? '#2d2f45' : 'transparent',
+                    border: `2px solid ${selectedBoardId === board.id ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                    background: selectedBoardId === board.id ? 'var(--color-accent-subtle)' : 'transparent',
                     cursor: 'pointer',
                     transition: 'border-color 0.15s, background 0.15s',
                   }}
                 >
-                  <div style={{ color: '#e2e8f0', fontSize: 14, fontWeight: 600 }}>{board.name}</div>
-                  <div style={{ color: '#64748b', fontSize: 12, marginTop: 2 }}>{board.project_key}</div>
+                  <div style={{ color: 'var(--color-text-primary)', fontSize: 14, fontWeight: 600 }}>{board.name}</div>
+                  <div style={{ color: 'var(--color-text-muted)', fontSize: 12, marginTop: 2 }}>{board.project_key}</div>
                 </div>
               ))}
             </div>
@@ -101,7 +101,18 @@ export function SelectBoardStep({ connectionId, onNext, onBack }: SelectBoardSte
         <button
           onClick={handleSave}
           disabled={!selectedBoardId || saving}
-          style={primaryButtonStyle(!selectedBoardId || saving ? '#374151' : '#6366f1')}
+          style={{
+            flex: 1,
+            background: !selectedBoardId || saving ? 'var(--color-bg-secondary)' : 'var(--color-accent)',
+            color: !selectedBoardId || saving ? 'var(--color-text-muted)' : '#fff',
+            border: 'none',
+            borderRadius: 6,
+            padding: '0.625rem 1.25rem',
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: !selectedBoardId || saving ? 'not-allowed' : 'pointer',
+            transition: 'background 0.15s',
+          }}
         >
           {saving ? 'Saving...' : 'Continue →'}
         </button>
@@ -112,24 +123,10 @@ export function SelectBoardStep({ connectionId, onNext, onBack }: SelectBoardSte
 
 const ghostButtonStyle: React.CSSProperties = {
   background: 'transparent',
-  color: '#94a3b8',
-  border: '1px solid #2d2f45',
+  color: 'var(--color-text-secondary)',
+  border: '1px solid var(--color-border)',
   borderRadius: 6,
   padding: '0.625rem 1rem',
   fontSize: 14,
   cursor: 'pointer',
-}
-
-function primaryButtonStyle(bg: string): React.CSSProperties {
-  return {
-    flex: 1,
-    background: bg,
-    color: '#fff',
-    border: 'none',
-    borderRadius: 6,
-    padding: '0.625rem 1.25rem',
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: 'pointer',
-  }
 }

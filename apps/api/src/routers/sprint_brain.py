@@ -581,6 +581,9 @@ async def _run_plan_pipeline(
       assigning_start / assigning_done    (inside generate_sprint_plan)
       enrichment_start / enrichment_done  (bracketing scope_cop + enrichment here)
     """
+    import time as _time
+    _pipeline_start = _time.monotonic()
+
     api_key = await get_anthropic_key(clerk_org_id, db)
     team_id = await _resolve_team_id(request.team_id, clerk_org_id, db)
 
@@ -590,6 +593,11 @@ async def _run_plan_pipeline(
         sprint_start_date=request.sprint_start_date,
         pto_overrides=request.pto_overrides,
         db=db,
+    )
+
+    logger.info(
+        "[sprint-plan] starting | team=%s tickets=%d devs=%d sprint_start=%s",
+        team_id, len(tickets), len(dev_profiles), sprint_start,
     )
 
     # Pre-fetch active retro patterns to inject into Claude prompt (Track 23)
@@ -607,6 +615,7 @@ async def _run_plan_pipeline(
     except (ValueError, Exception):
         pass  # non-UUID team_id or DB error — proceed without patterns
 
+    _claude_start = _time.monotonic()
     try:
         plan = await generate_sprint_plan(brain_input, api_key, db=db, on_stage=on_stage)
     except ValueError as exc:
@@ -615,9 +624,19 @@ async def _run_plan_pipeline(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         )
+    _claude_elapsed = _time.monotonic() - _claude_start
 
     # Post-plan enrichment queries (Tracks 22 + 23)
     assigned_keys = [a.get("ticket_id", "") for a in plan.assignments if a.get("ticket_id")]
+    unassigned_count = len(tickets) - len(assigned_keys)
+
+    logger.info(
+        "[sprint-plan] claude done | assigned=%d unassigned=%d insufficient_data_devs=%d"
+        " elapsed=%.1fs",
+        len(assigned_keys), unassigned_count,
+        len(plan.insufficient_data_devs or []),
+        _claude_elapsed,
+    )
 
     await _emit_stage(on_stage, "enrichment_start", assigned_count=len(assigned_keys))
 
@@ -670,6 +689,14 @@ async def _run_plan_pipeline(
     )
 
     await _emit_stage(on_stage, "enrichment_done")
+
+    _total_elapsed = _time.monotonic() - _pipeline_start
+    logger.info(
+        "[sprint-plan] complete | team=%s tickets=%d assigned=%d unassigned=%d"
+        " total=%.1fs (claude=%.1fs)",
+        team_id, len(tickets), len(assigned_keys), unassigned_count,
+        _total_elapsed, _claude_elapsed,
+    )
 
     return _sprint_plan_response(
         team_id, sprint_start, plan, dev_profiles, tickets,

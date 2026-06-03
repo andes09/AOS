@@ -1045,6 +1045,13 @@ async def generate_sprint_plan(
             "All team members have fewer than 3 sprints of recorded data."
         )
 
+    logger.info(
+        "[sprint-brain] generate_sprint_plan | tickets=%d eligible_devs=%d gated_out=%d",
+        len(inp.candidate_tickets),
+        len(eligible_profiles),
+        len(insufficient_data_devs),
+    )
+
     client = anthropic.AsyncAnthropic(api_key=anthropic_api_key)
 
     # Resolve override context (last-N completed sprints) when a DB session
@@ -1087,9 +1094,16 @@ async def generate_sprint_plan(
             # Forced tool_choice is incompatible with extended thinking in the Anthropic API.
             tool_choice={"type": "tool", "name": "create_sprint_plan"},
         )
+        _assigning_elapsed = time.monotonic() - assigning_started
+        logger.info(
+            "[sprint-brain] assigning done | elapsed=%.1fs input_tokens=%d output_tokens=%d",
+            _assigning_elapsed,
+            getattr(response.usage, "input_tokens", 0),
+            getattr(response.usage, "output_tokens", 0),
+        )
         await _emit_stage(
             on_stage, "assigning_done",
-            elapsed_ms=int((time.monotonic() - assigning_started) * 1000),
+            elapsed_ms=int(_assigning_elapsed * 1000),
         )
 
     except anthropic.AuthenticationError as exc:
@@ -1105,6 +1119,12 @@ async def generate_sprint_plan(
 
     plan = _extract_plan(response)
     plan.insufficient_data_devs = insufficient_data_devs
+
+    logger.info(
+        "[sprint-brain] plan ready | assignments=%d warnings=%d",
+        len(plan.assignments),
+        len(plan.risk_warnings or []),
+    )
 
     record_generation_cost(
         "sprint_plan",

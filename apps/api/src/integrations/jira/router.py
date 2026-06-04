@@ -15,7 +15,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import delete, select
@@ -447,9 +447,34 @@ async def switch_board(
 @router.post("/sync")
 async def trigger_sync(
     team_id: str,
+    background_tasks: BackgroundTasks,
     user_id: str = Depends(get_current_user_id),
 ):
-    """Enqueue a background Celery task to sync a team's Jira data."""
+    """Run Jira sync in a background thread; returns immediately."""
     from src.integrations.jira.sync import sync_jira_team
-    task = sync_jira_team.delay(team_id)
-    return {"task_id": task.id, "status": "queued"}
+    background_tasks.add_task(sync_jira_team, team_id)
+    return {"status": "syncing"}
+
+
+@router.get("/sync-status")
+async def get_sync_status(
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return last_synced_at for the org's active Jira connection."""
+    org = await db.scalar(
+        select(Organization).where(Organization.clerk_org_id == clerk_org_id)
+    )
+    if not org:
+        return {"last_synced_at": None}
+    connection = await db.scalar(
+        select(JiraConnection).where(
+            JiraConnection.organization_id == org.id,
+            JiraConnection.is_active == True,
+        )
+    )
+    return {
+        "last_synced_at": connection.last_synced_at.isoformat()
+        if connection and connection.last_synced_at
+        else None
+    }

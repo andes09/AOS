@@ -231,6 +231,13 @@ def sync_jira_team(self, team_id: str):
         db.commit()
         logger.info("Full Jira sync complete for team %s", team_id)
 
+        # Warm ticket complexity cache in the background so the next plan
+        # generation skips the Claude complexity call entirely.
+        try:
+            prewarm_ticket_complexity.delay(team_id)
+        except Exception:
+            pass  # never block sync completion
+
         # Initiative A: fire sprint-close hooks for any sprint that transitioned
         # to COMPLETED in this sync. Hooks are best-effort — failures are logged
         # but never block sync completion.
@@ -618,3 +625,17 @@ def incremental_sync_all_teams():
                     sync_jira_sprint.delay(str(team.id), active_sprint.jira_sprint_id)
     finally:
         db.close()
+
+
+@celery_app.task
+def prewarm_ticket_complexity(team_id: str) -> None:
+    """Warm the ticket complexity cache after a sync so plan generation skips Claude's complexity call."""
+    import asyncio
+    from src.database import AsyncSessionLocal
+    from src.services.sprint_brain import _prewarm_complexity
+
+    async def _run():
+        async with AsyncSessionLocal() as db:
+            await _prewarm_complexity(team_id, db)
+
+    asyncio.get_event_loop().run_until_complete(_run())

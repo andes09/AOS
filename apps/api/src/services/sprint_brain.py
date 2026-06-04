@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 import anthropic
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1006,6 +1006,78 @@ async def _get_developer_profiles(
         })
 
     return profiles
+
+
+# ---------------------------------------------------------------------------
+# Complexity cache pre-warm (called from Celery after sync)
+# ---------------------------------------------------------------------------
+
+
+async def _prewarm_complexity(team_id: str, db: AsyncSession) -> None:
+    """Warm the ticket complexity cache for a team's backlog. Best-effort; never raises."""
+    try:
+        import uuid as _uuid
+        from src.models.organization import Organization
+        from src.services.ai_client import get_anthropic_key
+
+        try:
+            team_uuid = _uuid.UUID(team_id)
+        except ValueError:
+            logger.warning("[prewarm] invalid team_id %s", team_id)
+            return
+
+        team = await db.scalar(select(Team).where(Team.id == team_uuid))
+        if not team:
+            return
+
+        org = await db.scalar(
+            select(Organization).where(Organization.id == team.organization_id)
+        )
+        if not org or not org.encrypted_anthropic_key:
+            logger.info("[prewarm] no anthropic key for team %s — skipping", team_id)
+            return
+
+        api_key = await get_anthropic_key(org.clerk_org_id, db)
+
+        tickets_rows = (await db.scalars(
+            select(Ticket).where(
+                Ticket.team_id == team_uuid,
+                or_(
+                    Ticket.sprint_id.is_(None),
+                    Ticket.sprint_id.in_(
+                        select(Sprint.id).where(
+                            Sprint.team_id == team_uuid,
+                            Sprint.status == SprintStatus.COMPLETED,
+                        )
+                    ),
+                ),
+                Ticket.status.notin_([TicketStatus.DONE, TicketStatus.CANCELLED]),
+            ).limit(50)
+        )).all()
+
+        if not tickets_rows:
+            logger.info("[prewarm] no candidate tickets for team %s", team_id)
+            return
+
+        tickets = [
+            {
+                "id": t.jira_issue_key or str(t.id),
+                "summary": t.title,
+                "story_points": t.story_points_estimated or 0,
+                "priority": "medium",
+                "labels": t.labels or [],
+            }
+            for t in tickets_rows
+        ]
+
+        client = anthropic.AsyncAnthropic(api_key=api_key)
+        await _analyse_ticket_complexity(tickets, client, db=db)
+        logger.info(
+            "[prewarm] complexity cache warm complete for team %s (%d tickets)",
+            team_id, len(tickets),
+        )
+    except Exception:
+        logger.warning("[prewarm] complexity prewarm failed for team %s", team_id, exc_info=True)
 
 
 # ---------------------------------------------------------------------------

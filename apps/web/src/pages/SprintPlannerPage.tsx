@@ -115,6 +115,10 @@ export function SprintPlannerPage() {
   const [commitResult, setCommitResult] = useState<CommitPlanResponse | null>(null)
   const [currentStage, setCurrentStage] = useState<{ name: string; startedAt: number } | null>(null)
   const planAbortRef = useRef<AbortController | null>(null)
+  const prewarmRef = useRef<{ status: 'pending' | 'done' | 'error'; data?: SprintPlanResponse }>({ status: 'pending' })
+  const prewarmAbort = useRef<AbortController | null>(null)
+  // Ref so generatePlan.onSuccess can call scopeAnalysisMutation without a forward-reference issue.
+  const scopeCopTriggerRef = useRef<(() => void) | null>(null)
 
   const capacityQuery = useQuery({
     queryKey: ['capacity', 'team', 'default'],
@@ -136,6 +140,64 @@ export function SprintPlannerPage() {
       try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(plan)) } catch { /* quota */ }
     }
   }, [plan])
+
+  // Shared SSE fetch — used for both prewarm (silent) and normal generation.
+  async function startPlanStream(signal: AbortSignal): Promise<SprintPlanResponse> {
+    const token = await getToken()
+    if (!token) throw new Error('Not authenticated')
+
+    const response = await fetch(`${API_URL}/api/sprint-brain/plan`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ team_id: 'default', sprint_length_days: 14, pto_overrides: {} }),
+      signal,
+    })
+
+    if (!response.ok) {
+      const errBody = await response.json().catch(() => ({}))
+      throw new ApiError(
+        (errBody as { detail?: string }).detail || `API error ${response.status}`,
+        response.status,
+      )
+    }
+    if (!response.body) throw new Error('No response body for SSE stream')
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let result: SprintPlanResponse | null = null
+    let streamError: string | null = null
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const events = buffer.split('\n\n')
+        buffer = events.pop() ?? ''
+        for (const evt of events) {
+          const lines = evt.split('\n')
+          const eventLine = lines.find(l => l.startsWith('event:'))?.slice(6).trim()
+          const dataLine = lines.find(l => l.startsWith('data:'))?.slice(5).trim()
+          if (!eventLine || !dataLine) continue
+          let data: unknown
+          try { data = JSON.parse(dataLine) } catch { continue }
+          if (eventLine === 'result') result = data as SprintPlanResponse
+          else if (eventLine === 'error') streamError = (data as { message?: string }).message || 'Sprint plan stream failed'
+        }
+      }
+    } finally {
+      reader.cancel()
+    }
+
+    if (streamError) throw new Error(streamError)
+    if (!result) throw new Error('Stream ended without a result event')
+    return result
+  }
 
   const generatePlan = useMutation<SprintPlanResponse, Error, void>({
     mutationFn: async () => {
@@ -219,6 +281,7 @@ export function SprintPlannerPage() {
       setConfidence(data.confidence_score)
       setWarnings(data.warnings)
       setDroppedIds(new Set())
+      scopeCopTriggerRef.current?.()
       // Inline-refinement rollout: auto-open the review modal so the lead can
       // refine + commit. Gated behind scope_check_v2 — when off, behave as today.
       if (canInlineRefine) {
@@ -238,6 +301,23 @@ export function SprintPlannerPage() {
       planAbortRef.current?.abort()
       planAbortRef.current = null
     }
+  }, [])
+
+  // SA-1C: silently start the plan stream on mount so the result is ready when
+  // the user clicks "Generate Plan". Aborted immediately if plan already exists
+  // (page reload with cached plan) or on unmount.
+  useEffect(() => {
+    if (plan) return
+    const ctrl = new AbortController()
+    prewarmAbort.current = ctrl
+    startPlanStream(ctrl.signal)
+      .then(data => { prewarmRef.current = { status: 'done', data } })
+      .catch(() => { prewarmRef.current = { status: 'error' } })
+    return () => {
+      ctrl.abort()
+      prewarmAbort.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const commitMutation = useMutation({
@@ -287,7 +367,22 @@ export function SprintPlannerPage() {
       teamId: 'default',
       ticketKeys: (plan?.assignments ?? []).map(a => a.ticket_id),
     }),
+    onSuccess: (data) => {
+      setPlan(prev => prev ? {
+        ...prev,
+        scopeCopRanAt: data.analyzedAt,
+        scopeCopResults: data.results.map(r => ({
+          ...r,
+          stackAlignment: null,
+          matchedIdentifierCount: null,
+          suggestedRevision: null,
+          fetchedUpdatedAt: null,
+        })),
+      } : prev)
+    },
   })
+  // Keep the ref current so generatePlan.onSuccess and handleGeneratePlan can call it.
+  scopeCopTriggerRef.current = () => scopeAnalysisMutation.mutate()
 
   const whatIf = useMutation({
     mutationFn: (dropped: string[]) =>
@@ -306,6 +401,24 @@ export function SprintPlannerPage() {
     next.add(ticketId)
     setDroppedIds(next)
     whatIf.mutate(Array.from(next))
+  }
+
+  function handleGeneratePlan() {
+    if (prewarmRef.current.status === 'done' && prewarmRef.current.data) {
+      const data = prewarmRef.current.data
+      prewarmRef.current = { status: 'pending' }
+      setPlan(data)
+      setConfidence(data.confidence_score)
+      setWarnings(data.warnings)
+      setDroppedIds(new Set())
+      scopeCopTriggerRef.current?.()
+      if (canInlineRefine) {
+        setCommitResult(null)
+        setReviewOpen(true)
+      }
+    } else {
+      generatePlan.mutate()
+    }
   }
 
   function handleRestoreTicket(ticketId: string) {
@@ -374,7 +487,7 @@ export function SprintPlannerPage() {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <Button
             variant="primary"
-            onClick={() => generatePlan.mutate()}
+            onClick={handleGeneratePlan}
             disabled={generatePlan.isPending}
           >
             {generatePlan.isPending ? 'Generating...' : 'Generate Plan'}

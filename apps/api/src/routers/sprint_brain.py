@@ -51,7 +51,6 @@ from src.models.team import Team
 from src.models.ticket import Ticket, TicketStatus
 from src.models.ticket_revision import TicketRevision
 from src.services.ai_client import get_anthropic_key
-from src.services import scope_cop
 from src.services.sprint_brain import (
     OnStage,
     SprintBrainInput,
@@ -640,50 +639,6 @@ async def _run_plan_pipeline(
 
     await _emit_stage(on_stage, "enrichment_start", assigned_count=len(assigned_keys))
 
-    # Initiative B (SB-5): auto-run Scope Cop against every assigned ticket *before*
-    # enrichment so the PlanReviewModal opening after planning has fresh
-    # `suggested_revision` payloads to render. Failure here must NEVER block the
-    # plan from returning — we log and proceed.
-    scope_cop_ran_at: datetime | None = None
-    scope_cop_results: list = []
-    if assigned_keys:
-        try:
-            import uuid as _uuid
-            try:
-                _team_uuid_for_conn = _uuid.UUID(team_id)
-            except ValueError:
-                _team_uuid_for_conn = None
-
-            connection = None
-            if _team_uuid_for_conn is not None:
-                _team_row = await db.scalar(
-                    select(Team).where(Team.id == _team_uuid_for_conn)
-                )
-                if _team_row is not None:
-                    connection = await db.scalar(
-                        select(JiraConnection).where(
-                            JiraConnection.organization_id == _team_row.organization_id,
-                            JiraConnection.is_active.is_(True),
-                        )
-                    )
-
-            if connection is None:
-                logger.warning(
-                    "[scope_cop_auto] no active Jira connection for team %s — skipping",
-                    team_id,
-                )
-            else:
-                jira_client = await _get_fresh_client_async(connection, db)
-                scope_cop_results = await scope_cop.analyze_tickets(
-                    team_id, assigned_keys, jira_client, db
-                )
-                scope_cop_ran_at = datetime.now(timezone.utc)
-        except Exception as e:
-            logger.warning(
-                "[scope_cop_auto] analyze_tickets failed for team %s (%d keys): %s",
-                team_id, len(assigned_keys), e,
-            )
-
     scope_warnings, dep_warnings, enrichment_status, historical_warnings, _ = (
         await _build_enrichment(team_id, assigned_keys, db)
     )
@@ -704,8 +659,6 @@ async def _run_plan_pipeline(
         dep_warnings=dep_warnings,
         enrichment_status=enrichment_status,
         historical_warnings=historical_warnings,
-        scope_cop_ran_at=scope_cop_ran_at,
-        scope_cop_results=scope_cop_results,
     )
 
 

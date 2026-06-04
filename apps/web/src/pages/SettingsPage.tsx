@@ -242,18 +242,36 @@ export function SettingsPage() {
   async function handleSync() {
     setSyncing(true)
     setSyncMessage(null)
+    const prevSyncedAt = status?.last_synced_at ?? null
     try {
       const org = await post<{ teamId: string }>('/api/organizations', { name: 'My Org' })
       await post(`/api/integrations/jira/sync?team_id=${org.teamId}`, {})
-      setSyncMessage('Sync queued — data will update shortly.')
-      setTimeout(() => {
-        fetchStatus()
-        setSyncMessage(null)
+      setSyncMessage('Syncing…')
+
+      // Poll until last_synced_at changes (sync runs in a background thread).
+      let attempts = 0
+      const poll = setInterval(async () => {
+        attempts++
+        try {
+          const s = await get<{ last_synced_at: string | null }>('/api/integrations/jira/sync-status')
+          if (s.last_synced_at && s.last_synced_at !== prevSyncedAt) {
+            clearInterval(poll)
+            setSyncing(false)
+            setSyncMessage(null)
+            fetchStatus()
+          }
+        } catch {
+          // non-fatal — keep polling
+        }
+        if (attempts >= 20) {
+          clearInterval(poll)
+          setSyncing(false)
+          setSyncMessage('Sync is taking longer than expected — check back soon.')
+        }
       }, 3000)
     } catch (err) {
-      setSyncMessage(err instanceof Error ? err.message : String(err) || 'Sync failed')
-    } finally {
       setSyncing(false)
+      setSyncMessage(err instanceof Error ? err.message : String(err) || 'Sync failed')
     }
   }
 

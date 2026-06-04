@@ -107,43 +107,73 @@ class JiraClient:
             start_at += len(batch)
         return boards
 
-    async def get_sprints(self, board_id: str = None) -> list[dict]:
-        """
-        Extract unique sprint metadata from issue sprint fields.
-        Uses JQL + customfield_10020 — no Jira Software scope required.
-        board_id is accepted but ignored; kept for call-site compatibility.
-        """
-        issues = await self.search_issues(
-            jql="sprint in openSprints() or sprint in closedSprints()",
-            fields=["customfield_10020"],
-        )
-        seen: set[int] = set()
-        sprints: list[dict] = []
-        for issue in issues:
-            sprint_field = issue.get("fields", {}).get("customfield_10020") or []
-            if isinstance(sprint_field, dict):
-                sprint_field = [sprint_field]
-            for sprint in sprint_field:
-                sid = sprint.get("id")
-                if sid and sid not in seen:
-                    seen.add(sid)
-                    sprints.append(sprint)
+    async def get_board_sprints(self, board_id: str) -> list[dict]:
+        """GET /agile/1.0/board/{boardId}/sprint — all sprints for a board."""
+        sprints = []
+        start_at = 0
+        while True:
+            r = await self._http.get(
+                f"{self.agile_base_url}/board/{board_id}/sprint",
+                headers=self._headers(),
+                params={"maxResults": 50, "startAt": start_at},
+            )
+            r.raise_for_status()
+            data = r.json()
+            batch = data.get("values", [])
+            sprints.extend(batch)
+            if data.get("isLast", True) or not batch:
+                break
+            start_at += len(batch)
         return sprints
 
     async def get_sprint_issues(self, sprint_id: str) -> list[dict]:
-        """
-        Fetch all issues belonging to a sprint using JQL.
-        No Jira Software scope required.
-        """
+        """GET /agile/1.0/sprint/{sprintId}/issue — all issues in a sprint."""
         fields = [
             "summary", "status", "assignee", "issuetype", "labels",
             "components", "timespent", "timeoriginalestimate", "created",
             "updated", "resolutiondate", "customfield_10016", "customfield_10028",
         ]
-        return await self.search_issues(
-            jql=f"sprint = {sprint_id} ORDER BY created ASC",
-            fields=fields,
-        )
+        issues = []
+        start_at = 0
+        while True:
+            r = await self._http.get(
+                f"{self.agile_base_url}/sprint/{sprint_id}/issue",
+                headers=self._headers(),
+                params={"fields": ",".join(fields), "maxResults": 100, "startAt": start_at},
+            )
+            r.raise_for_status()
+            data = r.json()
+            batch = data.get("issues", [])
+            issues.extend(batch)
+            start_at += len(batch)
+            if not batch or start_at >= data.get("total", 0):
+                break
+        return issues
+
+    async def get_board_backlog(self, board_id: str, fields: list[str] | None = None) -> list[dict]:
+        """GET /agile/1.0/board/{boardId}/backlog — issues not in any sprint."""
+        if fields is None:
+            fields = [
+                "summary", "status", "assignee", "issuetype", "labels",
+                "components", "timespent", "timeoriginalestimate", "created",
+                "updated", "resolutiondate", "customfield_10016", "customfield_10028",
+            ]
+        issues = []
+        start_at = 0
+        while True:
+            r = await self._http.get(
+                f"{self.agile_base_url}/board/{board_id}/backlog",
+                headers=self._headers(),
+                params={"fields": ",".join(fields), "maxResults": 100, "startAt": start_at},
+            )
+            r.raise_for_status()
+            data = r.json()
+            batch = data.get("issues", [])
+            issues.extend(batch)
+            start_at += len(batch)
+            if not batch or start_at >= data.get("total", 0):
+                break
+        return issues
 
     async def get_users(self) -> list[dict]:
         r = await self._http.get(

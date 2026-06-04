@@ -182,7 +182,7 @@ def sync_jira_team(self, team_id: str):
         t_fetch = time.monotonic()
         users, sprints = loop.run_until_complete(asyncio.gather(
             client.get_users(),
-            client.get_sprints(),
+            client.get_board_sprints(team.jira_board_id),
         ))
         logger.info(
             "[sync] team=%s found %d sprints, %d users (%.1fs)",
@@ -202,31 +202,19 @@ def sync_jira_team(self, team_id: str):
         ]
 
         logger.info(
-            "[sync] team=%s fetching issues for %d sprints%s in parallel...",
-            team_id, len(sprints), " + backlog" if team.jira_project_key else "",
+            "[sync] team=%s fetching issues for %d sprints + backlog in parallel...",
+            team_id, len(sprints),
         )
         t_fetch = time.monotonic()
 
         async def _fetch_all_issues():
             coros = [client.get_sprint_issues(str(s["id"])) for s in sprints]
-            if team.jira_project_key:
-                coros.append(client.search_issues(
-                    jql=(
-                        f"project = {team.jira_project_key} "
-                        f"AND sprint is EMPTY ORDER BY created ASC"
-                    ),
-                    fields=_ISSUE_FIELDS,
-                ))
+            coros.append(client.get_board_backlog(team.jira_board_id, _ISSUE_FIELDS))
             return await asyncio.gather(*coros)
 
         results = loop.run_until_complete(_fetch_all_issues())
-
-        if team.jira_project_key:
-            all_sprint_issues = results[:-1]
-            backlog_issues = results[-1]
-        else:
-            all_sprint_issues = results
-            backlog_issues = []
+        all_sprint_issues = results[:-1]
+        backlog_issues = results[-1]
 
         total_sprint_issues = sum(len(r) for r in all_sprint_issues)
         logger.info(

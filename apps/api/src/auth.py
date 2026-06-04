@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
@@ -5,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from clerk_backend_api import Clerk
 from clerk_backend_api.security.types import AuthenticateRequestOptions
 from src.config import settings
+
+logger = logging.getLogger(__name__)
 from src.database import get_db
 from src.models.developer import AppRole, Developer
 from src.models.organization import Organization
@@ -28,6 +32,7 @@ async def _verify_token(credentials: HTTPAuthorizationCredentials) -> dict:
         AuthenticateRequestOptions(secret_key=settings.clerk_secret_key),
     )
     if not state.is_signed_in or state.payload is None:
+        logger.warning("Clerk auth rejected: reason=%s", state.reason)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
@@ -107,6 +112,10 @@ async def get_current_org_id(
     payload = await _verify_token(credentials)
     org_id = payload.get("org_id")
     if not org_id:
+        logger.warning(
+            "Token valid but no org_id — sub=%s token_v=%s claims=%s",
+            payload.get("sub"), payload.get("v"), list(payload.keys()),
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No organisation context — sign in with an organisation account.",

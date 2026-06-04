@@ -1,5 +1,6 @@
 import { ReactNode, useEffect } from 'react'
 import { useOrganization } from '@clerk/clerk-react'
+import { CreateOrganization } from '@clerk/clerk-react'
 import { useNavigate } from 'react-router-dom'
 import { useProvisionOrg } from '../hooks/useProvisionOrg'
 
@@ -41,13 +42,20 @@ export function OrgProvider({ children }: Props) {
     return (
       <div style={{
         display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
         height: '100vh',
-        color: '#64748b',
-        fontSize: 14,
+        gap: 16,
+        background: '#f7f8fa',
       }}>
-        No organisation found. Please sign in with an organisation account.
+        <div style={{ color: '#1a1d23', fontFamily: 'system-ui, sans-serif', fontSize: 18, fontWeight: 700 }}>
+          Create your workspace
+        </div>
+        <div style={{ color: '#64748b', fontFamily: 'system-ui, sans-serif', fontSize: 14, marginBottom: 8 }}>
+          You need an organisation to use Omada.
+        </div>
+        <CreateOrganization afterCreateOrganizationUrl="/app" />
       </div>
     )
   }

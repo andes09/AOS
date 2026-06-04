@@ -112,6 +112,7 @@ async def get_current_sprint(
     return CurrentSprintResponse(
         id=str(sprint.id),
         name=sprint.name,
+        jira_sprint_id=sprint.jira_sprint_id,
         start_date=sprint.start_date,
         end_date=sprint.end_date,
         sprint_length=team.sprint_length_days,

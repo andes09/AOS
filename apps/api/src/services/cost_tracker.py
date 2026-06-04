@@ -50,6 +50,13 @@ class CostBreakdown:
     cost_usd: float
 
 
+def _as_int(value) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def compute_cost(usages: Iterable) -> CostBreakdown:
     """Sum token counts across one or more Anthropic `usage` objects and price them."""
     input_t = output_t = cache_w = cache_r = 0
@@ -58,10 +65,10 @@ def compute_cost(usages: Iterable) -> CostBreakdown:
         if u is None:
             continue
         calls += 1
-        input_t += getattr(u, "input_tokens", 0) or 0
-        output_t += getattr(u, "output_tokens", 0) or 0
-        cache_w += getattr(u, "cache_creation_input_tokens", 0) or 0
-        cache_r += getattr(u, "cache_read_input_tokens", 0) or 0
+        input_t += _as_int(getattr(u, "input_tokens", 0))
+        output_t += _as_int(getattr(u, "output_tokens", 0))
+        cache_w += _as_int(getattr(u, "cache_creation_input_tokens", 0))
+        cache_r += _as_int(getattr(u, "cache_read_input_tokens", 0))
 
     cost = (
         input_t * _PER_MTOK["input"]
@@ -89,8 +96,8 @@ def is_enabled() -> bool:
 
 
 _CSV_HEADERS = [
-    "date", "model", "total_tokens", "input_tokens", "output_tokens",
-    "total_price_usd", "price_per_ticket_usd",
+    "date", "model", "ticket_count", "total_tokens", "input_tokens", "output_tokens",
+    "cost_per_sprint_generation_usd", "price_per_ticket_usd",
 ]
 
 
@@ -100,10 +107,11 @@ def _append_csv_row(breakdown: CostBreakdown, model: str, assigned_count: int) -
     row = {
         "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "model": model,
+        "ticket_count": assigned_count,
         "total_tokens": total_tokens,
         "input_tokens": breakdown.input_tokens,
         "output_tokens": breakdown.output_tokens,
-        "total_price_usd": f"${breakdown.cost_usd:.2f}",
+        "cost_per_sprint_generation_usd": f"${breakdown.cost_usd:.2f}",
         "price_per_ticket_usd": f"${price_per_ticket:.2f}",
     }
     write_header = not _CSV_PATH.exists() or os.path.getsize(_CSV_PATH) == 0

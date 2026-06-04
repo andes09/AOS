@@ -17,6 +17,15 @@ developers:
   - name: "Riley"
     completion_rate: 0.75
     speed: 0.95
+  - name: "Casey"
+    completion_rate: 0.80
+    speed: 1.05
+  - name: "Morgan"
+    completion_rate: 0.65
+    speed: 0.85
+  - name: "Taylor"
+    completion_rate: 0.88
+    speed: 1.0
 
 ticket_distribution:
   type:

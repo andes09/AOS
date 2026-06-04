@@ -31,6 +31,11 @@ class JiraClient:
     cloud_id: str
     access_token: str
 
+    def __post_init__(self):
+        # Shared across all requests in this client's lifetime — avoids
+        # a TCP+TLS handshake on every paginated call.
+        self._http = httpx.AsyncClient(timeout=30.0)
+
     @property
     def base_url(self) -> str:
         return f"https://api.atlassian.com/ex/jira/{self.cloud_id}/rest/api/3"
@@ -50,36 +55,34 @@ class JiraClient:
             body: dict = {"jql": jql, "maxResults": 100, "fields": fields}
             if next_page_token:
                 body["nextPageToken"] = next_page_token
-            async with httpx.AsyncClient() as c:
-                r = await c.post(
-                    f"{self.base_url}/search/jql",
-                    headers=self._headers(),
-                    json=body,
+            r = await self._http.post(
+                f"{self.base_url}/search/jql",
+                headers=self._headers(),
+                json=body,
+            )
+            if not r.is_success:
+                logger.error(
+                    "Jira search/jql %s — body: %s",
+                    r.status_code,
+                    r.text[:500],
                 )
-                if not r.is_success:
-                    logger.error(
-                        "Jira search/jql %s — body: %s",
-                        r.status_code,
-                        r.text[:500],
-                    )
-                r.raise_for_status()
-                data = r.json()
-                batch = data.get("issues", [])
-                issues.extend(batch)
-                next_page_token = data.get("nextPageToken")
-                if not next_page_token or not batch:
-                    break
+            r.raise_for_status()
+            data = r.json()
+            batch = data.get("issues", [])
+            issues.extend(batch)
+            next_page_token = data.get("nextPageToken")
+            if not next_page_token or not batch:
+                break
         return issues
 
     async def get_projects(self) -> list[dict]:
-        async with httpx.AsyncClient() as c:
-            r = await c.get(
-                f"{self.base_url}/project/search",
-                headers=self._headers(),
-                params={"maxResults": 50, "orderBy": "name"},
-            )
-            r.raise_for_status()
-            return r.json().get("values", [])
+        r = await self._http.get(
+            f"{self.base_url}/project/search",
+            headers=self._headers(),
+            params={"maxResults": 50, "orderBy": "name"},
+        )
+        r.raise_for_status()
+        return r.json().get("values", [])
 
     async def get_boards(self) -> list[dict]:
         """GET /agile/1.0/board — returns all boards visible to the token.
@@ -90,14 +93,13 @@ class JiraClient:
         boards = []
         start_at = 0
         while True:
-            async with httpx.AsyncClient() as c:
-                r = await c.get(
-                    f"{self.agile_base_url}/board",
-                    headers=self._headers(),
-                    params={"maxResults": 50, "startAt": start_at},
-                )
-                r.raise_for_status()
-                data = r.json()
+            r = await self._http.get(
+                f"{self.agile_base_url}/board",
+                headers=self._headers(),
+                params={"maxResults": 50, "startAt": start_at},
+            )
+            r.raise_for_status()
+            data = r.json()
             batch = data.get("values", [])
             boards.extend(batch)
             if data.get("isLast", True) or not batch:
@@ -144,14 +146,13 @@ class JiraClient:
         )
 
     async def get_users(self) -> list[dict]:
-        async with httpx.AsyncClient() as c:
-            r = await c.get(
-                f"{self.base_url}/users/search",
-                headers=self._headers(),
-                params={"maxResults": 200, "accountType": "atlassian"},
-            )
-            r.raise_for_status()
-            return r.json()
+        r = await self._http.get(
+            f"{self.base_url}/users/search",
+            headers=self._headers(),
+            params={"maxResults": 200, "accountType": "atlassian"},
+        )
+        r.raise_for_status()
+        return r.json()
 
     @property
     def agile_base_url(self) -> str:
@@ -159,29 +160,27 @@ class JiraClient:
 
     async def create_sprint(self, board_id: str, name: str, start_date: str, end_date: str) -> dict:
         """POST /agile/1.0/sprint — returns sprint dict with 'id' and 'self' URL."""
-        async with httpx.AsyncClient() as c:
-            r = await c.post(
-                f"{self.agile_base_url}/sprint",
-                headers={**self._headers(), "Content-Type": "application/json"},
-                json={"originBoardId": board_id, "name": name, "startDate": start_date, "endDate": end_date},
-            )
-            r.raise_for_status()
-            return r.json()
+        r = await self._http.post(
+            f"{self.agile_base_url}/sprint",
+            headers={**self._headers(), "Content-Type": "application/json"},
+            json={"originBoardId": board_id, "name": name, "startDate": start_date, "endDate": end_date},
+        )
+        r.raise_for_status()
+        return r.json()
 
     async def move_issues_to_sprint(self, sprint_id: int, issue_keys: list[str]) -> None:
         """POST /agile/1.0/sprint/{id}/issue"""
-        async with httpx.AsyncClient() as c:
-            r = await c.post(
-                f"{self.agile_base_url}/sprint/{sprint_id}/issue",
-                headers={**self._headers(), "Content-Type": "application/json"},
-                json={"issues": issue_keys},
+        r = await self._http.post(
+            f"{self.agile_base_url}/sprint/{sprint_id}/issue",
+            headers={**self._headers(), "Content-Type": "application/json"},
+            json={"issues": issue_keys},
+        )
+        if not r.is_success:
+            logger.error(
+                "move_issues_to_sprint %s — keys=%s body: %s",
+                r.status_code, issue_keys, r.text[:500],
             )
-            if not r.is_success:
-                logger.error(
-                    "move_issues_to_sprint %s — keys=%s body: %s",
-                    r.status_code, issue_keys, r.text[:500],
-                )
-            r.raise_for_status()
+        r.raise_for_status()
 
     async def update_issue(self, issue_key: str, fields: dict) -> dict:
         """PUT /rest/api/3/issue/{issue_key} with body ``{"fields": fields}``.
@@ -205,29 +204,27 @@ class JiraClient:
         if isinstance(desc, str):
             payload_fields["description"] = _plain_text_to_adf(desc)
 
-        async with httpx.AsyncClient() as c:
-            r = await c.put(
-                f"{self.base_url}/issue/{issue_key}",
-                headers={**self._headers(), "Content-Type": "application/json"},
-                json={"fields": payload_fields},
+        r = await self._http.put(
+            f"{self.base_url}/issue/{issue_key}",
+            headers={**self._headers(), "Content-Type": "application/json"},
+            json={"fields": payload_fields},
+        )
+        if not r.is_success:
+            logger.error(
+                "Jira update_issue %s — status=%s body=%s",
+                issue_key, r.status_code, r.text[:500],
             )
-            if not r.is_success:
-                logger.error(
-                    "Jira update_issue %s — status=%s body=%s",
-                    issue_key, r.status_code, r.text[:500],
-                )
-            r.raise_for_status()
+        r.raise_for_status()
         return payload_fields
 
     async def assign_issue(self, issue_key: str, jira_account_id: str) -> None:
         """PUT /rest/api/3/issue/{key}/assignee"""
-        async with httpx.AsyncClient() as c:
-            r = await c.put(
-                f"{self.base_url}/issue/{issue_key}/assignee",
-                headers={**self._headers(), "Content-Type": "application/json"},
-                json={"accountId": jira_account_id},
-            )
-            r.raise_for_status()
+        r = await self._http.put(
+            f"{self.base_url}/issue/{issue_key}/assignee",
+            headers={**self._headers(), "Content-Type": "application/json"},
+            json={"accountId": jira_account_id},
+        )
+        r.raise_for_status()
 
     async def get_issue(self, issue_key: str) -> dict:
         """
@@ -249,26 +246,25 @@ class JiraClient:
         """
         from fastapi import HTTPException
 
-        async with httpx.AsyncClient() as c:
-            r = await c.get(
-                f"{self.base_url}/issue/{issue_key}",
-                headers=self._headers(),
-                params={
-                    "fields": (
-                        "description,customfield_10014,parent,summary,"
-                        "issuetype,updated"
-                    )
-                },
-            )
-            if r.status_code == 404:
-                raise HTTPException(status_code=404, detail=f"Issue {issue_key} not found in Jira")
-            if not r.is_success:
-                logger.error(
-                    "Jira get_issue %s — status=%s body=%s",
-                    issue_key, r.status_code, r.text[:500],
+        r = await self._http.get(
+            f"{self.base_url}/issue/{issue_key}",
+            headers=self._headers(),
+            params={
+                "fields": (
+                    "description,customfield_10014,parent,summary,"
+                    "issuetype,updated"
                 )
-            r.raise_for_status()
-            return r.json()
+            },
+        )
+        if r.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"Issue {issue_key} not found in Jira")
+        if not r.is_success:
+            logger.error(
+                "Jira get_issue %s — status=%s body=%s",
+                issue_key, r.status_code, r.text[:500],
+            )
+        r.raise_for_status()
+        return r.json()
 
     async def check_stale(self, issue_key: str, fetched_updated_at: str) -> bool:
         """Return ``True`` if Jira's ``fields.updated`` is newer than
@@ -335,16 +331,15 @@ class JiraClient:
         """
         from fastapi import HTTPException
 
-        async with httpx.AsyncClient() as c:
-            r = await c.get(
-                f"{self.base_url}/issue/{issue_key}",
-                headers=self._headers(),
-                params={"fields": "issuelinks,summary"},
-            )
-            if r.status_code == 404:
-                raise HTTPException(status_code=404, detail=f"Issue {issue_key} not found in Jira")
-            r.raise_for_status()
-            data = r.json()
+        r = await self._http.get(
+            f"{self.base_url}/issue/{issue_key}",
+            headers=self._headers(),
+            params={"fields": "issuelinks,summary"},
+        )
+        if r.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"Issue {issue_key} not found in Jira")
+        r.raise_for_status()
+        data = r.json()
 
         raw_links = data.get("fields", {}).get("issuelinks", [])
         return [

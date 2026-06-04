@@ -173,25 +173,52 @@ def sync_jira_team(self, team_id: str):
             return
 
         client = _get_fresh_client(connection, db)
+        loop = asyncio.get_event_loop()
 
-        # Sync users first so we can match assignees when syncing issues
-        users = asyncio.get_event_loop().run_until_complete(client.get_users())
+        # Fetch users + sprint list concurrently
+        users, sprints = loop.run_until_complete(asyncio.gather(
+            client.get_users(),
+            client.get_sprints(),
+        ))
         _upsert_team_members(db, team, users)
 
-        # Sync sprints (uses JQL — no Jira Software scope required)
-        sprints = asyncio.get_event_loop().run_until_complete(
-            client.get_sprints()
-        )
-        from src.models.sprint import Sprint as SprintModel
+        # Preload member map once — eliminates N×M per-ticket DB lookups
+        member_map = _build_member_map(db, team)
+
+        # Fetch all sprint issues + backlog in one concurrent gather
+        _ISSUE_FIELDS = [
+            "summary", "status", "assignee", "issuetype", "labels",
+            "components", "timespent", "timeoriginalestimate",
+            "created", "updated", "resolutiondate",
+            "customfield_10016", "customfield_10028",
+        ]
+
+        async def _fetch_all_issues():
+            coros = [client.get_sprint_issues(str(s["id"])) for s in sprints]
+            if team.jira_project_key:
+                coros.append(client.search_issues(
+                    jql=(
+                        f"project = {team.jira_project_key} "
+                        f"AND sprint is EMPTY ORDER BY created ASC"
+                    ),
+                    fields=_ISSUE_FIELDS,
+                ))
+            return await asyncio.gather(*coros)
+
+        results = loop.run_until_complete(_fetch_all_issues())
+
+        if team.jira_project_key:
+            all_sprint_issues = results[:-1]
+            backlog_issues = results[-1]
+        else:
+            all_sprint_issues = results
+            backlog_issues = []
 
         closed_sprint_ids: list[uuid.UUID] = []
-        for jira_sprint in sprints:
+        for jira_sprint, issues in zip(sprints, all_sprint_issues):
             sprint_obj, just_closed = _upsert_sprint(db, team, jira_sprint)
-            issues = asyncio.get_event_loop().run_until_complete(
-                client.get_sprint_issues(str(jira_sprint["id"]))
-            )
             if sprint_obj:
-                _upsert_issues(db, team, sprint_obj, issues)
+                _upsert_issues(db, team, sprint_obj, issues, member_map)
                 if just_closed:
                     closed_sprint_ids.append(sprint_obj.id)
 
@@ -200,22 +227,8 @@ def sync_jira_team(self, team_id: str):
         # NULL or in completed sprints, so without this step a fresh team
         # board (one that's never had a completed sprint) yields an empty
         # candidate pool and /api/sprint-brain/plan 422s.
-        if team.jira_project_key:
-            backlog_issues = asyncio.get_event_loop().run_until_complete(
-                client.search_issues(
-                    jql=(
-                        f"project = {team.jira_project_key} "
-                        f"AND sprint is EMPTY ORDER BY created ASC"
-                    ),
-                    fields=[
-                        "summary", "status", "assignee", "issuetype", "labels",
-                        "components", "timespent", "timeoriginalestimate",
-                        "created", "updated", "resolutiondate",
-                        "customfield_10016", "customfield_10028",
-                    ],
-                )
-            )
-            _upsert_backlog_issues(db, team, backlog_issues)
+        if backlog_issues:
+            _upsert_backlog_issues(db, team, backlog_issues, member_map)
 
         db.commit()
 
@@ -339,6 +352,18 @@ def sync_jira_sprint(self, team_id: str, jira_sprint_id: str):
 # Private helpers
 # ---------------------------------------------------------------------------
 
+def _build_member_map(db: Session, team) -> dict[str, uuid.UUID]:
+    """Return {jira_account_id: TeamMember.id} for the team.
+
+    Called once per sync after _upsert_team_members so every sprint's issue
+    upsert can resolve assignees with a dict lookup instead of a per-ticket
+    SELECT.
+    """
+    from src.models.developer import TeamMember
+    rows = db.execute(select(TeamMember).where(TeamMember.team_id == team.id)).scalars().all()
+    return {m.jira_account_id: m.id for m in rows if m.jira_account_id}
+
+
 def _upsert_team_members(db: Session, team, jira_users: list[dict]):
     from src.models.developer import TeamMember
 
@@ -415,7 +440,7 @@ def _upsert_sprint(db: Session, team, jira_sprint: dict):
     return sprint, transitioned
 
 
-def _upsert_issues(db: Session, team, sprint, jira_issues: list[dict]):
+def _upsert_issues(db: Session, team, sprint, jira_issues: list[dict], member_map: dict | None = None):
     from src.models.ticket import Ticket, TicketStatus
     from src.models.developer import TeamMember
 
@@ -423,18 +448,22 @@ def _upsert_issues(db: Session, team, sprint, jira_issues: list[dict]):
         jira_issue_id = issue["id"]
         fields = issue.get("fields", {})
 
-        # Resolve assignee
+        # Resolve assignee — O(1) dict lookup when member_map is provided
         assignee_id = None
         assignee_data = fields.get("assignee")
         if assignee_data:
-            member = db.execute(
-                select(TeamMember).where(
-                    TeamMember.team_id == team.id,
-                    TeamMember.jira_account_id == assignee_data.get("accountId"),
-                )
-            ).scalar_one_or_none()
-            if member:
-                assignee_id = member.id
+            account_id = assignee_data.get("accountId")
+            if member_map is not None:
+                assignee_id = member_map.get(account_id)
+            else:
+                member = db.execute(
+                    select(TeamMember).where(
+                        TeamMember.team_id == team.id,
+                        TeamMember.jira_account_id == account_id,
+                    )
+                ).scalar_one_or_none()
+                if member:
+                    assignee_id = member.id
 
         status_name = fields.get("status", {}).get("name", "To Do")
         ticket_status_str = _map_jira_status(status_name)
@@ -489,7 +518,7 @@ def _upsert_issues(db: Session, team, sprint, jira_issues: list[dict]):
             ticket.completed_at = _parse_datetime(fields.get("resolutiondate")) or datetime.utcnow()
 
 
-def _upsert_backlog_issues(db: Session, team, jira_issues: list[dict]):
+def _upsert_backlog_issues(db: Session, team, jira_issues: list[dict], member_map: dict | None = None):
     """Upsert backlog tickets (sprint_id = None) into Ticket.
 
     Same field extraction as _upsert_issues but for issues that are NOT in any
@@ -508,14 +537,18 @@ def _upsert_backlog_issues(db: Session, team, jira_issues: list[dict]):
         assignee_id = None
         assignee_data = fields.get("assignee")
         if assignee_data:
-            member = db.execute(
-                select(TeamMember).where(
-                    TeamMember.team_id == team.id,
-                    TeamMember.jira_account_id == assignee_data.get("accountId"),
-                )
-            ).scalar_one_or_none()
-            if member:
-                assignee_id = member.id
+            account_id = assignee_data.get("accountId")
+            if member_map is not None:
+                assignee_id = member_map.get(account_id)
+            else:
+                member = db.execute(
+                    select(TeamMember).where(
+                        TeamMember.team_id == team.id,
+                        TeamMember.jira_account_id == account_id,
+                    )
+                ).scalar_one_or_none()
+                if member:
+                    assignee_id = member.id
 
         status_name = fields.get("status", {}).get("name", "To Do")
         ticket_status_str = _map_jira_status(status_name)

@@ -1195,7 +1195,7 @@ async def generate_sprint_plan(
     logger.info(
         "[sprint-brain] plan ready | assignments=%d warnings=%d",
         len(plan.assignments),
-        len(plan.risk_warnings or []),
+        len(plan.warnings or []),
     )
 
     record_generation_cost(

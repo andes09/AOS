@@ -5,70 +5,9 @@ from src.config import settings
 JIRA_AUTH_URL = "https://auth.atlassian.com/authorize"
 JIRA_TOKEN_URL = "https://auth.atlassian.com/oauth/token"
 JIRA_SCOPES = " ".join([
-    # ---- Platform: search + fields ----
-    "read:jql:jira",
-    "read:field:jira",
-
-    # ---- Platform: issues (read) ----
-    "read:issue:jira",
-    "read:issue-details:jira",
-    "read:issue-meta:jira",
-    "read:issue-link:jira",
-    "read:issue-type:jira",
-    "read:issue-type-scheme:jira",
-    "read:issue-type-screen-scheme:jira",
-    "read:label:jira",
-    "read:status:jira",
-    "read:priority:jira",
-    "read:resolution:jira",
-    "read:issue.changelog:jira",
-    "read:issue.transition:jira",
-
-    # ---- Platform: issues (write) ----
-    "write:issue:jira",
-
-    # ---- Platform: worklog + time tracking ----
-    "read:issue-worklog:jira",
-    "write:issue-worklog:jira",
-    "read:issue.time-tracking:jira",
-    "write:issue.time-tracking:jira",
-
-    # ---- Platform: comments ----
-    "read:comment:jira",
-    "write:comment:jira",
-
-    # ---- Platform: projects ----
-    "read:project:jira",
-    "read:project-category:jira",
-    "read:project.component:jira",
-    "read:project-version:jira",
-
-    # ---- Platform: users ----
-    "read:user:jira",
-    "read:application-role:jira",
-    "read:group:jira",
-    "read:avatar:jira",
-    "read:email-address:jira",
-
-    # ---- Platform: webhooks ----
-    "read:webhook:jira",
-    "write:webhook:jira",
-
-    # ---- Jira Software (Agile): boards ----
-    "read:board-scope:jira-software",
-    "write:board-scope:jira-software",
-
-    # ---- Jira Software (Agile): sprints ----
-    "read:sprint:jira-software",
-    "write:sprint:jira-software",
-
-    # ---- Jira Software (Agile): epics + issues ----
-    "read:epic:jira-software",
-    "write:epic:jira-software",
-    "read:issue:jira-software",
-    "write:issue:jira-software",
-
-    # ---- OAuth: refresh-token rotation ----
+    "read:jira-work",
+    "write:jira-work",
+    "read:jira-user",
     "offline_access",
 ])
 JIRA_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"

@@ -5,6 +5,7 @@ sync_jira_team  — full sync: boards → sprints → issues → users
 sync_jira_sprint — incremental sync for a single sprint
 """
 
+import time
 import uuid
 import logging
 from datetime import datetime, date
@@ -152,7 +153,8 @@ def sync_jira_team(self, team_id: str):
     from src.models.team import Team
     from src.models.jira_connection import JiraConnection
 
-    logger.info("Starting full Jira sync for team %s", team_id)
+    t0 = time.monotonic()
+    logger.info("[sync] team=%s starting full sync", team_id)
     db = _get_sync_session()
     try:
         team = db.get(Team, uuid.UUID(team_id))
@@ -176,10 +178,16 @@ def sync_jira_team(self, team_id: str):
         loop = asyncio.get_event_loop()
 
         # Fetch users + sprint list concurrently
+        logger.info("[sync] team=%s fetching users + sprint list...", team_id)
+        t_fetch = time.monotonic()
         users, sprints = loop.run_until_complete(asyncio.gather(
             client.get_users(),
             client.get_sprints(),
         ))
+        logger.info(
+            "[sync] team=%s found %d sprints, %d users (%.1fs)",
+            team_id, len(sprints), len(users), time.monotonic() - t_fetch,
+        )
         _upsert_team_members(db, team, users)
 
         # Preload member map once — eliminates N×M per-ticket DB lookups
@@ -192,6 +200,12 @@ def sync_jira_team(self, team_id: str):
             "created", "updated", "resolutiondate",
             "customfield_10016", "customfield_10028",
         ]
+
+        logger.info(
+            "[sync] team=%s fetching issues for %d sprints%s in parallel...",
+            team_id, len(sprints), " + backlog" if team.jira_project_key else "",
+        )
+        t_fetch = time.monotonic()
 
         async def _fetch_all_issues():
             coros = [client.get_sprint_issues(str(s["id"])) for s in sprints]
@@ -214,13 +228,36 @@ def sync_jira_team(self, team_id: str):
             all_sprint_issues = results
             backlog_issues = []
 
+        total_sprint_issues = sum(len(r) for r in all_sprint_issues)
+        logger.info(
+            "[sync] team=%s fetch done in %.1fs — %d sprint issues, %d backlog",
+            team_id, time.monotonic() - t_fetch, total_sprint_issues, len(backlog_issues),
+        )
+
+        n_sprints = len(sprints)
         closed_sprint_ids: list[uuid.UUID] = []
-        for jira_sprint, issues in zip(sprints, all_sprint_issues):
+        t_upsert = time.monotonic()
+
+        for i, (jira_sprint, issues) in enumerate(zip(sprints, all_sprint_issues), 1):
+            t_sprint = time.monotonic()
             sprint_obj, just_closed = _upsert_sprint(db, team, jira_sprint)
             if sprint_obj:
                 _upsert_issues(db, team, sprint_obj, issues, member_map)
                 if just_closed:
                     closed_sprint_ids.append(sprint_obj.id)
+
+            elapsed_sprint = time.monotonic() - t_sprint
+            elapsed_upsert = time.monotonic() - t_upsert
+            eta_s = (elapsed_upsert / i) * (n_sprints - i)
+            eta_str = f" | ETA ~{eta_s:.0f}s" if i < n_sprints else ""
+            logger.info(
+                "[sync] [%d/%d] %-35s %3d tickets  %.2fs%s",
+                i, n_sprints,
+                jira_sprint.get("name", f"Sprint {jira_sprint['id']}")[:35],
+                len(issues),
+                elapsed_sprint,
+                eta_str,
+            )
 
         # Sync backlog issues (not in any sprint). SprintBrain's candidate
         # query in _get_candidate_tickets returns Tickets with sprint_id IS
@@ -228,6 +265,7 @@ def sync_jira_team(self, team_id: str):
         # board (one that's never had a completed sprint) yields an empty
         # candidate pool and /api/sprint-brain/plan 422s.
         if backlog_issues:
+            logger.info("[sync] team=%s upserting %d backlog tickets...", team_id, len(backlog_issues))
             _upsert_backlog_issues(db, team, backlog_issues, member_map)
 
         db.commit()
@@ -242,7 +280,7 @@ def sync_jira_team(self, team_id: str):
             .values(last_synced_at=datetime.utcnow())
         )
         db.commit()
-        logger.info("Full Jira sync complete for team %s", team_id)
+        logger.info("[sync] team=%s complete in %.1fs", team_id, time.monotonic() - t0)
 
         # Warm ticket complexity cache in the background so the next plan
         # generation skips the Claude complexity call entirely.

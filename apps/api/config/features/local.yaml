@@ -1,5 +1,5 @@
 features:
-  clerk_auth: false
+  clerk_auth: true
   push_to_jira: true
   scope_check_v2: true
   multi_team_dashboard: false

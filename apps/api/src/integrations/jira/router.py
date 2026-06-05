@@ -264,7 +264,11 @@ async def get_jira_boards(
         try:
             raw = await client.get_boards()
         except Exception as exc:
-            _logging.getLogger(__name__).error("get_boards failed for %s: %s", conn.jira_cloud_url, exc)
+            body = getattr(exc, "response", None)
+            body_text = body.text[:300] if body is not None else ""
+            _logging.getLogger(__name__).error(
+                "get_boards failed for %s: %s %s", conn.jira_cloud_url, exc, body_text
+            )
             return []
         return [
             {

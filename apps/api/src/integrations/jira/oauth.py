@@ -8,6 +8,7 @@ JIRA_SCOPES = " ".join([
     "read:jira-work",
     "write:jira-work",
     "read:jira-user",
+    "read:board-scope:jira-software",
     "offline_access",
 ])
 JIRA_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"

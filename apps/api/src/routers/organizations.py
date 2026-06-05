@@ -73,7 +73,12 @@ async def provision_organization(
         if team is None:
             raise HTTPException(status_code=500, detail="Organisation exists but has no default team.")
         response.status_code = 200
-        return {"orgId": str(org.id), "teamId": str(team.id), "isNew": False}
+        return {
+            "orgId": str(org.id),
+            "teamId": str(team.id),
+            "isNew": False,
+            "onboardingCompleted": org.onboarding_completed_at is not None,
+        }
 
     try:
         org = Organization(
@@ -96,7 +101,12 @@ async def provision_organization(
         await db.commit()
 
         response.status_code = 201
-        return {"orgId": str(org.id), "teamId": str(team.id), "isNew": True}
+        return {
+            "orgId": str(org.id),
+            "teamId": str(team.id),
+            "isNew": True,
+            "onboardingCompleted": False,
+        }
 
     except IntegrityError:
         # Concurrent request already created the org (e.g. React Strict Mode double-fire).
@@ -109,4 +119,9 @@ async def provision_organization(
         if team is None:
             raise HTTPException(status_code=500, detail="Organisation exists but has no default team.")
         response.status_code = 200
-        return {"orgId": str(org.id), "teamId": str(team.id), "isNew": False}
+        return {
+            "orgId": str(org.id),
+            "teamId": str(team.id),
+            "isNew": False,
+            "onboardingCompleted": org.onboarding_completed_at is not None,
+        }

@@ -14,14 +14,14 @@ interface Props {
  */
 export function OrgProvider({ children }: Props) {
   const { organization, isLoaded } = useOrganization()
-  const { provisioned, isNew, error } = useProvisionOrg()
+  const { provisioned, onboardingCompleted, error } = useProvisionOrg()
   const navigate = useNavigate()
 
   useEffect(() => {
-    if (provisioned && isNew) {
+    if (provisioned && !onboardingCompleted) {
       navigate('/onboarding/team-setup', { replace: true })
     }
-  }, [provisioned, isNew])
+  }, [provisioned, onboardingCompleted])
 
   if (!isLoaded) {
     return (

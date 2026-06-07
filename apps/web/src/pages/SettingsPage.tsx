@@ -1,10 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { useQueryClient } from '@tanstack/react-query'
 import { useApi, ApiError } from '../lib/api'
 import { useAppRole } from '../hooks/useAppRole'
-import { useJiraOAuth } from '../hooks/useJiraOAuth'
-import { SelectBoardStep } from './onboarding/SelectBoardStep'
 import { Card, CardHeader, CardBody } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
@@ -25,12 +22,6 @@ const ALERT_TYPE_LABELS: Record<string, string> = {
   retro_action_overdue: 'Retro action overdue',
 }
 const ALL_ALERT_TYPES = ['high_risk_dependency', 'sprint_at_risk', 'retro_action_overdue']
-
-interface JiraStatus {
-  connected: boolean
-  cloud_url?: string
-  last_synced_at?: string | null
-}
 
 interface InviteResponse {
   id: string
@@ -54,12 +45,6 @@ interface InvitationItem {
 export function SettingsPage() {
   const showSlackAlerts = useFeature('slack_alerts')
   const showGlossary = useFeature('skill_based_assignment')
-  const [status, setStatus] = useState<JiraStatus | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [actionError, setActionError] = useState<string | null>(null)
-  const [actionLoading, setActionLoading] = useState(false)
-  const [syncing, setSyncing] = useState(false)
-  const [syncMessage, setSyncMessage] = useState<string | null>(null)
   const [anthropicKey, setAnthropicKey] = useState('')
   const [anthropicConfigured, setAnthropicConfigured] = useState<boolean | null>(null)
   const [anthropicSaving, setAnthropicSaving] = useState(false)
@@ -79,26 +64,9 @@ export function SettingsPage() {
   const [inviteLink, setInviteLink] = useState<string | null>(null)
   const [invitations, setInvitations] = useState<InvitationItem[]>([])
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [pendingConnectionId, setPendingConnectionId] = useState<string | null>(null)
   const { get, del, post, put } = useApi()
   const { appRole } = useAppRole()
   const isLead = appRole === 'lead' || appRole === 'exec' || appRole === 'admin'
-  const queryClient = useQueryClient()
-  const { connect: connectJira, isConnecting: jiraConnecting, error: jiraConnectError } = useJiraOAuth(
-    '/app/settings',
-    (connectionId) => setPendingConnectionId(connectionId)
-  )
-
-  async function fetchStatus() {
-    try {
-      const data = await get<JiraStatus>('/api/integrations/jira/status')
-      setStatus(data)
-    } catch {
-      setStatus({ connected: false })
-    } finally {
-      setLoading(false)
-    }
-  }
 
   async function fetchAnthropicStatus() {
     try {
@@ -166,7 +134,6 @@ export function SettingsPage() {
   }
 
   useEffect(() => {
-    fetchStatus()
     fetchAnthropicStatus()
     fetchSlackConfig()
     fetchInvitations()
@@ -226,55 +193,6 @@ export function SettingsPage() {
     }
   }
 
-  async function handleDisconnect() {
-    setActionLoading(true)
-    setActionError(null)
-    try {
-      await del('/api/integrations/jira/disconnect')
-      await fetchStatus()
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to disconnect')
-    } finally {
-      setActionLoading(false)
-    }
-  }
-
-  async function handleSync() {
-    setSyncing(true)
-    setSyncMessage(null)
-    const prevSyncedAt = status?.last_synced_at ?? null
-    try {
-      const org = await post<{ teamId: string }>('/api/organizations', { name: 'My Org' })
-      await post(`/api/integrations/jira/sync?team_id=${org.teamId}`, {})
-      setSyncMessage('Syncing…')
-
-      // Poll until last_synced_at changes (sync runs in a background thread).
-      let attempts = 0
-      const poll = setInterval(async () => {
-        attempts++
-        try {
-          const s = await get<{ last_synced_at: string | null }>('/api/integrations/jira/sync-status')
-          if (s.last_synced_at && s.last_synced_at !== prevSyncedAt) {
-            clearInterval(poll)
-            setSyncing(false)
-            setSyncMessage(null)
-            fetchStatus()
-          }
-        } catch {
-          // non-fatal — keep polling
-        }
-        if (attempts >= 20) {
-          clearInterval(poll)
-          setSyncing(false)
-          setSyncMessage('Sync is taking longer than expected — check back soon.')
-        }
-      }, 3000)
-    } catch (err) {
-      setSyncing(false)
-      setSyncMessage(err instanceof Error ? err.message : String(err) || 'Sync failed')
-    }
-  }
-
   async function handleSaveAnthropicKey() {
     if (!anthropicKey.trim()) return
     setAnthropicSaving(true)
@@ -299,87 +217,8 @@ export function SettingsPage() {
         Settings
       </h1>
 
-      {/* Jira Connection */}
-      <Card>
-        <CardHeader>
-          <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
-            Jira Connection
-          </span>
-          {!loading && status && (
-            <Badge variant={status.connected ? 'success' : 'default'}>
-              {status.connected ? 'Connected' : 'Not connected'}
-            </Badge>
-          )}
-        </CardHeader>
-        <CardBody>
-          {pendingConnectionId ? (
-            <SelectBoardStep
-              connectionId={pendingConnectionId}
-              onNext={() => {
-                setPendingConnectionId(null)
-                queryClient.invalidateQueries({ queryKey: ['jira-status'] })
-                fetchStatus()
-              }}
-              onBack={() => {
-                setPendingConnectionId(null)
-              }}
-            />
-          ) : loading ? (
-            <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>Loading...</div>
-          ) : status?.connected ? (
-            <div>
-              <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)', marginBottom: 2 }}>
-                {status.cloud_url}
-              </div>
-              <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)', marginBottom: 16 }}>
-                Last synced:{' '}
-                {status.last_synced_at
-                  ? new Date(status.last_synced_at).toLocaleString()
-                  : 'Never'}
-              </div>
-              {syncMessage && (
-                <div style={{
-                  color: syncMessage.includes('failed') ? 'var(--color-danger)' : 'var(--color-success)',
-                  fontSize: 'var(--text-sm)',
-                  marginBottom: 8,
-                }}>
-                  {syncMessage}
-                </div>
-              )}
-              {actionError && (
-                <div style={{ color: 'var(--color-danger)', fontSize: 'var(--text-sm)', marginBottom: 8 }}>
-                  {actionError}
-                </div>
-              )}
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Button variant="secondary" size="sm" onClick={handleSync} disabled={syncing}>
-                  {syncing ? 'Syncing...' : 'Sync Now'}
-                </Button>
-                <Button variant="danger" size="sm" onClick={handleDisconnect} disabled={actionLoading}>
-                  {actionLoading ? 'Disconnecting...' : 'Disconnect'}
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div>
-              <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: '0 0 16px' }}>
-                Connect your Atlassian account to enable sprint syncing.
-              </p>
-              {jiraConnectError && (
-                <div style={{ color: 'var(--color-danger)', fontSize: 'var(--text-sm)', marginBottom: 8 }}>
-                  {jiraConnectError}
-                </div>
-              )}
-              <Button variant="primary" size="sm" onClick={connectJira} disabled={jiraConnecting}>
-                {jiraConnecting ? 'Redirecting...' : 'Connect Jira'}
-              </Button>
-            </div>
-          )}
-        </CardBody>
-      </Card>
-
       {/* Anthropic API Key */}
-      <Card style={sectionGap}>
+      <Card>
         <CardHeader>
           <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
             Anthropic API Key

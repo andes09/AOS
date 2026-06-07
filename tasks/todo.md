@@ -47,6 +47,16 @@ All code is written and committed. Nothing to build yet — just configuration t
 
 Nothing active — both major initiatives are shipped. Next work items are billing (configure + launch) and whatever comes after.
 
+### Post-beta — Multi-board / switch-board support
+
+Removed from beta Settings on 2026-06-07 in favour of "one board, set during onboarding." Bring back for main release.
+
+- [ ] Decide model: one team = one board (with a "switch" replace flow) vs. one team = many boards (with per-board scoping in queries)
+- [ ] Settings: add board chip + "Switch board" action (re-opens the board picker, then triggers a full re-import or board-scoped swap depending on the model above)
+- [ ] If multi-board: add board selector to DashboardLayout header next to the sync control; scope every Jira-backed query by `board_id`
+- [ ] Migration impact: `sprints`, `tickets`, `team_members` may need `board_id` if going multi-board
+- [ ] Handle orphaned data when a board is removed (archive vs. cascade-delete — probably archive for retro/velocity continuity)
+
 ---
 
 ## 🚀 Initiative C — Sprint Gen Speed

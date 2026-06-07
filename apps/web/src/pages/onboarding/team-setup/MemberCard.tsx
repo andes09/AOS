@@ -43,13 +43,6 @@ export function MemberCard({ member, onRemove, index, readOnly }: MemberCardProp
           }}>
             {member.name}
           </span>
-          <span style={{
-            fontSize: 'var(--text-xs)',
-            color: 'var(--color-text-muted)',
-            fontFamily: 'var(--font-sans)',
-          }}>
-            {member.seniority}
-          </span>
         </div>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4, alignItems: 'center' }}>

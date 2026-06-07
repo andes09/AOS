@@ -6,6 +6,7 @@ import { RoleSwitcher } from '../components/RoleSwitcher'
 import { TeamProvider } from '../contexts/TeamContext'
 import { TeamSwitcher } from '../components/TeamSwitcher'
 import { ThemeToggle } from '../components/ui/ThemeToggle'
+import { JiraSyncControl } from '../components/JiraSyncControl'
 import { useFeature } from '../featureFlags'
 
 function navItemStyle(isActive: boolean): CSSProperties {
@@ -155,8 +156,9 @@ export function DashboardLayout() {
             alignItems: 'center',
             justifyContent: 'flex-end',
             padding: '0 16px',
-            gap: 8,
+            gap: 12,
           }}>
+            <JiraSyncControl />
             <ThemeToggle />
           </header>
           <main style={{ flex: 1, padding: 24, overflowY: 'auto', background: 'var(--color-bg-primary)' }}>

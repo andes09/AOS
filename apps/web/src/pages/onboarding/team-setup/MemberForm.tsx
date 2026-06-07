@@ -1,13 +1,12 @@
 import { useState } from 'react'
 import { MemberDraft, BLANK_MEMBER } from './types'
-import { ROLES, STRENGTHS, SENIORITY, MEETING_HOURS } from './data'
+import { ROLES, STRENGTHS, MEETING_HOURS } from './data'
 import { MultiSelect } from './MultiSelect'
 
 interface MemberFormProps {
   onSave: (m: MemberDraft) => void
   onCancel: () => void
   showCancel: boolean
-  techStack: string[]
 }
 
 const ENGINEERING_ROLES = ROLES.filter(r => r.group === 'Engineering')
@@ -60,16 +59,12 @@ function RoleButton({ label, selected, onClick }: { label: string; selected: boo
   )
 }
 
-export function MemberForm({ onSave, onCancel, showCancel, techStack }: MemberFormProps) {
-  const [draft, setDraft] = useState<MemberDraft>({ ...BLANK_MEMBER, skillRatings: {} })
+export function MemberForm({ onSave, onCancel, showCancel }: MemberFormProps) {
+  const [draft, setDraft] = useState<MemberDraft>({ ...BLANK_MEMBER })
   const [showCustomRoleInput, setShowCustomRoleInput] = useState(false)
 
   function set<K extends keyof MemberDraft>(key: K, value: MemberDraft[K]) {
     setDraft(d => ({ ...d, [key]: value }))
-  }
-
-  function setSkillRating(skill: string, value: number) {
-    setDraft(d => ({ ...d, skillRatings: { ...d.skillRatings, [skill]: value } }))
   }
 
   function handleRoleClick(id: string) {
@@ -244,52 +239,23 @@ export function MemberForm({ onSave, onCancel, showCancel, techStack }: MemberFo
         allowCustom
       />
 
-      {/* Seniority + Capacity */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <div>
-          <label style={labelStyle}>Seniority</label>
-          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-            {SENIORITY.map(s => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => set('seniority', s)}
-                style={{
-                  padding: '4px 10px',
-                  fontSize: 'var(--text-xs)',
-                  fontFamily: 'var(--font-sans)',
-                  fontWeight: draft.seniority === s ? 600 : 400,
-                  border: `1.5px solid ${draft.seniority === s ? 'var(--color-accent)' : 'var(--color-border)'}`,
-                  borderRadius: 'var(--radius-sm)',
-                  background: draft.seniority === s ? 'rgba(12,102,228,0.08)' : 'transparent',
-                  color: draft.seniority === s ? 'var(--color-accent)' : 'var(--color-text-secondary)',
-                  cursor: 'pointer',
-                  transition: 'all 0.12s',
-                }}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <label style={labelStyle}>Capacity</label>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <input
-              style={{ ...inputStyle, width: 80 }}
-              type="number"
-              min={1}
-              max={80}
-              value={draft.capacity}
-              onChange={e => set('capacity', Number(e.target.value))}
-            />
-            <span style={{
-              fontSize: 'var(--text-sm)',
-              color: 'var(--color-text-muted)',
-              fontFamily: 'var(--font-sans)',
-            }}>h/wk</span>
-          </div>
+      {/* Capacity */}
+      <div>
+        <label style={labelStyle}>Capacity</label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            style={{ ...inputStyle, width: 80 }}
+            type="number"
+            min={1}
+            max={80}
+            value={draft.capacity}
+            onChange={e => set('capacity', Number(e.target.value))}
+          />
+          <span style={{
+            fontSize: 'var(--text-sm)',
+            color: 'var(--color-text-muted)',
+            fontFamily: 'var(--font-sans)',
+          }}>h/wk</span>
         </div>
       </div>
 
@@ -329,65 +295,6 @@ export function MemberForm({ onSave, onCancel, showCancel, techStack }: MemberFo
             </button>
           ))}
         </div>
-      </div>
-
-      {/* Skill ratings (optional) */}
-      <div>
-        <label style={labelStyle}>
-          Skill ratings <span style={{ fontWeight: 400, color: 'var(--color-text-muted)' }}>— optional</span>
-        </label>
-        {techStack.length === 0 ? (
-          <div style={{
-            fontSize: 'var(--text-xs)',
-            color: 'var(--color-text-muted)',
-            fontFamily: 'var(--font-sans)',
-            fontStyle: 'italic',
-            padding: '8px 0',
-          }}>
-            Pick your tech stack above to rate this developer&rsquo;s skills.
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {techStack.map(skill => {
-              const hasValue = Object.prototype.hasOwnProperty.call(draft.skillRatings, skill)
-              const value = hasValue ? draft.skillRatings[skill] : 0.5
-              return (
-                <div key={skill} style={{
-                  display: 'grid',
-                  gridTemplateColumns: '110px 1fr 36px',
-                  alignItems: 'center',
-                  gap: 10,
-                }}>
-                  <span style={{
-                    fontSize: 'var(--text-sm)',
-                    fontFamily: 'var(--font-sans)',
-                    color: 'var(--color-text-secondary)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}>{skill}</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.1}
-                    value={value}
-                    onChange={e => setSkillRating(skill, Number(e.target.value))}
-                    style={{ width: '100%', accentColor: 'var(--color-accent)' }}
-                  />
-                  <span style={{
-                    fontSize: 'var(--text-xs)',
-                    fontFamily: 'var(--font-sans)',
-                    color: hasValue ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
-                    fontWeight: 600,
-                    textAlign: 'right',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}>{value.toFixed(1)}</span>
-                </div>
-              )
-            })}
-          </div>
-        )}
       </div>
 
       {/* Actions */}

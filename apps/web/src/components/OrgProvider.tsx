@@ -19,6 +19,8 @@ export function OrgProvider({ children }: Props) {
 
   useEffect(() => {
     if (provisioned && !onboardingCompleted) {
+      localStorage.removeItem('aos_team_setup_step')
+      localStorage.removeItem('aos_onboarding_step')
       navigate('/onboarding/team-setup', { replace: true })
     }
   }, [provisioned, onboardingCompleted])
@@ -88,6 +90,10 @@ export function OrgProvider({ children }: Props) {
         Failed to initialize workspace. Please refresh.
       </div>
     )
+  }
+
+  if (provisioned && !onboardingCompleted) {
+    return null
   }
 
   return <>{children}</>

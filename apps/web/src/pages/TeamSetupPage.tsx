@@ -20,33 +20,6 @@ const defaultTeam: TeamDraft = {
   techStack: [],
 }
 
-function DoneStep({ onRestart }: { onRestart: () => void }) {
-  return (
-    <div className="anim" style={{ textAlign: 'center', padding: '32px 0' }}>
-      <div className="check-pop" style={{
-        width: 56, height: 56, borderRadius: '50%', background: '#e8f5ee',
-        border: '1px solid #1f7a4d', display: 'flex', alignItems: 'center',
-        justifyContent: 'center', margin: '0 auto 24px', fontSize: 24, color: '#1f7a4d',
-      }}>✓</div>
-      <h2 style={{ fontSize: 22, fontWeight: 700, color: '#1a1d23', marginBottom: 8 }}>You're all set!</h2>
-      <p style={{ fontSize: 14, color: '#5b6470', lineHeight: 1.6, marginBottom: 32 }}>
-        Omada is syncing your recent sprints to build velocity baselines for the team.
-      </p>
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'center',
-        background: '#f7f8fa', border: '1px solid #e3e6eb', borderRadius: 8,
-        padding: '12px 20px', fontSize: 13, color: '#5b6470', marginBottom: 32,
-      }}>
-        <div style={{ width: 16, height: 16, border: '2px solid #1a1d23', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-        Importing sprint history…
-      </div>
-      <button
-        onClick={onRestart}
-        style={{ background: 'none', border: 'none', color: '#8a93a0', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}
-      >← Restart demo</button>
-    </div>
-  )
-}
 
 export function TeamSetupPage() {
   const navigate = useNavigate()
@@ -121,20 +94,13 @@ export function TeamSetupPage() {
           meetingHoursBucket: m.meetings,
         })),
       })
+      await post('/api/onboarding/complete', {})
       localStorage.removeItem(STORAGE_KEY)
-      setStep(99)
+      navigate('/app/sprint-planner', { replace: true })
     } catch (err) {
       console.error('Team setup failed:', err)
       setSaving(false)
     }
-  }
-
-  function restart() {
-    setStep(-1)
-    setTeam(defaultTeam)
-    setMembers([])
-    localStorage.removeItem(STORAGE_KEY)
-    navigate('/onboarding')
   }
 
   const board = boardById(team.boardId || 'plat')
@@ -217,28 +183,6 @@ export function TeamSetupPage() {
     )
   }
 
-  // Done screen — centered, no sidebar
-  if (step === 99) {
-    return (
-      <>
-        <style>{`
-          @keyframes spin { to { transform: rotate(360deg); } }
-          @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-          @keyframes checkPop { 0% { transform: scale(0.5); opacity: 0; } 60% { transform: scale(1.15); } 100% { transform: scale(1); opacity: 1; } }
-          .anim { animation: fadeUp 0.22s ease both; }
-          .check-pop { animation: checkPop 0.3s ease both; }
-        `}</style>
-        <div style={{ minHeight: '100vh', background: '#f7f8fa', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-          <div style={{
-            background: '#ffffff', borderRadius: 16, border: '1px solid #e3e6eb',
-            boxShadow: '0 1px 4px rgba(0,0,0,0.06)', width: '100%', maxWidth: 480, padding: '0 40px',
-          }} className="anim">
-            <DoneStep onRestart={restart} />
-          </div>
-        </div>
-      </>
-    )
-  }
 
   return (
     <>

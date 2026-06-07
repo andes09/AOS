@@ -1,206 +1,127 @@
-import { TeamDraft, MemberDraft } from './types'
-import { MemberCard } from './MemberCard'
+import { MemberDraft, TeamDraft } from './types'
+import { JiraBoard, roleHue, roleLabelOf } from './data'
 
 interface ReviewStepProps {
   team: TeamDraft
+  board: JiraBoard
   members: MemberDraft[]
   onBack: () => void
   onDone: () => void
   saving: boolean
 }
 
-function StatItem({ label, value }: { label: string; value: string }) {
+function ReviewMemberRow({ member }: { member: MemberDraft }) {
+  const hue = roleHue(member.role, member.customRole, member.name)
+  const role = roleLabelOf(member.role, member.customRole)
+  const initials = (member.name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <span style={{
-        fontSize: 10,
-        fontWeight: 600,
-        color: 'var(--color-text-muted)',
-        fontFamily: 'var(--font-sans)',
-        textTransform: 'uppercase',
-        letterSpacing: '0.06em',
-      }}>{label}</span>
-      <span style={{
-        fontSize: 'var(--text-sm)',
-        fontWeight: 600,
-        color: 'var(--color-text-primary)',
-        fontFamily: 'var(--font-sans)',
-      }}>{value}</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 13px', background: '#fff', border: '1px solid #e3e6eb', borderRadius: 9 }}>
+      <div style={{
+        width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
+        background: `oklch(0.95 0.03 ${hue})`, border: `1px solid oklch(0.86 0.05 ${hue})`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 12, fontWeight: 700, color: `oklch(0.42 0.1 ${hue})`,
+      }}>{initials}</div>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: '#1a1d23', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {member.name}
+        </div>
+        <div style={{ fontSize: 12, color: '#8a93a0' }}>
+          {member.handle && <span style={{ fontFamily: 'monospace' }}>@{member.handle}</span>}
+          {role && <span> · <span style={{ color: `oklch(0.5 0.12 ${hue})`, fontWeight: 600 }}>{role}</span></span>}
+          {member.strengths?.length ? ` · ${member.strengths.length} strength${member.strengths.length > 1 ? 's' : ''}` : ''}
+        </div>
+      </div>
+      <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1d23', flexShrink: 0 }}>
+        {member.capacity}<span style={{ fontSize: 11, fontWeight: 500, color: '#8a93a0' }}> h/wk</span>
+      </div>
     </div>
   )
 }
 
-export function ReviewStep({ team, members, onBack, onDone, saving }: ReviewStepProps) {
-  const totalCapacity = members.reduce((sum, m) => sum + m.capacity, 0)
+export function ReviewStep({ team, board, members, onBack, onDone, saving }: ReviewStepProps) {
+  const included = members.filter(m => m.included !== false)
+  const totalCap = included.reduce((s, m) => s + (Number(m.capacity) || 0), 0)
+
+  const stats = [
+    { label: 'Team',     value: team.name || '—' },
+    { label: 'Source',   value: board.name },
+    { label: 'Method',   value: board.methodology },
+    { label: 'Cadence',  value: board.cadence },
+    { label: 'People',   value: `${included.length}` },
+    { label: 'Capacity', value: `${totalCap}h / wk` },
+  ]
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
       <div>
-        <h2 style={{
-          fontSize: 'var(--text-xl)',
-          fontWeight: 700,
-          color: 'var(--color-text-primary)',
-          fontFamily: 'var(--font-sans)',
-          margin: '0 0 4px',
-          letterSpacing: '-0.01em',
-        }}>
-          Review your team
+        <h2 style={{ fontSize: 21, fontWeight: 700, color: '#1a1d23', letterSpacing: '-0.3px', marginBottom: 4 }}>
+          Review &amp; start tracking
         </h2>
-        <p style={{
-          fontSize: 'var(--text-sm)',
-          color: 'var(--color-text-muted)',
-          fontFamily: 'var(--font-sans)',
-          margin: 0,
-        }}>
-          Confirm everything looks right before connecting Jira.
+        <p style={{ fontSize: 14, color: '#5b6470', margin: 0 }}>
+          This is what Omada will track. We'll sync sprint history from <strong style={{ color: '#1a1d23' }}>{board.name}</strong> next.
         </p>
       </div>
 
       {/* Stats bar */}
       <div style={{
-        background: '#f0f2f5',
-        border: '1px solid var(--color-border)',
-        borderRadius: 'var(--radius-lg)',
-        padding: '16px 20px',
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: '16px 28px',
+        background: '#f7f8fa', border: '1px solid #e3e6eb', borderRadius: 8,
+        padding: '16px 20px', display: 'flex', gap: 22, flexWrap: 'wrap',
       }}>
-        <StatItem label="Team" value={team.name} />
-        <StatItem label="Size" value={team.size} />
-        <StatItem label="Cadence" value={team.cadence} />
-        <StatItem label="Method" value={team.methodology} />
-        <StatItem label="Total capacity" value={`${totalCapacity} h/wk`} />
-      </div>
-
-      {/* Tech stack chips */}
-      {team.techStack.length > 0 && (
-        <div>
-          <div style={{
-            fontSize: 'var(--text-xs)',
-            fontWeight: 600,
-            color: 'var(--color-text-muted)',
-            fontFamily: 'var(--font-sans)',
-            textTransform: 'uppercase',
-            letterSpacing: '0.06em',
-            marginBottom: 8,
-          }}>Tech stack</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {team.techStack.map(t => (
-              <span key={t} style={{
-                fontSize: 'var(--text-xs)',
-                color: 'var(--color-text-secondary)',
-                background: '#ffffff',
-                border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-sm)',
-                padding: '3px 8px',
-                fontFamily: 'var(--font-sans)',
-              }}>
-                {t}
-              </span>
-            ))}
+        {stats.map(s => (
+          <div key={s.label}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: '#8a93a0', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>{s.label}</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#1a1d23' }}>{s.value}</div>
           </div>
-        </div>
-      )}
+        ))}
+      </div>
 
       {/* Members */}
       <div>
-        <div style={{
-          fontSize: 'var(--text-xs)',
-          fontWeight: 600,
-          color: 'var(--color-text-muted)',
-          fontFamily: 'var(--font-sans)',
-          textTransform: 'uppercase',
-          letterSpacing: '0.06em',
-          marginBottom: 10,
-        }}>
-          Members ({members.length})
+        <div style={{ fontSize: 11, fontWeight: 600, color: '#8a93a0', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 10 }}>
+          {included.length} Member{included.length !== 1 ? 's' : ''}
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {members.map((m, i) => (
-            <MemberCard key={i} member={m} index={i} readOnly />
-          ))}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+          {included.map((m, i) => <ReviewMemberRow key={i} member={m} />)}
         </div>
       </div>
 
       {/* Privacy note */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 8,
-        background: '#f0f2f5',
-        border: '1px solid var(--color-border)',
-        borderRadius: 'var(--radius-md)',
-        padding: '10px 12px',
-      }}>
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ marginTop: 1, flexShrink: 0 }}>
-          <rect x="2" y="6" width="10" height="7" rx="1.5" stroke="var(--color-text-muted)" strokeWidth="1.2" />
-          <path d="M4.5 6V4a2.5 2.5 0 0 1 5 0v2" stroke="var(--color-text-muted)" strokeWidth="1.2" strokeLinecap="round" />
-        </svg>
-        <span style={{
-          fontSize: 'var(--text-xs)',
-          color: 'var(--color-text-secondary)',
-          fontFamily: 'var(--font-sans)',
-          lineHeight: 1.5,
-        }}>
-          Privacy by default. Individual velocity data is visible only to each developer.
-        </span>
+      <div style={{ background: '#f7f8fa', border: '1px solid #e3e6eb', borderRadius: 8, padding: '12px 16px', fontSize: 12, color: '#5b6470', lineHeight: 1.6 }}>
+        <strong style={{ color: '#1a1d23' }}>Privacy by default.</strong> Individual velocity data is visible only to each developer. Team leads see aggregate trends only — never used for performance reviews.
       </div>
 
       {/* Footer nav */}
-      <div style={{ display: 'flex', gap: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 4 }}>
         <button
-          type="button"
           onClick={onBack}
           disabled={saving}
           style={{
-            padding: '8px 14px',
-            fontSize: 'var(--text-sm)',
-            fontFamily: 'var(--font-sans)',
-            fontWeight: 500,
-            border: '1px solid var(--color-border)',
-            borderRadius: 'var(--radius-md)',
-            background: 'transparent',
-            color: 'var(--color-text-secondary)',
-            cursor: saving ? 'not-allowed' : 'pointer',
-            opacity: saving ? 0.6 : 1,
+            background: 'transparent', border: 'none', color: '#5b6470',
+            fontSize: 13, fontWeight: 500, cursor: saving ? 'not-allowed' : 'pointer',
+            padding: '7px 0', opacity: saving ? 0.6 : 1,
           }}
-        >
-          ← Back
-        </button>
+        >← Back</button>
         <button
-          type="button"
           onClick={onDone}
           disabled={saving}
           style={{
-            padding: '8px 20px',
-            fontSize: 'var(--text-sm)',
-            fontFamily: 'var(--font-sans)',
-            fontWeight: 600,
-            border: 'none',
-            borderRadius: 'var(--radius-md)',
-            background: 'var(--color-accent)',
-            color: '#ffffff',
-            cursor: saving ? 'not-allowed' : 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 8,
-            opacity: saving ? 0.8 : 1,
-            transition: 'opacity 0.12s',
+            padding: '11px 26px', fontSize: 15, fontWeight: 600,
+            border: 'none', borderRadius: 8,
+            background: '#1a1d23', color: '#fff',
+            cursor: saving ? 'wait' : 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: 8,
+            opacity: saving ? 0.8 : 1, transition: 'opacity .12s',
           }}
         >
           {saving && (
-            <div style={{
-              width: 14,
-              height: 14,
-              border: '2px solid rgba(255,255,255,0.3)',
-              borderTopColor: '#ffffff',
-              borderRadius: '50%',
-              animation: 'spin 0.7s linear infinite',
-              flexShrink: 0,
+            <span style={{
+              width: 14, height: 14, border: '2px solid rgba(255,255,255,0.4)',
+              borderTopColor: '#fff', borderRadius: '50%',
+              animation: 'spin 0.7s linear infinite', display: 'inline-block',
             }} />
           )}
-          {saving ? 'Saving…' : 'Save & Connect Jira →'}
+          {saving ? 'Saving…' : 'Sync sprint history →'}
         </button>
       </div>
     </div>

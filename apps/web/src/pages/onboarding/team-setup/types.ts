@@ -7,19 +7,26 @@ export interface MemberDraft {
   seniority: string
   capacity: number
   meetings: string
-  skillRatings: Record<string, number>  // wire-shape: skill_ratings
+  // Jira-import fields
+  handle?: string
+  issues?: number
+  included?: boolean
+  bot?: boolean
+  source?: 'jira' | 'manual'
 }
 
 export interface TeamDraft {
   name: string
-  size: string
+  boardId: string
+  boardName: string
   cadence: string
   methodology: string
+  // kept for backward compat with API
+  size: string
   techStack: string[]
 }
 
 export const BLANK_MEMBER: MemberDraft = {
   name: '', email: '', role: '', customRole: '',
-  strengths: [], seniority: 'Mid', capacity: 32, meetings: '3to6',
-  skillRatings: {},
+  strengths: [], seniority: 'Mid', capacity: 40, meetings: '3to6',
 }

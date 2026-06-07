@@ -2,174 +2,115 @@ interface WelcomeStepProps {
   onStart: () => void
 }
 
+function OmadaMark({ size = 52 }: { size?: number }) {
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: size * 0.26,
+      background: '#1a1d23', flexShrink: 0,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: size * 0.5, fontWeight: 800, color: '#fff', letterSpacing: '-1px',
+    }}>O</div>
+  )
+}
+
+function JiraMark({ size = 52 }: { size?: number }) {
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: size * 0.26,
+      background: 'linear-gradient(160deg, #2684FF, #0052CC)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      flexShrink: 0, boxShadow: '0 2px 6px rgba(0,82,204,0.3)',
+    }}>
+      <svg width={size * 0.56} height={size * 0.56} viewBox="0 0 24 24" fill="none">
+        <path d="M11.5 2 L20 10.5 a2 2 0 0 1 0 3 L11.5 22 L7 17.5 a2 2 0 0 1 0-3 L11.5 10 L8.5 7 a2 2 0 0 1 0-3 Z" fill="#fff" opacity="0.95" />
+      </svg>
+    </div>
+  )
+}
+
 export function WelcomeStep({ onStart }: WelcomeStepProps) {
   return (
     <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      textAlign: 'center',
-      padding: '48px 32px 40px',
-      gap: 0,
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      textAlign: 'center', padding: '40px 32px 36px', gap: 0,
     }}>
-      {/* Logo */}
-      <div style={{
-        width: 56,
-        height: 56,
-        borderRadius: 14,
-        background: '#1a1d23',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginBottom: 20,
-        flexShrink: 0,
-      }}>
-        <span style={{
-          color: '#ffffff',
-          fontFamily: 'var(--font-sans)',
-          fontWeight: 800,
-          fontSize: 24,
-          letterSpacing: '-0.02em',
-        }}>O</span>
+      {/* Omada ··· Jira */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, marginBottom: 28 }}>
+        <OmadaMark size={52} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          {[0, 1, 2].map(i => (
+            <span key={i} style={{ width: 5, height: 5, borderRadius: '50%', background: '#c9cfd8', display: 'block' }} />
+          ))}
+        </div>
+        <JiraMark size={52} />
       </div>
 
       {/* Account created badge */}
       <span style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 5,
-        background: '#e8f5ee',
-        color: 'var(--color-success)',
-        border: '1px solid #b7dfcb',
-        borderRadius: 20,
-        padding: '3px 10px',
-        fontSize: 'var(--text-xs)',
-        fontFamily: 'var(--font-sans)',
-        fontWeight: 600,
-        marginBottom: 20,
+        display: 'inline-flex', alignItems: 'center', gap: 5,
+        background: '#e8f5ee', color: '#1f7a4d',
+        border: '1px solid #1f7a4d', borderRadius: 20,
+        padding: '3px 10px', fontSize: 11, fontWeight: 600, marginBottom: 16,
       }}>
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-          <path d="M2 6L5 9L10 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        <svg width="10" height="10" viewBox="0 0 8 8" fill="none">
+          <path d="M1 4 L3 6 L7 1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         Account created
       </span>
 
-      {/* H1 */}
       <h1 style={{
-        fontSize: 28,
-        fontWeight: 800,
-        color: 'var(--color-text-primary)',
-        fontFamily: 'var(--font-sans)',
-        margin: '0 0 12px',
-        letterSpacing: '-0.02em',
-        lineHeight: 1.2,
+        fontSize: 28, fontWeight: 700, color: '#1a1d23',
+        margin: '0 0 12px', letterSpacing: '-0.5px', lineHeight: 1.2,
       }}>
-        Let&rsquo;s set up your team
+        Import your team from Jira
       </h1>
 
-      {/* Subtitle */}
       <p style={{
-        fontSize: 'var(--text-base)',
-        color: 'var(--color-text-secondary)',
-        fontFamily: 'var(--font-sans)',
-        margin: '0 0 32px',
-        lineHeight: 1.6,
-        maxWidth: 400,
+        fontSize: 15, color: '#5b6470', lineHeight: 1.65,
+        maxWidth: 420, margin: '0 0 36px',
       }}>
-        Before connecting Jira, tell us about your team. This powers Sprint Brain&rsquo;s assignment and capacity recommendations.
+        Connect the board your team already works in — Omada pulls in your roster, sprint cadence, and setup automatically. No forms to fill in.
       </p>
 
-      {/* Step preview */}
+      {/* 3-step preview */}
       <div style={{
-        display: 'grid',
-        gridTemplateColumns: '1fr auto 1fr auto 1fr',
-        gap: 0,
-        width: '100%',
-        maxWidth: 480,
-        marginBottom: 36,
+        display: 'flex', justifyContent: 'center',
+        maxWidth: 460, width: '100%', marginBottom: 40,
       }}>
         {[
-          { num: '01', label: 'Team profile', desc: 'Name, size & workflow' },
-          null,
-          { num: '02', label: 'Member profiles', desc: 'Roles & strengths' },
-          null,
-          { num: '03', label: 'Connect Jira', desc: 'Board & history' },
-        ].map((item, i) => {
-          if (item === null) {
-            return (
-              <div key={i} style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}>
-                <div style={{ width: 1, height: 40, background: 'var(--color-border)' }} />
-              </div>
-            )
-          }
-          return (
-            <div key={i} style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 4,
-              padding: '0 8px',
-            }}>
-              <span style={{
-                fontSize: 11,
-                fontWeight: 700,
-                color: 'var(--color-accent)',
-                fontFamily: 'var(--font-sans)',
-                letterSpacing: '0.04em',
-              }}>{item.num}</span>
-              <span style={{
-                fontSize: 'var(--text-sm)',
-                fontWeight: 600,
-                color: 'var(--color-text-primary)',
-                fontFamily: 'var(--font-sans)',
-              }}>{item.label}</span>
-              <span style={{
-                fontSize: 'var(--text-xs)',
-                color: 'var(--color-text-muted)',
-                fontFamily: 'var(--font-sans)',
-              }}>{item.desc}</span>
-            </div>
-          )
-        })}
+          { step: '01', title: 'Connect Jira', desc: 'Secure, read-only' },
+          { step: '02', title: 'Confirm team', desc: 'Auto-imported roster' },
+          { step: '03', title: 'Start tracking', desc: 'Cadence & capacity' },
+        ].map((item, i) => (
+          <div key={i} style={{
+            flex: 1, textAlign: 'center', padding: '0 12px',
+            borderRight: i < 2 ? '1px solid #e3e6eb' : 'none',
+          }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#1a1d23', letterSpacing: '0.1em', marginBottom: 4 }}>{item.step}</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1d23', marginBottom: 2 }}>{item.title}</div>
+            <div style={{ fontSize: 12, color: '#8a93a0' }}>{item.desc}</div>
+          </div>
+        ))}
       </div>
 
-      {/* CTA */}
       <button
         type="button"
         onClick={onStart}
         style={{
-          padding: '12px 28px',
-          fontSize: 'var(--text-base)',
-          fontFamily: 'var(--font-sans)',
-          fontWeight: 600,
-          border: 'none',
-          borderRadius: 'var(--radius-md)',
-          background: 'var(--color-accent)',
-          color: '#ffffff',
-          cursor: 'pointer',
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 6,
-          marginBottom: 14,
-          transition: 'opacity 0.12s',
+          padding: '12px 28px', fontSize: 15, fontWeight: 600,
+          border: 'none', borderRadius: 8,
+          background: '#1a1d23', color: '#fff', cursor: 'pointer',
+          display: 'inline-flex', alignItems: 'center', gap: 8,
+          marginBottom: 14, transition: 'opacity 0.12s',
         }}
-        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '0.9' }}
+        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '0.85' }}
         onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '1' }}
       >
-        Set up your team
-        <span style={{ fontSize: 16 }}>→</span>
+        Connect Jira →
       </button>
 
-      <span style={{
-        fontSize: 'var(--text-xs)',
-        color: 'var(--color-text-muted)',
-        fontFamily: 'var(--font-sans)',
-      }}>
-        Takes about 3 minutes
+      <span style={{ fontSize: 12, color: '#8a93a0' }}>
+        Takes about a minute · Read-only access
       </span>
     </div>
   )

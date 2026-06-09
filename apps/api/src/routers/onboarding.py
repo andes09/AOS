@@ -5,6 +5,7 @@ Endpoints
 ---------
 GET  /api/onboarding/status
 POST /api/onboarding/complete
+POST /api/onboarding/confirm-team
 POST /api/onboarding/import-history
 GET  /api/onboarding/import-status
 
@@ -83,6 +84,29 @@ class ImportStatusResponse(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
     status: str
     imported_sprints: int | None
+
+
+class ConfirmTeamMember(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    name: str
+    jira_account_id: str | None = None
+    capacity: int | None = None
+    role: str | None = None
+    seniority: str | None = None
+    strengths: list[str] | None = None
+    meetings: str | None = None
+    email: str | None = None
+
+
+class ConfirmTeamRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    members: list[ConfirmTeamMember]
+
+
+class ConfirmTeamResponse(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    upserted: int
+    completed_at: str
 
 
 class InviteRequest(BaseModel):
@@ -287,6 +311,64 @@ async def import_status_endpoint(
         status=team.jira_import_status,
         imported_sprints=team.jira_import_sprints_imported,
     )
+
+
+@onboarding_router.post("/confirm-team", response_model=ConfirmTeamResponse)
+async def confirm_team(
+    body: ConfirmTeamRequest,
+    background_tasks: BackgroundTasks,
+    _user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upsert Developer records from the confirmed team member list.
+
+    Called from the ReviewStep when the user clicks "Sync sprint history →".
+    Creates or updates one Developer row per included member, then marks
+    onboarding complete. The sprint-history import runs as a background task
+    so the navigation to /app/sprint-planner is instant.
+    """
+    from src.models.developer import Developer
+
+    org, team = await _resolve_org_and_team(clerk_org_id, db)
+
+    existing_devs = (await db.scalars(
+        select(Developer).where(Developer.team_id == team.id)
+    )).all()
+    by_name = {d.name: d for d in existing_devs}
+
+    upserted = 0
+    for m in body.members:
+        dev = by_name.get(m.name)
+        if dev is None:
+            dev = Developer(
+                id=uuid.uuid4(),
+                team_id=team.id,
+                name=m.name,
+            )
+            db.add(dev)
+        if m.email is not None:
+            dev.email = m.email
+        if m.role is not None:
+            dev.role = m.role
+        if m.seniority is not None:
+            dev.seniority = m.seniority
+        if m.capacity is not None:
+            dev.capacity_hours_per_week = m.capacity
+        if m.strengths is not None:
+            dev.domain_strengths = ",".join(m.strengths)
+        if m.meetings is not None:
+            dev.meeting_hours_bucket = m.meetings
+        upserted += 1
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    org.onboarding_completed_at = now
+    await db.commit()
+
+    if team.jira_board_id:
+        background_tasks.add_task(_run_identifier_scan_bg, team.id, org.id)
+
+    return ConfirmTeamResponse(upserted=upserted, completed_at=now.isoformat())
 
 
 # ---------------------------------------------------------------------------

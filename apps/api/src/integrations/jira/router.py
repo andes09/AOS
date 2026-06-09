@@ -258,23 +258,54 @@ async def get_jira_boards(
                     conn.encrypted_refresh_token = encrypt(tokens["refresh_token"])
                 if "expires_in" in tokens:
                     conn.token_expires_at = datetime.utcnow() + timedelta(seconds=tokens["expires_in"])
-            except Exception:
-                return []
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Failed to refresh Jira token: {exc}",
+                )
         client = JiraClient(cloud_id=conn.jira_cloud_id, access_token=access_token)
         try:
             raw = await client.get_boards()
         except Exception as exc:
             body = getattr(exc, "response", None)
-            body_text = body.text[:300] if body is not None else ""
+            body_text = ""
+            if body is not None:
+                try:
+                    body_text = body.text[:300]
+                except Exception:
+                    pass
             _logging.getLogger(__name__).error(
                 "get_boards failed for %s: %s %s", conn.jira_cloud_url, exc, body_text
             )
-            return []
+            raise HTTPException(
+                status_code=502,
+                detail=f"Jira boards API failed: {body_text or str(exc)}",
+            )
+
+        if not raw:
+            # Agile API returned zero boards — fall back to project list.
+            # This covers Jira Core instances that don't have Jira Software.
+            try:
+                projects = await client.get_projects()
+            except Exception:
+                projects = []
+            return [
+                {
+                    "id": f"project-{p['id']}",
+                    "name": p["name"],
+                    "project_key": p.get("key", ""),
+                    "type": "project",
+                    "connection_id": str(conn.id),
+                }
+                for p in projects
+            ]
+
         return [
             {
                 "id": str(b["id"]),
                 "name": b["name"],
                 "project_key": b.get("location", {}).get("projectKey", ""),
+                "type": b.get("type", "scrum"),
                 "connection_id": str(conn.id),
             }
             for b in raw
@@ -285,6 +316,114 @@ async def get_jira_boards(
 
     all_boards = [board for site_boards in results for board in site_boards]
     return all_boards
+
+
+@router.get("/team-members")
+async def get_team_members(
+    connection_id: str = Query(...),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return TeamMember rows for the team associated with a connection.
+
+    Includes per-member issue count. If no members exist (Celery sync hasn't
+    run yet), fetches users from Jira inline and upserts them first.
+    """
+    import logging as _logging
+    from sqlalchemy import func
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from src.models.developer import TeamMember
+    from src.models.ticket import Ticket
+
+    try:
+        conn_uuid = uuid.UUID(connection_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid connection_id")
+
+    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+    if not org:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    connection = await db.get(JiraConnection, conn_uuid)
+    if not connection or connection.organization_id != org.id:
+        raise HTTPException(status_code=404, detail="Jira connection not found")
+
+    team = await db.scalar(
+        select(Team).where(Team.organization_id == org.id)
+    )
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found for this organisation")
+
+    existing = (await db.scalars(
+        select(TeamMember).where(TeamMember.team_id == team.id)
+    )).all()
+
+    if not existing:
+        # Inline sync: fetch users from Jira and upsert them.
+        access_token = decrypt(connection.encrypted_access_token)
+        if connection.token_expires_at and connection.token_expires_at <= datetime.utcnow():
+            try:
+                refresh_tok = decrypt(connection.encrypted_refresh_token)
+                tokens = await refresh_access_token(refresh_tok)
+                access_token = tokens["access_token"]
+                connection.encrypted_access_token = encrypt(access_token)
+                if "refresh_token" in tokens:
+                    connection.encrypted_refresh_token = encrypt(tokens["refresh_token"])
+                if "expires_in" in tokens:
+                    connection.token_expires_at = datetime.utcnow() + timedelta(seconds=tokens["expires_in"])
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"Failed to refresh Jira token: {exc}")
+
+        client = JiraClient(cloud_id=connection.jira_cloud_id, access_token=access_token)
+        try:
+            users = await client.get_users()
+        except Exception as exc:
+            _logging.getLogger(__name__).error("get_users failed: %s", exc)
+            raise HTTPException(status_code=502, detail=f"Failed to fetch Jira users: {exc}")
+
+        for user in users:
+            account_id = user.get("accountId")
+            if not account_id:
+                continue
+            stmt = pg_insert(TeamMember).values(
+                id=uuid.uuid4(),
+                team_id=team.id,
+                jira_account_id=account_id,
+                display_name=user.get("displayName", account_id),
+                email=user.get("emailAddress"),
+            ).on_conflict_do_update(
+                index_elements=["team_id", "jira_account_id"],
+                set_={
+                    "display_name": user.get("displayName", account_id),
+                    "email": user.get("emailAddress"),
+                },
+            )
+            await db.execute(stmt)
+        await db.commit()
+
+        existing = (await db.scalars(
+            select(TeamMember).where(TeamMember.team_id == team.id)
+        )).all()
+
+    # Build issue counts per member.
+    count_rows = (await db.execute(
+        select(Ticket.assignee_id, func.count(Ticket.id).label("cnt"))
+        .where(Ticket.team_id == team.id, Ticket.assignee_id.isnot(None))
+        .group_by(Ticket.assignee_id)
+    )).all()
+    issue_counts = {row.assignee_id: row.cnt for row in count_rows}
+
+    return [
+        {
+            "id": str(m.id),
+            "name": m.display_name,
+            "handle": m.display_name.lower().replace(" ", "."),
+            "email": m.email,
+            "jira_account_id": m.jira_account_id,
+            "issues": issue_counts.get(m.id, 0),
+        }
+        for m in existing
+    ]
 
 
 class ActivateConnectionRequest(BaseModel):

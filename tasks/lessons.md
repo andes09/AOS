@@ -384,3 +384,16 @@ This is a band-aid. It will re-corrupt the moment `migrate.py` runs again.
 3. Don't "fix" a migration drift by syncing the two systems. Name the dual-system root cause out loud and push to retire `migrate.py`. Syncing is patching a symptom — exactly the loop this file kept repeating.
 4. After any emergency `alembic_version` cleanup, explicitly tell the user it's temporary and that the durable fix is killing the second migration path — don't let the band-aid masquerade as the fix.
 
+---
+
+## Non-trivial tasks require plan mode + tasks/todo.md — no exceptions
+
+**Pattern:** Was asked to remove the old onboarding flow (multi-step: identify files, remove frontend, clean backend routes, clean tests, clean imports, fix routing). Did it inline without entering plan mode or writing to `tasks/todo.md`. Also pushed to main without running backend tests (`pytest`).
+
+**Root cause:** Judged the task as "obvious enough" and skipped the process. CLAUDE.md says plan mode for ANY non-trivial task (3+ steps or architectural decisions) — this had both.
+
+**Rules:**
+1. If a task has 3+ steps OR touches more than one layer (frontend + backend, code + tests, etc.), enter plan mode first. Write the plan to `tasks/todo.md` with checkable items before touching a single file.
+2. "Verify Before Done" means running the actual test suite — not just TypeScript type-check. For backend changes, run `pytest` before committing. For frontend, run `tsc --noEmit`.
+3. Check `tasks/lessons.md` at the start of every session. Don't wait for the user to remind me.
+

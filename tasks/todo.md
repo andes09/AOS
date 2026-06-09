@@ -2,6 +2,53 @@
 
 ---
 
+## 🔨 Active: Onboarding — Design Rebuild + Boards Fix
+
+**Goal:** Implement the design from `Team Onboarding.html` with real Jira data (no mocked boards).
+
+### Root causes to fix
+- Boards endpoint silently returns `[]` on any exception — need fallback + visible errors
+- Old `OnboardingPage.tsx` used a 4-step wizard (Connect → Select Board → Import History → Invite) instead of the design's Jira-first import flow
+
+### Plan
+
+**Backend (2 additions + 1 fix)**
+
+- [x] **B1** — Fix `/api/integrations/jira/boards`: add fallback to `/project/search` if Agile API returns empty; propagate errors instead of silent `[]`
+- [x] **B2** — Add `GET /api/integrations/jira/team-members?connection_id=<cid>`: returns `TeamMember` rows with per-member issue count; triggers inline sync (no Celery) if no members exist yet — this powers the ConfirmTeam step
+- [x] **B3** — Add `POST /api/onboarding/confirm-team`: receives included members with `{name, jira_account_id, capacity, role, seniority, strengths, meetings}`; upserts `Developer` records; calls `onboarding/complete` inline
+
+**Frontend (1 full rewrite)**
+
+- [x] **F1** — Rewrite `apps/web/src/pages/OnboardingPage.tsx` to match the design pixel-for-pixel:
+  - Step **-1 WelcomeStep**: Omada + Jira logos, "Import your team from Jira", 3-step preview row, "Connect Jira →" CTA
+  - Step **0 ConnectFlow** (3 sub-stages):
+    - `ConnectScreen` — OAuth permission screen (real `useJiraOAuth` hook → Atlassian redirect)
+    - `BoardPicker` — calls real `/api/integrations/jira/boards?connection_id=<cid>`, shows board cards with member count, type badge, "Most active" tag
+    - `ScanningScreen` — calls `POST /api/integrations/jira/board-selection` then `GET /api/integrations/jira/team-members`; shows animated step-by-step progress
+  - Step **1 ConfirmTeamStep** — flip cards (PlayerCard/RosterCard), capacity stepper, MemberEditor modal, excluded list, "Add someone Jira missed"
+  - Step **2 ReviewStep** — stats grid, full member list, privacy note, "Sync sprint history →" calls B3 then navigates to `/app/sprint-planner`
+  - Step **99 DoneStep** — success screen
+  - **Layout A** (split sidebar + "Why we ask" footer) matching the design exactly
+  - All design tokens, animations (fadeUp, checkPop, card flip), and component styles copied faithfully
+
+### Files touched
+- `apps/api/src/integrations/jira/router.py` (B1 + B2)
+- `apps/api/src/routers/onboarding.py` (B3)
+- `apps/web/src/pages/OnboardingPage.tsx` (F1 — full rewrite)
+- `apps/web/src/pages/onboarding/ConnectJiraStep.tsx` (kept — used by ConnectScreen via useJiraOAuth)
+- No new files required
+
+### Verification
+- [ ] OAuth flow redirects to Atlassian and back
+- [ ] Boards appear after OAuth (real boards, not mocked)
+- [ ] ScanningScreen completes and ConfirmTeam shows real Jira members
+- [ ] Capacity stepper, card flip, MemberEditor modal all work
+- [ ] Review → "Sync sprint history" → navigates to `/app/sprint-planner`
+- [ ] OrgProvider correctly redirects incomplete orgs to `/onboarding`
+
+---
+
 ## ✅ Done (archived)
 
 - **Stage 2 Simulator (M1–M6)** — multi-team matrix, all archetypes, parallel execution, HTML report. 89 tests passing. See `omada-simulator/docs/STAGE2_HOWTO.md`.
@@ -161,7 +208,7 @@ Removed from beta Settings on 2026-06-07 in favour of "one board, set during onb
 ### Verification (Phase 1)
 - [ ] Time a full generation before/after — log latency delta to demonstrate
 - [ ] Verify `cache_read_tokens` shows up in cost_tracker logs on warm runs
-- [ ] Manually clear `ticket_complexity_cache` rows for one team → confirm fallback to Claude call works
+remo- [ ] Manually clear `ticket_complexity_cache` rows for one team → confirm fallback to Claude call works
 - [ ] SSE: open dev console, confirm event stream emits stage events; verify JSON fallback still works for tests
 - [ ] Existing test suite passes; add focused tests for cache hit path + cache miss path
 

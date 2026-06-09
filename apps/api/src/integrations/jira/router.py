@@ -284,7 +284,7 @@ async def get_jira_boards(
             # 403/404 = missing Agile scope or no Jira Software — fall back to
             # project list. Other errors (5xx, network) re-raise so the caller
             # sees the real failure.
-            if status_code in (403, 404) or status_code is None:
+            if status_code in (401, 403, 404) or status_code is None:
                 agile_failed = True
             else:
                 raise HTTPException(

@@ -264,30 +264,42 @@ async def get_jira_boards(
                     detail=f"Failed to refresh Jira token: {exc}",
                 )
         client = JiraClient(cloud_id=conn.jira_cloud_id, access_token=access_token)
+        raw = []
+        agile_failed = False
         try:
             raw = await client.get_boards()
         except Exception as exc:
             body = getattr(exc, "response", None)
+            status_code = getattr(body, "status_code", None) if body else None
             body_text = ""
             if body is not None:
                 try:
                     body_text = body.text[:300]
                 except Exception:
                     pass
-            _logging.getLogger(__name__).error(
-                "get_boards failed for %s: %s %s", conn.jira_cloud_url, exc, body_text
+            _logging.getLogger(__name__).warning(
+                "get_boards failed for %s (status=%s): %s %s",
+                conn.jira_cloud_url, status_code, exc, body_text,
             )
-            raise HTTPException(
-                status_code=502,
-                detail=f"Jira boards API failed: {body_text or str(exc)}",
-            )
+            # 403/404 = missing Agile scope or no Jira Software — fall back to
+            # project list. Other errors (5xx, network) re-raise so the caller
+            # sees the real failure.
+            if status_code in (403, 404) or status_code is None:
+                agile_failed = True
+            else:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Jira boards API failed: {body_text or str(exc)}",
+                )
 
-        if not raw:
-            # Agile API returned zero boards — fall back to project list.
-            # This covers Jira Core instances that don't have Jira Software.
+        if not raw or agile_failed:
+            # Agile API returned zero boards or no Jira Software scope —
+            # fall back to project list (works with read:jira-work).
             try:
                 projects = await client.get_projects()
-            except Exception:
+            except Exception as proj_exc:
+                if agile_failed:
+                    raise HTTPException(status_code=502, detail=f"Could not load boards or projects from Jira: {proj_exc}")
                 projects = []
             return [
                 {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useJiraOAuth } from '../hooks/useJiraOAuth'
 import { useApi } from '../lib/api'
 
@@ -707,12 +707,13 @@ function ScanningScreen({ boardId, boardName, boardKey, connectionId, onDone }: 
 // ─── ConnectFlow ──────────────────────────────────────────────────────────────
 type ConnectStage = 'connect' | 'board' | 'scanning'
 
-function ConnectFlowFull({ onImport, onBack }: {
+function ConnectFlowFull({ onImport, onBack, initialConnectionId }: {
   onImport: (members: Member[], boardId: string, boardName: string, boardKey: string) => void
   onBack: () => void
+  initialConnectionId?: string
 }) {
-  const [stage, setStage] = useState<ConnectStage>('connect')
-  const [connectionId, setConnectionId] = useState('')
+  const [stage, setStage] = useState<ConnectStage>(initialConnectionId ? 'board' : 'connect')
+  const [connectionId, setConnectionId] = useState(initialConnectionId ?? '')
   const [boardId, setBoardId] = useState('')
   const [boardName, setBoardName] = useState('')
   const [boardKey, setBoardKey] = useState('')
@@ -1059,11 +1060,32 @@ function SidebarStepper({ step }: { step: number }) {
 export function OnboardingPage() {
   const navigate = useNavigate()
   const { post } = useApi()
-  const [step, setStep] = useState(-1)
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // Detect OAuth callback: ?connection_id or ?pending_sites means the user
+  // just returned from Atlassian. Skip the welcome screen and go straight to
+  // board picker, passing the connection ID so ConnectFlowFull starts at 'board'.
+  const callbackConnectionId = (() => {
+    const connId = searchParams.get('connection_id')
+    if (connId) return connId
+    const pending = searchParams.get('pending_sites')
+    if (pending) return pending.split(',').map(e => e.split('|')[0]).join(',')
+    return null
+  })()
+
+  const [step, setStep] = useState(callbackConnectionId ? 0 : -1)
+  const [oauthConnectionId] = useState(callbackConnectionId)
   const [teamName, setTeamName] = useState('')
   const [boardName, setBoardName] = useState('')
   const [members, setMembers] = useState<Member[]>([])
   const [saving, setSaving] = useState(false)
+
+  // Clear the OAuth params from the URL so they don't linger.
+  useEffect(() => {
+    if (callbackConnectionId) {
+      setSearchParams({}, { replace: true })
+    }
+  }, [])
 
   const stepperIdx = Math.max(0, Math.min(2, step))
 
@@ -1118,6 +1140,7 @@ export function OnboardingPage() {
             <ConnectFlowFull
               onImport={onImport}
               onBack={() => setStep(-1)}
+              initialConnectionId={oauthConnectionId ?? undefined}
             />
           )}
           {step === 1 && (

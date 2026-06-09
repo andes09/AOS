@@ -9,7 +9,6 @@ import { ExecDashboardPage } from './pages/ExecDashboardPage'
 import { DependencyRadarPage } from './pages/DependencyRadarPage'
 import { RetrospectivePage } from './pages/RetrospectivePage'
 import { OnboardingPage } from './pages/OnboardingPage'
-import { TeamSetupPage } from './pages/TeamSetupPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TeamGlossaryPage } from './pages/settings/TeamGlossaryPage'
 import { CalibrationSuggestionsPage } from './pages/settings/CalibrationSuggestionsPage'
@@ -25,9 +24,6 @@ export default function App() {
     <Routes>
       <Route path="/sign-in/*" element={<SignInPage />} />
       <Route path="/invite" element={<SignedIn><InviteAcceptPage /></SignedIn>} />
-      <Route path="/onboarding/team-setup" element={
-        <SignedIn><TeamSetupPage /></SignedIn>
-      } />
       <Route path="/onboarding/*" element={
         <SignedIn><OnboardingPage /></SignedIn>
       } />

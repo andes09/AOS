@@ -8,12 +8,10 @@ GET    /api/teams/multi-dashboard
 POST   /api/teams/{team_id}/access
 DELETE /api/teams/{team_id}/access/{developer_id}
 """
-import json
 import uuid
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,12 +93,6 @@ class CreateTeamResponse(BaseModel):
     developers: list[CreatedDeveloper]
 
 
-class SetupStatusResponse(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-    setup_complete: bool
-    team_id: str | None
-
-
 class SeedTicketIn(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
     jira_issue_key: str
@@ -119,45 +111,6 @@ class SeedTicketsResponse(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
     created: int
     updated: int
-
-
-class MemberSetupIn(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-    name: str
-    email: str | None = None
-    role: str
-    custom_role: str | None = None
-    seniority: str
-    capacity_hours_per_week: int
-    domain_strengths: list[str]
-    meeting_hours_bucket: str
-    skill_ratings: dict[str, float] | None = None
-
-    @field_validator("skill_ratings")
-    @classmethod
-    def _validate_skill_ratings(cls, v: dict[str, float] | None) -> dict[str, float] | None:
-        if v is None:
-            return v
-        for _key, val in v.items():
-            if val < 0.0 or val > 1.0:
-                raise ValueError("skill_ratings values must be between 0.0 and 1.0")
-        return v
-
-
-class TeamSetupRequest(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-    name: str
-    size_tier: str
-    cadence: str
-    methodology: str
-    tech_stack: list[str]
-    members: list[MemberSetupIn]
-
-
-class TeamSetupResponse(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-    team_id: str
-    member_count: int
 
 
 # ---------------------------------------------------------------------------
@@ -412,99 +365,6 @@ async def seed_tickets(
 
     await db.commit()
     return SeedTicketsResponse(created=created, updated=updated)
-
-
-@teams_router.get("/setup-status", response_model=SetupStatusResponse)
-async def get_setup_status(
-    clerk_org_id: str = Depends(get_current_org_id),
-    db: AsyncSession = Depends(get_db),
-):
-    """Return whether the onboarding wizard has been completed for this org."""
-    org = await db.scalar(
-        select(Organization).where(Organization.clerk_org_id == clerk_org_id)
-    )
-    if not org:
-        return SetupStatusResponse(setup_complete=False, team_id=None)
-
-    team = await db.scalar(
-        select(Team).where(
-            Team.organization_id == org.id,
-            Team.profile_setup_at.is_not(None),
-        )
-    )
-    if team:
-        return SetupStatusResponse(setup_complete=True, team_id=str(team.id))
-    return SetupStatusResponse(setup_complete=False, team_id=None)
-
-
-_CADENCE_MAP = {
-    "1-week": 7,
-    "2-week": 14,
-    "3-week": 21,
-    "4-week": 28,
-}
-
-
-@teams_router.post("/setup", response_model=TeamSetupResponse)
-async def team_setup(
-    body: TeamSetupRequest,
-    clerk_org_id: str = Depends(get_current_org_id),
-    db: AsyncSession = Depends(get_db),
-):
-    """Save the team profile and members collected during the onboarding wizard.
-
-    Finds or creates the primary team for the org, updates its profile fields,
-    and creates a Developer row for each member supplied.
-    """
-    org = await db.scalar(
-        select(Organization).where(Organization.clerk_org_id == clerk_org_id)
-    )
-    if not org:
-        raise HTTPException(status_code=404, detail="Organisation not found")
-
-    # Find the existing team for this org (created by provision_organization),
-    # or create one if it does not exist yet.
-    team = await db.scalar(
-        select(Team).where(Team.organization_id == org.id)
-    )
-    if team is None:
-        team = Team(
-            id=uuid.uuid4(),
-            organization_id=org.id,
-            name=body.name,
-            sprint_length_days=_CADENCE_MAP.get(body.cadence, 14),
-        )
-        db.add(team)
-        await db.flush()
-
-    # Update profile fields.
-    team.name = body.name
-    team.size_tier = body.size_tier
-    team.methodology = body.methodology
-    team.tech_stack = json.dumps(body.tech_stack)
-    team.sprint_length_days = _CADENCE_MAP.get(body.cadence, 14)
-    team.profile_setup_at = datetime.utcnow()
-
-    # Create developer rows for each member.
-    for member in body.members:
-        effective_role = member.custom_role if member.role == "custom" else member.role
-        dev = Developer(
-            id=uuid.uuid4(),
-            team_id=team.id,
-            name=member.name,
-            email=member.email,
-            role=effective_role,
-            seniority=member.seniority,
-            capacity_hours_per_week=member.capacity_hours_per_week,
-            domain_strengths=json.dumps(member.domain_strengths),
-            meeting_hours_bucket=member.meeting_hours_bucket,
-            skill_ratings=member.skill_ratings,
-        )
-        db.add(dev)
-
-    await db.commit()
-
-    return TeamSetupResponse(team_id=str(team.id), member_count=len(body.members))
 
 
 @teams_router.post("/{team_id}/access", status_code=201)

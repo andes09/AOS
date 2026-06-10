@@ -26,10 +26,11 @@ export function useApi() {
     })
     if (!response.ok) {
       const error = await response.json().catch(() => ({}))
-      throw new ApiError(
-        (error as { detail?: string }).detail || `API error ${response.status}`,
-        response.status,
-      )
+      const detail = (error as { detail?: unknown }).detail
+      const message = Array.isArray(detail)
+        ? detail.map((e: { msg?: string }) => e.msg ?? JSON.stringify(e)).join(', ')
+        : (typeof detail === 'string' ? detail : null) ?? `API error ${response.status}`
+      throw new ApiError(message, response.status)
     }
     return response.json() as Promise<T>
   }

@@ -614,6 +614,7 @@ function ScanningScreen({ boardId, boardName, boardKey, connectionId, onDone }: 
   const { post, get } = useApi()
   const [done, setDone] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [retryKey, setRetryKey] = useState(0)
   const steps = ['Reading board settings', 'Detecting sprint cadence…', 'Importing team members', 'Building velocity profiles']
 
   useEffect(() => {
@@ -625,7 +626,7 @@ function ScanningScreen({ boardId, boardName, boardKey, connectionId, onDone }: 
         await new Promise(r => setTimeout(r, 420))
         if (cancelled) return
         await post('/api/integrations/jira/board-selection', {
-          connectionId, boardId, projectKey: boardKey,
+          connection_id: connectionId, board_id: boardId, project_key: boardKey,
         })
         if (cancelled) return
         setDone(1)
@@ -665,7 +666,7 @@ function ScanningScreen({ boardId, boardName, boardKey, connectionId, onDone }: 
 
     run()
     return () => { cancelled = true }
-  }, [])
+  }, [retryKey])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 22, padding: '8px 0', animation: 'fadeUp 0.22s ease both' }}>
@@ -697,7 +698,7 @@ function ScanningScreen({ boardId, boardName, boardKey, connectionId, onDone }: 
       {error && (
         <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '12px 16px', fontSize: 13, color: '#dc2626' }}>
           <strong>Import failed:</strong> {error}
-          <div style={{ marginTop: 8 }}><Btn size="sm" onClick={() => window.location.reload()}>Try again</Btn></div>
+          <div style={{ marginTop: 8 }}><Btn size="sm" onClick={() => { setError(null); setDone(0); setRetryKey(k => k + 1) }}>Try again</Btn></div>
         </div>
       )}
     </div>
@@ -788,11 +789,24 @@ function BoardPickerInner({ connectionId, onImport, onBack }: {
           Loading boards…
         </div>
       )}
-      {error && (
-        <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '12px 16px', fontSize: 13, color: '#dc2626' }}>
-          <strong>Couldn't load boards:</strong> {error}
-        </div>
-      )}
+      {error && (() => {
+        const isSuspended = /suspended|suspended-inactivity/i.test(error)
+        return (
+          <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '14px 16px', fontSize: 13, color: '#dc2626' }}>
+            {isSuspended ? (
+              <>
+                <div style={{ fontWeight: 600, marginBottom: 5 }}>Jira site suspended</div>
+                <div style={{ color: '#7f1d1d', lineHeight: 1.5 }}>
+                  Your Jira cloud site has been suspended due to inactivity. Log in to{' '}
+                  <span style={{ fontFamily: 'monospace' }}>admin.atlassian.com</span> to reactivate it, then reconnect here.
+                </div>
+              </>
+            ) : (
+              <><strong>Couldn't load boards:</strong> {error}</>
+            )}
+          </div>
+        )
+      })()}
       {!loading && !error && boards.length === 0 && (
         <div style={{ background: C.bg1, border: `1px solid ${C.border}`, borderRadius: 8, padding: '20px', textAlign: 'center', color: C.t3, fontSize: 14 }}>
           No boards found. Make sure you have access to at least one Jira board.

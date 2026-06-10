@@ -81,6 +81,8 @@ class JiraClient:
             headers=self._headers(),
             params={"maxResults": 50, "orderBy": "name"},
         )
+        if not r.is_success:
+            logger.error("Jira project/search %s — body: %s", r.status_code, r.text[:500])
         r.raise_for_status()
         return r.json().get("values", [])
 
@@ -98,6 +100,8 @@ class JiraClient:
                 headers=self._headers(),
                 params={"maxResults": 50, "startAt": start_at},
             )
+            if not r.is_success:
+                logger.error("Jira agile/board %s — body: %s", r.status_code, r.text[:500])
             r.raise_for_status()
             data = r.json()
             batch = data.get("values", [])

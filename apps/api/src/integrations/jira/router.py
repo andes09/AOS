@@ -463,6 +463,7 @@ async def get_team_members(
             "email": m.email,
             "jira_account_id": m.jira_account_id,
             "issues": issue_counts.get(m.id, 0),
+            "bot": not bool(m.email),
         }
         for m in existing
     ]

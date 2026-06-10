@@ -636,7 +636,7 @@ function ScanningScreen({ boardId, boardName, boardKey, connectionId, onDone }: 
         if (cancelled) return
         setDone(2)
 
-        const raw = await get<Array<{ id: string; name: string; handle: string; email?: string; jira_account_id: string; issues: number }>>(
+        const raw = await get<Array<{ id: string; name: string; handle: string; email?: string; jira_account_id: string; issues: number; bot: boolean }>>(
           `/api/integrations/jira/team-members?connection_id=${encodeURIComponent(connectionId)}`
         )
         if (cancelled) return
@@ -656,7 +656,8 @@ function ScanningScreen({ boardId, boardName, boardKey, connectionId, onDone }: 
           issues: m.issues,
           jira_account_id: m.jira_account_id,
           email: m.email,
-          included: true,
+          bot: m.bot,
+          included: !m.bot,
         }))
         onDone(members)
       } catch (e) {

@@ -396,56 +396,64 @@ async def get_team_members(
     if not team:
         raise HTTPException(status_code=404, detail="Team not found for this organisation")
 
+    # Always re-sync from Jira so stale service/bot accounts are purged.
+    access_token = decrypt(connection.encrypted_access_token)
+    if connection.token_expires_at and connection.token_expires_at <= datetime.utcnow():
+        try:
+            refresh_tok = decrypt(connection.encrypted_refresh_token)
+            tokens = await refresh_access_token(refresh_tok)
+            access_token = tokens["access_token"]
+            connection.encrypted_access_token = encrypt(access_token)
+            if "refresh_token" in tokens:
+                connection.encrypted_refresh_token = encrypt(tokens["refresh_token"])
+            if "expires_in" in tokens:
+                connection.token_expires_at = datetime.utcnow() + timedelta(seconds=tokens["expires_in"])
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to refresh Jira token: {exc}")
+
+    client = JiraClient(cloud_id=connection.jira_cloud_id, access_token=access_token)
+    try:
+        users = await client.get_users()
+    except Exception as exc:
+        _logging.getLogger(__name__).error("get_users failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Failed to fetch Jira users: {exc}")
+
+    fresh_account_ids: set[str] = set()
+    for user in users:
+        account_id = user.get("accountId")
+        if not account_id:
+            continue
+        fresh_account_ids.add(account_id)
+        stmt = pg_insert(TeamMember).values(
+            id=uuid.uuid4(),
+            team_id=team.id,
+            jira_account_id=account_id,
+            display_name=user.get("displayName", account_id),
+            email=user.get("emailAddress"),
+        ).on_conflict_do_update(
+            index_elements=["team_id", "jira_account_id"],
+            set_={
+                "display_name": user.get("displayName", account_id),
+                "email": user.get("emailAddress"),
+            },
+        )
+        await db.execute(stmt)
+
+    # Remove TeamMembers that are no longer returned by Jira (service accounts
+    # that were stored before accountType filtering was in place).
+    if fresh_account_ids:
+        await db.execute(
+            delete(TeamMember).where(
+                TeamMember.team_id == team.id,
+                TeamMember.jira_account_id.isnot(None),
+                TeamMember.jira_account_id.notin_(fresh_account_ids),
+            )
+        )
+    await db.commit()
+
     existing = (await db.scalars(
         select(TeamMember).where(TeamMember.team_id == team.id)
     )).all()
-
-    if not existing:
-        # Inline sync: fetch users from Jira and upsert them.
-        access_token = decrypt(connection.encrypted_access_token)
-        if connection.token_expires_at and connection.token_expires_at <= datetime.utcnow():
-            try:
-                refresh_tok = decrypt(connection.encrypted_refresh_token)
-                tokens = await refresh_access_token(refresh_tok)
-                access_token = tokens["access_token"]
-                connection.encrypted_access_token = encrypt(access_token)
-                if "refresh_token" in tokens:
-                    connection.encrypted_refresh_token = encrypt(tokens["refresh_token"])
-                if "expires_in" in tokens:
-                    connection.token_expires_at = datetime.utcnow() + timedelta(seconds=tokens["expires_in"])
-            except Exception as exc:
-                raise HTTPException(status_code=502, detail=f"Failed to refresh Jira token: {exc}")
-
-        client = JiraClient(cloud_id=connection.jira_cloud_id, access_token=access_token)
-        try:
-            users = await client.get_users()
-        except Exception as exc:
-            _logging.getLogger(__name__).error("get_users failed: %s", exc)
-            raise HTTPException(status_code=502, detail=f"Failed to fetch Jira users: {exc}")
-
-        for user in users:
-            account_id = user.get("accountId")
-            if not account_id:
-                continue
-            stmt = pg_insert(TeamMember).values(
-                id=uuid.uuid4(),
-                team_id=team.id,
-                jira_account_id=account_id,
-                display_name=user.get("displayName", account_id),
-                email=user.get("emailAddress"),
-            ).on_conflict_do_update(
-                index_elements=["team_id", "jira_account_id"],
-                set_={
-                    "display_name": user.get("displayName", account_id),
-                    "email": user.get("emailAddress"),
-                },
-            )
-            await db.execute(stmt)
-        await db.commit()
-
-        existing = (await db.scalars(
-            select(TeamMember).where(TeamMember.team_id == team.id)
-        )).all()
 
     # Build issue counts per member.
     count_rows = (await db.execute(
@@ -463,7 +471,6 @@ async def get_team_members(
             "email": m.email,
             "jira_account_id": m.jira_account_id,
             "issues": issue_counts.get(m.id, 0),
-            "bot": not bool(m.email),
         }
         for m in existing
     ]

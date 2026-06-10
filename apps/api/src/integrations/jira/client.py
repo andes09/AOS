@@ -183,10 +183,11 @@ class JiraClient:
         r = await self._http.get(
             f"{self.base_url}/users/search",
             headers=self._headers(),
-            params={"maxResults": 200, "accountType": "atlassian"},
+            params={"maxResults": 200},
         )
         r.raise_for_status()
-        return r.json()
+        # /users/search ignores accountType as a query param — filter here.
+        return [u for u in r.json() if u.get("accountType") == "atlassian" and u.get("active", True)]
 
     @property
     def agile_base_url(self) -> str:

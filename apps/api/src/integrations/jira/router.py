@@ -512,6 +512,7 @@ class BoardSelectionRequest(BaseModel):
 @router.post("/board-selection")
 async def save_board_selection(
     body: BoardSelectionRequest,
+    background_tasks: BackgroundTasks,
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -551,11 +552,20 @@ async def save_board_selection(
     team.jira_project_key = body.project_key
     await db.commit()
 
+    import logging as _sync_log
+    from src.integrations.jira.sync import sync_jira_team
+    team_id_str = str(team.id)
     try:
-        from src.integrations.jira.sync import sync_jira_team
-        sync_jira_team.delay(str(team.id))
-    except Exception:
-        pass  # Celery/broker not available; sync will run on next scheduled beat
+        sync_jira_team.delay(team_id_str)
+        _sync_log.getLogger(__name__).info("board-selection: queued initial sync for team %s", team_id_str)
+    except Exception as exc:
+        # Celery broker unreachable — fall back to in-process background task so
+        # the user gets their backlog synced without waiting for the 2am beat job.
+        _sync_log.getLogger(__name__).warning(
+            "board-selection: Celery unavailable (%s); falling back to in-process sync for team %s",
+            exc, team_id_str,
+        )
+        background_tasks.add_task(sync_jira_team, team_id_str)
 
     return {"saved": True}
 

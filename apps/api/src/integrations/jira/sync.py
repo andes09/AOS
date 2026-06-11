@@ -5,6 +5,7 @@ sync_jira_team  — full sync: boards → sprints → issues → users
 sync_jira_sprint — incremental sync for a single sprint
 """
 
+import asyncio
 import time
 import uuid
 import logging
@@ -23,6 +24,25 @@ from src.integrations.jira.oauth import refresh_access_token
 
 logger = logging.getLogger(__name__)
 
+
+def _get_or_create_event_loop() -> asyncio.AbstractEventLoop:
+    """Return a usable event loop for sync contexts (Celery workers, thread-pool threads).
+
+    Python 3.12 raised the bar: get_event_loop() raises RuntimeError in non-main
+    threads when no loop has been set. Celery workers and FastAPI BackgroundTask
+    threads both fall into that category, so we create and register a fresh loop
+    when needed.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if not loop.is_closed():
+            return loop
+    except RuntimeError:
+        pass
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    return loop
+
 # Sync tasks use a synchronous SQLAlchemy session (Celery workers are sync).
 def _get_sync_session() -> Session:
     from sqlalchemy import create_engine
@@ -39,13 +59,12 @@ def _get_fresh_client(connection, db: Session) -> JiraClient:
     Atlassian uses one-time refresh token rotation: if the new refresh_token
     is rolled back, the next retry sends the already-consumed token → 403.
     """
-    import asyncio
 
     access_token = decrypt(connection.encrypted_access_token)
 
     if connection.token_expires_at and connection.token_expires_at <= datetime.utcnow():
         refresh_tok = decrypt(connection.encrypted_refresh_token)
-        tokens = asyncio.get_event_loop().run_until_complete(
+        tokens = _get_or_create_event_loop().run_until_complete(
             refresh_access_token(refresh_tok)
         )
         access_token = tokens["access_token"]
@@ -149,7 +168,6 @@ def _parse_datetime(iso_str: str | None) -> datetime | None:
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def sync_jira_team(self, team_id: str):
     """Full sync of all sprints and issues for a team from Jira."""
-    import asyncio
     from src.models.team import Team
     from src.models.jira_connection import JiraConnection
 
@@ -175,7 +193,7 @@ def sync_jira_team(self, team_id: str):
             return
 
         client = _get_fresh_client(connection, db)
-        loop = asyncio.get_event_loop()
+        loop = _get_or_create_event_loop()
 
         # Fetch users + sprint list concurrently
         logger.info("[sync] team=%s fetching users + sprint list...", team_id)
@@ -299,7 +317,7 @@ def _fire_sprint_close_hooks(team_id: str, closed_sprint_ids: list[uuid.UUID]) -
     from src.services.identifier_refresh_service import refresh_after_sprint_close
     from src.services.plan_quality import persist_plan_quality
 
-    loop = asyncio.get_event_loop()
+    loop = _get_or_create_event_loop()
 
     async def _run_refresh():
         async with AsyncSessionLocal() as adb:
@@ -324,7 +342,6 @@ def _fire_sprint_close_hooks(team_id: str, closed_sprint_ids: list[uuid.UUID]) -
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def sync_jira_sprint(self, team_id: str, jira_sprint_id: str):
     """Incremental sync for a single sprint's issues from Jira."""
-    import asyncio
     from src.models.team import Team
     from src.models.sprint import Sprint
     from src.models.jira_connection import JiraConnection
@@ -359,7 +376,7 @@ def sync_jira_sprint(self, team_id: str, jira_sprint_id: str):
             logger.warning("Sprint %s not found locally; run full team sync first", jira_sprint_id)
             return
 
-        issues = asyncio.get_event_loop().run_until_complete(
+        issues = _get_or_create_event_loop().run_until_complete(
             client.get_sprint_issues(jira_sprint_id)
         )
         _upsert_issues(db, team, sprint_obj, issues)
@@ -689,7 +706,6 @@ def incremental_sync_all_teams():
 @celery_app.task
 def prewarm_ticket_complexity(team_id: str) -> None:
     """Warm the ticket complexity cache after a sync so plan generation skips Claude's complexity call."""
-    import asyncio
     from src.database import AsyncSessionLocal
     from src.services.sprint_brain import _prewarm_complexity
 
@@ -697,4 +713,4 @@ def prewarm_ticket_complexity(team_id: str) -> None:
         async with AsyncSessionLocal() as db:
             await _prewarm_complexity(team_id, db)
 
-    asyncio.get_event_loop().run_until_complete(_run())
+    _get_or_create_event_loop().run_until_complete(_run())

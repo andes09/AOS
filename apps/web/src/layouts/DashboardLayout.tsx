@@ -166,7 +166,7 @@ export function DashboardLayout() {
           </main>
         </div>
 
-        <RoleSwitcher />
+        {import.meta.env.DEV && <RoleSwitcher />}
       </div>
     </TeamProvider>
   )

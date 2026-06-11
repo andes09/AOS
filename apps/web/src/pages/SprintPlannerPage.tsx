@@ -289,9 +289,8 @@ export function SprintPlannerPage() {
         setReviewOpen(true)
       }
     },
-    onError: err => {
+    onError: () => {
       setCurrentStage(null)
-      setWarnings([err instanceof Error ? err.message : 'Failed to generate plan.'])
     },
   })
 

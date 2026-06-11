@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     @property
     def allowed_origins(self) -> list[str]:
         origins = [
-            o.strip() for o in self.frontend_url.split(",") if o.strip()
+            o.strip().rstrip("/") for o in self.frontend_url.split(",") if o.strip()
         ]
         if self.environment == "local":
             local_defaults = [

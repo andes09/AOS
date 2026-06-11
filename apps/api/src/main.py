@@ -34,9 +34,12 @@ app = FastAPI(
     docs_url="/docs" if not settings.is_production else None,
 )
 
+_allowed_origins = settings.allowed_origins
+logger.info("CORS allowed_origins: %s", _allowed_origins)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins,
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -35,11 +35,12 @@ app = FastAPI(
 )
 
 _allowed_origins = settings.allowed_origins
-logger.info("CORS allowed_origins: %s", _allowed_origins)
+print(f"[CORS] allowed_origins={_allowed_origins}", flush=True)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
+    allow_origin_regex=r"https://.*\.railway\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

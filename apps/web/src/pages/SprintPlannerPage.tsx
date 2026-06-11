@@ -45,41 +45,32 @@ const STAGE_LABELS: Record<string, string> = {
   enrichment_done: 'Almost there…',
 }
 
-function RecurringIssuesPanel({ warnings }: { warnings: string[] }) {
-  const [open, setOpen] = useState(warnings.length <= 2)
+function CollapsibleNotices({ title, items, variant = 'warning', defaultOpen }: {
+  title: string
+  items: string[]
+  variant?: 'warning' | 'danger'
+  defaultOpen?: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen ?? items.length <= 2)
+  const color = variant === 'danger' ? 'var(--color-danger)' : 'var(--color-warning)'
+  const bg = variant === 'danger' ? 'var(--color-danger-subtle)' : 'var(--color-warning-bg)'
   return (
-    <Card>
-      <CardBody style={{ padding: '10px 14px' }}>
-        <button
-          onClick={() => setOpen(o => !o)}
-          style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: 0,
-            width: '100%',
-            textAlign: 'left',
-          }}
-        >
-          <span style={{ color: 'var(--color-accent)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', fontWeight: 600 }}>
-            Recurring Issues ({warnings.length})
-          </span>
-          <span style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-xs)', marginLeft: 'auto' }}>
-            {open ? '▲' : '▼'}
-          </span>
-        </button>
-        {open && (
-          <ul style={{ margin: '8px 0 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {warnings.map((w, i) => (
-              <li key={i} style={{ color: 'var(--color-text-secondary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', lineHeight: 1.5 }}>{w}</li>
-            ))}
-          </ul>
-        )}
-      </CardBody>
-    </Card>
+    <div style={{ background: bg, borderLeft: `3px solid ${color}`, borderRadius: 'var(--radius-md)', border: `1px solid ${color}33` }}>
+      <button onClick={() => setOpen(o => !o)} style={{
+        width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer',
+        display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px',
+      }}>
+        <span style={{ color, fontWeight: 600, fontSize: 'var(--text-sm)', fontFamily: 'var(--font-sans)', flex: 1 }}>{title}</span>
+        <span style={{ color: 'var(--color-text-muted)', fontSize: 10 }}>{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <ul style={{ margin: '0 0 8px', paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 3 }}>
+          {items.map((item, i) => (
+            <li key={i} style={{ color: 'var(--color-text-secondary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', lineHeight: 1.5 }}>{item}</li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 
@@ -591,10 +582,12 @@ export function SprintPlannerPage() {
       )}
 
       {warnings.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 16 }}>
-          {warnings.map((w, i) => (
-            <Alert key={i} variant="warning">{w}</Alert>
-          ))}
+        <div style={{ marginBottom: 16 }}>
+          <CollapsibleNotices
+            title={`${warnings.length} planning note${warnings.length !== 1 ? 's' : ''}`}
+            items={warnings}
+            defaultOpen={warnings.length <= 2}
+          />
         </div>
       )}
 
@@ -643,27 +636,23 @@ export function SprintPlannerPage() {
       {plan?.enrichmentStatus && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
 
-          {/* Scope Check status */}
+          {/* Scope Check */}
           {plan.enrichmentStatus.scopeCop === 'all_ready' && (
             <Alert variant="success">All tickets scope-ready</Alert>
           )}
-          {plan.enrichmentStatus.scopeCop === 'has_issues' && (plan.scopeWarnings ?? []).map(w => (
-            <Alert key={w.ticketId} variant="warning" title={w.ticketId}>
-              {w.status}
-              {w.issues.length > 0 && (
-                <span style={{ color: 'var(--color-text-secondary)', marginLeft: 8 }}>{w.issues.join(' · ')}</span>
-              )}
-            </Alert>
-          ))}
+          {plan.enrichmentStatus.scopeCop === 'has_issues' && (plan.scopeWarnings ?? []).length > 0 && (
+            <CollapsibleNotices
+              title={`Scope: ${(plan.scopeWarnings ?? []).length} ticket${(plan.scopeWarnings ?? []).length !== 1 ? 's' : ''} need work`}
+              items={(plan.scopeWarnings ?? []).map(w => `${w.ticketId} — ${w.status}${w.issues.length > 0 ? ' · ' + w.issues.join(' · ') : ''}`)}
+              defaultOpen={(plan.scopeWarnings ?? []).length <= 3}
+            />
+          )}
 
-          {/* Dependency Radar status */}
+          {/* Dependency Radar */}
           {canScanDependencies && plan.enrichmentStatus.dependencyRadar === 'not_scanned' && (
             <Alert variant="warning">
               Dependencies not scanned —{' '}
-              <button
-                onClick={() => navigate('/app/dependency-radar')}
-                style={{ background: 'transparent', border: 'none', color: 'var(--color-warning)', cursor: 'pointer', fontSize: 'var(--text-sm)', padding: 0, textDecoration: 'underline', fontFamily: 'var(--font-sans)' }}
-              >
+              <button onClick={() => navigate('/app/dependency-radar')} style={{ background: 'transparent', border: 'none', color: 'var(--color-warning)', cursor: 'pointer', fontSize: 'var(--text-sm)', padding: 0, textDecoration: 'underline', fontFamily: 'var(--font-sans)' }}>
                 run Dependency Radar
               </button>
             </Alert>
@@ -671,21 +660,21 @@ export function SprintPlannerPage() {
           {plan.enrichmentStatus.dependencyRadar === 'no_risks' && (
             <Alert variant="success">No dependency risks</Alert>
           )}
-          {plan.enrichmentStatus.dependencyRadar === 'has_risks' && (plan.dependencyWarnings ?? []).map(w => (
-            <Alert key={w.ticketId} variant="danger" title={`${w.ticketId} — ${w.riskLevel} risk`}>
-              {w.description && <span>{w.description}</span>}
-              <button
-                onClick={() => navigate('/app/dependency-radar')}
-                style={{ background: 'transparent', border: 'none', color: 'var(--color-danger)', cursor: 'pointer', fontSize: 'var(--text-xs)', padding: 0, marginLeft: 8, textDecoration: 'underline', fontFamily: 'var(--font-sans)' }}
-              >
-                View Radar
-              </button>
-            </Alert>
-          ))}
+          {plan.enrichmentStatus.dependencyRadar === 'has_risks' && (plan.dependencyWarnings ?? []).length > 0 && (
+            <CollapsibleNotices
+              title={`Dependencies: ${(plan.dependencyWarnings ?? []).length} risk${(plan.dependencyWarnings ?? []).length !== 1 ? 's' : ''} found`}
+              items={(plan.dependencyWarnings ?? []).map(w => `${w.ticketId} (${w.riskLevel} risk)${w.description ? ' — ' + w.description : ''}`)}
+              variant="danger"
+              defaultOpen={(plan.dependencyWarnings ?? []).length <= 3}
+            />
+          )}
 
-          {/* Retro Patterns panel */}
+          {/* Retro Patterns */}
           {plan.enrichmentStatus.retroPatterns === 'has_patterns' && (plan.historicalWarnings ?? []).length > 0 && (
-            <RecurringIssuesPanel warnings={plan.historicalWarnings ?? []} />
+            <CollapsibleNotices
+              title={`Recurring Issues (${(plan.historicalWarnings ?? []).length})`}
+              items={plan.historicalWarnings ?? []}
+            />
           )}
         </div>
       )}

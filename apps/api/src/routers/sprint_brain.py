@@ -159,9 +159,13 @@ async def _get_developer_profiles(team_id: str, db: AsyncSession) -> list[dict]:
     Uses per-developer velocity records when available; falls back to
     team average velocity divided equally across active developers (cold start).
     """
-    developers = (await db.scalars(
+    import re as _re
+    _jira_id_re = _re.compile(r'^user_[a-zA-Z0-9]+$', _re.ASCII)
+
+    all_devs = (await db.scalars(
         select(Developer).where(Developer.team_id == team_id, Developer.is_active.is_(True))
     )).all()
+    developers = [d for d in all_devs if not _jira_id_re.match(d.name or '')]
 
     if not developers:
         return []

@@ -40,6 +40,27 @@ from src.services.encryption import decrypt, encrypt
 router = APIRouter(prefix="/api/integrations/jira", tags=["jira"])
 
 
+def _run_sync_in_process(team_id: str) -> None:
+    """Wrapper that runs sync_jira_team in the current thread and surfaces errors.
+
+    sync_jira_team is a bind=True Celery task whose except branch calls
+    self.retry(), which raises a Retry exception. Outside a Celery worker there
+    is nothing to handle that Retry — it propagates into FastAPI BackgroundTasks
+    and disappears silently, leaving the user staring at a "Sync" button that
+    never completes. Catching all exceptions here turns silent failures into
+    log lines that name the team and the actual cause.
+    """
+    import logging as _bg_log
+    from src.integrations.jira.sync import sync_jira_team
+    _log = _bg_log.getLogger(__name__)
+    try:
+        sync_jira_team(team_id)
+    except Exception as exc:
+        _log.exception(
+            "in-process Jira sync failed for team %s: %s", team_id, exc,
+        )
+
+
 @router.get("/connect")
 async def jira_connect(
     return_to: str = Query(default="/onboarding"),
@@ -565,7 +586,7 @@ async def save_board_selection(
             "board-selection: Celery unavailable (%s); falling back to in-process sync for team %s",
             exc, team_id_str,
         )
-        background_tasks.add_task(sync_jira_team, team_id_str)
+        background_tasks.add_task(_run_sync_in_process, team_id_str)
 
     return {"saved": True}
 
@@ -654,8 +675,7 @@ async def trigger_sync(
     user_id: str = Depends(get_current_user_id),
 ):
     """Run Jira sync in a background thread; returns immediately."""
-    from src.integrations.jira.sync import sync_jira_team
-    background_tasks.add_task(sync_jira_team, team_id)
+    background_tasks.add_task(_run_sync_in_process, team_id)
     return {"status": "syncing"}
 
 

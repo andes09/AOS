@@ -143,7 +143,7 @@ async def jira_callback(
 
     await db.commit()
 
-    frontend_base = settings.frontend_url.split(",")[0].strip()
+    frontend_base = settings.frontend_url.split(",")[0].strip().rstrip("/")
     if len(connection_ids) == 1:
         cid = connection_ids[0].split("|")[0]
         conn_obj = await db.get(JiraConnection, uuid.UUID(cid))

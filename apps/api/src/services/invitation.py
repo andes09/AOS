@@ -107,4 +107,4 @@ async def accept_invitation(token: str, clerk_user_id: str, db: AsyncSession) ->
 
 
 def build_invite_link(token: str, frontend_base_url: str) -> str:
-    return f"{frontend_base_url}/invite?token={token}"
+    return f"{frontend_base_url.rstrip('/')}/invite?token={token}"

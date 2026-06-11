@@ -55,8 +55,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     # layer and reach the browser without CORS headers — surfacing as a
     # misleading "blocked by CORS policy" error. Re-add them here so the real
     # 500 is visible to the frontend.
+    import re as _re
     origin = request.headers.get("origin")
-    if origin and origin in settings.allowed_origins:
+    _railway_re = r"https://.*\.railway\.app"
+    if origin and (origin in settings.allowed_origins or _re.fullmatch(_railway_re, origin)):
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Vary"] = "Origin"

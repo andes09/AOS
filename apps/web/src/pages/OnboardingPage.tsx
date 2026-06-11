@@ -970,8 +970,8 @@ function ReviewMemberRow({ member }: { member: Member }) {
   )
 }
 
-function ReviewStep({ teamName, boardName, members, onBack, onDone, saving }: {
-  teamName: string; boardName: string; members: Member[]; onBack: () => void; onDone: () => void; saving: boolean
+function ReviewStep({ teamName, boardName, members, onBack, onDone, saving, error }: {
+  teamName: string; boardName: string; members: Member[]; onBack: () => void; onDone: () => void; saving: boolean; error?: string | null
 }) {
   const included = members.filter(m => m.included !== false)
   const totalCap = included.reduce((s, m) => s + (Number(m.capacity) || 0), 0)
@@ -1008,12 +1008,18 @@ function ReviewStep({ teamName, boardName, members, onBack, onDone, saving }: {
         <strong style={{ color: C.accent }}>Privacy by default.</strong> Individual velocity data is visible only to each developer. Team leads see aggregate trends only — never used for performance reviews.
       </div>
 
+      {error && (
+        <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#dc2626' }}>
+          <strong>Couldn't save:</strong> {error}
+        </div>
+      )}
+
       <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 4 }}>
         <Btn variant="ghost" onClick={onBack} disabled={saving}>← Back</Btn>
         <Btn size="lg" onClick={onDone} disabled={saving} style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}>
           {saving ? (
             <><span style={{ width: 14, height: 14, border: '2px solid rgba(255,255,255,0.5)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.8s linear infinite' }} /> Saving…</>
-          ) : <>Sync sprint history →</>}
+          ) : error ? <>Retry →</> : <>Sync sprint history →</>}
         </Btn>
       </div>
     </div>
@@ -1093,6 +1099,7 @@ export function OnboardingPage() {
   const [boardName, setBoardName] = useState('')
   const [members, setMembers] = useState<Member[]>([])
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   // Clear the OAuth params from the URL so they don't linger.
   useEffect(() => {
@@ -1117,6 +1124,7 @@ export function OnboardingPage() {
 
   async function handleDone() {
     setSaving(true)
+    setSaveError(null)
     try {
       const included = members.filter(m => m.included !== false)
       await post('/api/onboarding/confirm-team', {
@@ -1131,8 +1139,10 @@ export function OnboardingPage() {
           email: m.email || null,
         })),
       })
-    } catch {
-      // best-effort — navigate regardless
+    } catch (err) {
+      setSaving(false)
+      setSaveError(err instanceof Error ? err.message : 'Failed to save team. Please try again.')
+      return
     }
     setSaving(false)
     setStep(99)
@@ -1179,6 +1189,7 @@ export function OnboardingPage() {
               onBack={() => setStep(1)}
               onDone={handleDone}
               saving={saving}
+              error={saveError}
             />
           )}
           {step === 99 && <DoneStep />}

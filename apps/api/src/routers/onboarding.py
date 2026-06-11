@@ -192,7 +192,7 @@ async def _get_jira_client(org: Organization, db: AsyncSession) -> JiraClient:
         new_tokens = await refresh_access_token(refresh_token)
         access_token = new_tokens["access_token"]
 
-    return JiraClient(cloud_id=conn.cloud_id, access_token=access_token)
+    return JiraClient(cloud_id=conn.jira_cloud_id, access_token=access_token)
 
 
 # ---------------------------------------------------------------------------
@@ -337,33 +337,41 @@ async def confirm_team(
     )).all()
     by_name = {d.name: d for d in existing_devs}
 
-    upserted = 0
-    for m in body.members:
-        dev = by_name.get(m.name)
-        if dev is None:
-            dev = Developer(
-                id=uuid.uuid4(),
-                team_id=team.id,
-                name=m.name,
-            )
-            db.add(dev)
-        if m.email is not None:
-            dev.email = m.email
-        if m.role is not None:
-            dev.role = m.role
-        if m.seniority is not None:
-            dev.seniority = m.seniority
-        if m.capacity is not None:
-            dev.capacity_hours_per_week = m.capacity
-        if m.strengths is not None:
-            dev.domain_strengths = ",".join(m.strengths)
-        if m.meetings is not None:
-            dev.meeting_hours_bucket = m.meetings
-        upserted += 1
-
+    # Mark onboarding complete first — this is the critical operation.
+    # Developer profile upserts are best-effort; a DB schema gap must never
+    # prevent the user from accessing the app.
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     org.onboarding_completed_at = now
     await db.commit()
+
+    upserted = 0
+    try:
+        for m in body.members:
+            dev = by_name.get(m.name)
+            if dev is None:
+                dev = Developer(
+                    id=uuid.uuid4(),
+                    team_id=team.id,
+                    name=m.name,
+                )
+                db.add(dev)
+            if m.email is not None:
+                dev.email = m.email
+            if m.role is not None:
+                dev.role = m.role
+            if m.seniority is not None:
+                dev.seniority = m.seniority
+            if m.capacity is not None:
+                dev.capacity_hours_per_week = m.capacity
+            if m.strengths is not None:
+                dev.domain_strengths = ",".join(m.strengths)
+            if m.meetings is not None:
+                dev.meeting_hours_bucket = m.meetings
+            upserted += 1
+        await db.commit()
+    except Exception as exc:
+        logger.warning("confirm_team: developer upsert failed (non-critical): %s", exc)
+        await db.rollback()
 
     if team.jira_board_id:
         background_tasks.add_task(_run_identifier_scan_bg, team.id, org.id)

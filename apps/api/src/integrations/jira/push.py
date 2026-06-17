@@ -1,21 +1,13 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.developer import Developer, TeamMember
+from src.models.developer import Developer
 
 
 async def resolve_jira_account_id(developer_id: str, team_id: str, db: AsyncSession) -> str | None:
-    """
-    Joins Developer → TeamMember on email within the same team.
-    Canonical join: Developer.email == TeamMember.email AND TeamMember.team_id == team_id
-    Returns jira_account_id or None if no match.
-    """
+    """Return the Jira account ID for a developer, or None if not linked."""
     result = await db.execute(
-        select(TeamMember.jira_account_id)
-        .join(Developer, Developer.email == TeamMember.email)
-        .where(Developer.id == developer_id)
-        .where(TeamMember.team_id == team_id)
-        .limit(1)
+        select(Developer.jira_account_id)
+        .where(Developer.id == developer_id, Developer.team_id == team_id)
     )
-    row = result.scalar_one_or_none()
-    return row
+    return result.scalar_one_or_none()

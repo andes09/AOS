@@ -396,19 +396,19 @@ def sync_jira_sprint(self, team_id: str, jira_sprint_id: str):
 # ---------------------------------------------------------------------------
 
 def _build_member_map(db: Session, team) -> dict[str, uuid.UUID]:
-    """Return {jira_account_id: TeamMember.id} for the team.
+    """Return {jira_account_id: Developer.id} for the team.
 
     Called once per sync after _upsert_team_members so every sprint's issue
     upsert can resolve assignees with a dict lookup instead of a per-ticket
     SELECT.
     """
-    from src.models.developer import TeamMember
-    rows = db.execute(select(TeamMember).where(TeamMember.team_id == team.id)).scalars().all()
-    return {m.jira_account_id: m.id for m in rows if m.jira_account_id}
+    from src.models.developer import Developer
+    rows = db.execute(select(Developer).where(Developer.team_id == team.id)).scalars().all()
+    return {d.jira_account_id: d.id for d in rows if d.jira_account_id}
 
 
 def _upsert_team_members(db: Session, team, jira_users: list[dict]):
-    from src.models.developer import TeamMember
+    from src.models.developer import Developer
 
     for user in jira_users:
         account_id = user.get("accountId")
@@ -416,18 +416,21 @@ def _upsert_team_members(db: Session, team, jira_users: list[dict]):
             continue
         display_name = user.get("displayName", account_id)
         email = user.get("emailAddress")
-        # Use ON CONFLICT DO UPDATE so concurrent Celery workers syncing the
-        # same team don't race on the unique (team_id, jira_account_id) index.
-        stmt = pg_insert(TeamMember).values(
+        # ON CONFLICT on the partial unique index (team_id, jira_account_id)
+        # WHERE jira_account_id IS NOT NULL — safe for concurrent Celery workers.
+        stmt = pg_insert(Developer).values(
             id=uuid.uuid4(),
             team_id=team.id,
             jira_account_id=account_id,
-            display_name=display_name,
+            name=display_name,
             email=email,
+            is_active=True,
+            app_role="developer",
         ).on_conflict_do_update(
             index_elements=["team_id", "jira_account_id"],
+            index_where=Developer.jira_account_id.isnot(None),
             set_={
-                "display_name": display_name,
+                "name": display_name,
                 "email": email,
             },
         )
@@ -485,7 +488,7 @@ def _upsert_sprint(db: Session, team, jira_sprint: dict):
 
 def _upsert_issues(db: Session, team, sprint, jira_issues: list[dict], member_map: dict | None = None):
     from src.models.ticket import Ticket, TicketStatus
-    from src.models.developer import TeamMember
+    from src.models.developer import Developer
 
     for issue in jira_issues:
         jira_issue_id = issue["id"]
@@ -499,14 +502,14 @@ def _upsert_issues(db: Session, team, sprint, jira_issues: list[dict], member_ma
             if member_map is not None:
                 assignee_id = member_map.get(account_id)
             else:
-                member = db.execute(
-                    select(TeamMember).where(
-                        TeamMember.team_id == team.id,
-                        TeamMember.jira_account_id == account_id,
+                dev = db.execute(
+                    select(Developer).where(
+                        Developer.team_id == team.id,
+                        Developer.jira_account_id == account_id,
                     )
                 ).scalar_one_or_none()
-                if member:
-                    assignee_id = member.id
+                if dev:
+                    assignee_id = dev.id
 
         status_name = fields.get("status", {}).get("name", "To Do")
         ticket_status_str = _map_jira_status(status_name)
@@ -571,7 +574,7 @@ def _upsert_backlog_issues(db: Session, team, jira_issues: list[dict], member_ma
     in backlog (spillover) gets its sprint_id nulled out by this path.
     """
     from src.models.ticket import Ticket, TicketStatus
-    from src.models.developer import TeamMember
+    from src.models.developer import Developer
 
     for issue in jira_issues:
         jira_issue_id = issue["id"]
@@ -584,14 +587,14 @@ def _upsert_backlog_issues(db: Session, team, jira_issues: list[dict], member_ma
             if member_map is not None:
                 assignee_id = member_map.get(account_id)
             else:
-                member = db.execute(
-                    select(TeamMember).where(
-                        TeamMember.team_id == team.id,
-                        TeamMember.jira_account_id == account_id,
+                dev = db.execute(
+                    select(Developer).where(
+                        Developer.team_id == team.id,
+                        Developer.jira_account_id == account_id,
                     )
                 ).scalar_one_or_none()
-                if member:
-                    assignee_id = member.id
+                if dev:
+                    assignee_id = dev.id
 
         status_name = fields.get("status", {}).get("name", "To Do")
         ticket_status_str = _map_jira_status(status_name)

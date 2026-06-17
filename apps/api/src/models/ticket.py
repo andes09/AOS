@@ -21,7 +21,7 @@ class Ticket(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     sprint_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("sprints.id"), nullable=True, index=True)
     team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id"), index=True)
-    assignee_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("team_members.id"), nullable=True, index=True)
+    assignee_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("developers.id", ondelete="SET NULL"), nullable=True, index=True)
     jira_issue_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     jira_issue_key: Mapped[str | None] = mapped_column(String(50), nullable=True)
     title: Mapped[str] = mapped_column(Text)
@@ -38,4 +38,4 @@ class Ticket(Base):
 
     sprint: Mapped["Sprint"] = relationship()
     team: Mapped["Team"] = relationship()
-    assignee: Mapped["TeamMember | None"] = relationship(back_populates="tickets")
+    assignee: Mapped["Developer | None"] = relationship(back_populates="tickets")

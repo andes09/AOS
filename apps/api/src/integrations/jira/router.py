@@ -393,9 +393,9 @@ async def get_team_members(
     run yet), fetches users from Jira inline and upserts them first.
     """
     import logging as _logging
-    from sqlalchemy import func
+    from sqlalchemy import func, update as sa_update
     from sqlalchemy.dialects.postgresql import insert as pg_insert
-    from src.models.developer import TeamMember
+    from src.models.developer import Developer
     from src.models.ticket import Ticket
 
     try:
@@ -445,35 +445,50 @@ async def get_team_members(
         if not account_id:
             continue
         fresh_account_ids.add(account_id)
-        stmt = pg_insert(TeamMember).values(
+        display_name = user.get("displayName", account_id)
+        email = user.get("emailAddress")
+        stmt = pg_insert(Developer).values(
             id=uuid.uuid4(),
             team_id=team.id,
             jira_account_id=account_id,
-            display_name=user.get("displayName", account_id),
-            email=user.get("emailAddress"),
+            name=display_name,
+            email=email,
+            is_active=True,
+            app_role="developer",
         ).on_conflict_do_update(
             index_elements=["team_id", "jira_account_id"],
-            set_={
-                "display_name": user.get("displayName", account_id),
-                "email": user.get("emailAddress"),
-            },
+            index_where=Developer.jira_account_id.isnot(None),
+            set_={"name": display_name, "email": email},
         )
         await db.execute(stmt)
 
-    # Remove TeamMembers that are no longer returned by Jira (service accounts
-    # that were stored before accountType filtering was in place).
+    # Handle accounts no longer returned by Jira (bot/service accounts removed):
+    # — Jira-only rows (no Clerk account) are deleted entirely.
+    # — Rows with a Clerk account just have their jira_account_id nulled out.
     if fresh_account_ids:
         await db.execute(
-            delete(TeamMember).where(
-                TeamMember.team_id == team.id,
-                TeamMember.jira_account_id.isnot(None),
-                TeamMember.jira_account_id.notin_(fresh_account_ids),
+            delete(Developer).where(
+                Developer.team_id == team.id,
+                Developer.jira_account_id.isnot(None),
+                Developer.jira_account_id.notin_(fresh_account_ids),
+                Developer.clerk_user_id.is_(None),
             )
+        )
+        await db.execute(
+            sa_update(Developer).where(
+                Developer.team_id == team.id,
+                Developer.jira_account_id.isnot(None),
+                Developer.jira_account_id.notin_(fresh_account_ids),
+                Developer.clerk_user_id.isnot(None),
+            ).values(jira_account_id=None)
         )
     await db.commit()
 
     existing = (await db.scalars(
-        select(TeamMember).where(TeamMember.team_id == team.id)
+        select(Developer).where(
+            Developer.team_id == team.id,
+            Developer.jira_account_id.isnot(None),
+        )
     )).all()
 
     # Build issue counts per member.
@@ -486,14 +501,14 @@ async def get_team_members(
 
     return [
         {
-            "id": str(m.id),
-            "name": m.display_name,
-            "handle": m.display_name.lower().replace(" ", "."),
-            "email": m.email,
-            "jira_account_id": m.jira_account_id,
-            "issues": issue_counts.get(m.id, 0),
+            "id": str(d.id),
+            "name": d.name,
+            "handle": d.name.lower().replace(" ", "."),
+            "email": d.email,
+            "jira_account_id": d.jira_account_id,
+            "issues": issue_counts.get(d.id, 0),
         }
-        for m in existing
+        for d in existing
     ]
 
 

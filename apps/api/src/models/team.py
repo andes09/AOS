@@ -26,6 +26,5 @@ class Team(Base):
 
     organization: Mapped["Organization"] = relationship(back_populates="teams")
     developers: Mapped[list["Developer"]] = relationship(back_populates="team")
-    team_members: Mapped[list["TeamMember"]] = relationship(back_populates="team")
     sprints: Mapped[list["Sprint"]] = relationship(back_populates="team")
     sprint_alerts: Mapped[list["SprintAlert"]] = relationship(back_populates="team")

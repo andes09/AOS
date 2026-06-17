@@ -153,6 +153,7 @@ def _parse_date(iso_str: str | None) -> date | None:
     try:
         return datetime.fromisoformat(iso_str.rstrip("Z")).date()
     except (ValueError, AttributeError):
+        logger.warning("jira date parse failed raw=%r", iso_str)
         return None
 
 
@@ -162,7 +163,27 @@ def _parse_datetime(iso_str: str | None) -> datetime | None:
     try:
         return datetime.fromisoformat(iso_str.rstrip("Z"))
     except (ValueError, AttributeError):
+        logger.warning("jira datetime parse failed raw=%r", iso_str)
         return None
+
+
+def _write_sync_status(db: Session, team_id: str, **kwargs) -> None:
+    """Best-effort upsert of SyncStatus — never raises."""
+    try:
+        from src.models.sync_status import SyncStatus
+        team_uuid = uuid.UUID(team_id)
+        existing = db.get(SyncStatus, team_uuid)
+        if existing:
+            for k, v in kwargs.items():
+                setattr(existing, k, v)
+        else:
+            db.add(SyncStatus(team_id=team_uuid, **kwargs))
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
@@ -174,6 +195,9 @@ def sync_jira_team(self, team_id: str):
     t0 = time.monotonic()
     logger.info("[sync] team=%s starting full sync", team_id)
     db = _get_sync_session()
+    _write_sync_status(db, team_id, state="running", started_at=datetime.utcnow())
+    _n_members = 0
+    _n_tickets = 0
     try:
         team = db.get(Team, uuid.UUID(team_id))
         if not team:
@@ -207,6 +231,7 @@ def sync_jira_team(self, team_id: str):
             team_id, len(sprints), len(users), time.monotonic() - t_fetch,
         )
         _upsert_team_members(db, team, users)
+        _n_members = len(users)
 
         # Preload member map once — eliminates N×M per-ticket DB lookups
         member_map = _build_member_map(db, team)
@@ -235,6 +260,7 @@ def sync_jira_team(self, team_id: str):
         backlog_issues = results[-1]
 
         total_sprint_issues = sum(len(r) for r in all_sprint_issues)
+        _n_tickets = total_sprint_issues + len(backlog_issues)
         logger.info(
             "[sync] team=%s fetch done in %.1fs — %d sprint issues, %d backlog",
             team_id, time.monotonic() - t_fetch, total_sprint_issues, len(backlog_issues),
@@ -287,6 +313,8 @@ def sync_jira_team(self, team_id: str):
         )
         db.commit()
         logger.info("[sync] team=%s complete in %.1fs", team_id, time.monotonic() - t0)
+        _write_sync_status(db, team_id, state="complete", finished_at=datetime.utcnow(),
+                           tickets_synced=_n_tickets, members_synced=_n_members)
 
         # Warm ticket complexity cache in the background so the next plan
         # generation skips the Claude complexity call entirely.
@@ -303,6 +331,8 @@ def sync_jira_team(self, team_id: str):
 
     except Exception as exc:
         db.rollback()
+        _write_sync_status(db, team_id, state="failed", finished_at=datetime.utcnow(),
+                           error_code=type(exc).__name__[:50], error_message=str(exc)[:500])
         logger.exception("Jira sync failed for team %s: %s", team_id, exc)
         raise self.retry(exc=exc)
     finally:
@@ -396,19 +426,19 @@ def sync_jira_sprint(self, team_id: str, jira_sprint_id: str):
 # ---------------------------------------------------------------------------
 
 def _build_member_map(db: Session, team) -> dict[str, uuid.UUID]:
-    """Return {jira_account_id: TeamMember.id} for the team.
+    """Return {jira_account_id: Developer.id} for the team.
 
     Called once per sync after _upsert_team_members so every sprint's issue
     upsert can resolve assignees with a dict lookup instead of a per-ticket
     SELECT.
     """
-    from src.models.developer import TeamMember
-    rows = db.execute(select(TeamMember).where(TeamMember.team_id == team.id)).scalars().all()
-    return {m.jira_account_id: m.id for m in rows if m.jira_account_id}
+    from src.models.developer import Developer
+    rows = db.execute(select(Developer).where(Developer.team_id == team.id)).scalars().all()
+    return {d.jira_account_id: d.id for d in rows if d.jira_account_id}
 
 
 def _upsert_team_members(db: Session, team, jira_users: list[dict]):
-    from src.models.developer import TeamMember
+    from src.models.developer import Developer
 
     for user in jira_users:
         account_id = user.get("accountId")
@@ -416,18 +446,21 @@ def _upsert_team_members(db: Session, team, jira_users: list[dict]):
             continue
         display_name = user.get("displayName", account_id)
         email = user.get("emailAddress")
-        # Use ON CONFLICT DO UPDATE so concurrent Celery workers syncing the
-        # same team don't race on the unique (team_id, jira_account_id) index.
-        stmt = pg_insert(TeamMember).values(
+        # ON CONFLICT on the partial unique index (team_id, jira_account_id)
+        # WHERE jira_account_id IS NOT NULL — safe for concurrent Celery workers.
+        stmt = pg_insert(Developer).values(
             id=uuid.uuid4(),
             team_id=team.id,
             jira_account_id=account_id,
-            display_name=display_name,
+            name=display_name,
             email=email,
+            is_active=True,
+            app_role="developer",
         ).on_conflict_do_update(
             index_elements=["team_id", "jira_account_id"],
+            index_where=Developer.jira_account_id.isnot(None),
             set_={
-                "display_name": display_name,
+                "name": display_name,
                 "email": email,
             },
         )
@@ -485,7 +518,7 @@ def _upsert_sprint(db: Session, team, jira_sprint: dict):
 
 def _upsert_issues(db: Session, team, sprint, jira_issues: list[dict], member_map: dict | None = None):
     from src.models.ticket import Ticket, TicketStatus
-    from src.models.developer import TeamMember
+    from src.models.developer import Developer
 
     for issue in jira_issues:
         jira_issue_id = issue["id"]
@@ -499,14 +532,14 @@ def _upsert_issues(db: Session, team, sprint, jira_issues: list[dict], member_ma
             if member_map is not None:
                 assignee_id = member_map.get(account_id)
             else:
-                member = db.execute(
-                    select(TeamMember).where(
-                        TeamMember.team_id == team.id,
-                        TeamMember.jira_account_id == account_id,
+                dev = db.execute(
+                    select(Developer).where(
+                        Developer.team_id == team.id,
+                        Developer.jira_account_id == account_id,
                     )
                 ).scalar_one_or_none()
-                if member:
-                    assignee_id = member.id
+                if dev:
+                    assignee_id = dev.id
 
         status_name = fields.get("status", {}).get("name", "To Do")
         ticket_status_str = _map_jira_status(status_name)
@@ -571,7 +604,7 @@ def _upsert_backlog_issues(db: Session, team, jira_issues: list[dict], member_ma
     in backlog (spillover) gets its sprint_id nulled out by this path.
     """
     from src.models.ticket import Ticket, TicketStatus
-    from src.models.developer import TeamMember
+    from src.models.developer import Developer
 
     for issue in jira_issues:
         jira_issue_id = issue["id"]
@@ -584,14 +617,14 @@ def _upsert_backlog_issues(db: Session, team, jira_issues: list[dict], member_ma
             if member_map is not None:
                 assignee_id = member_map.get(account_id)
             else:
-                member = db.execute(
-                    select(TeamMember).where(
-                        TeamMember.team_id == team.id,
-                        TeamMember.jira_account_id == account_id,
+                dev = db.execute(
+                    select(Developer).where(
+                        Developer.team_id == team.id,
+                        Developer.jira_account_id == account_id,
                     )
                 ).scalar_one_or_none()
-                if member:
-                    assignee_id = member.id
+                if dev:
+                    assignee_id = dev.id
 
         status_name = fields.get("status", {}).get("name", "To Do")
         ticket_status_str = _map_jira_status(status_name)

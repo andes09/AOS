@@ -18,6 +18,12 @@ import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import './index.css'
 import { ApiError } from './lib/api'
+import * as Sentry from '@sentry/react'
+
+const sentryDsn = import.meta.env.VITE_SENTRY_DSN
+if (sentryDsn) {
+  Sentry.init({ dsn: sentryDsn, integrations: [Sentry.browserTracingIntegration()] })
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {

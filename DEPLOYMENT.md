@@ -88,6 +88,26 @@ Hotfix path: if a flag must be flipped urgently, commit directly to `release`, p
 | `omada_simulator`          | true  | false      | Reserved — surface not built yet   |
 | `onboarding`               | true  | false      | Reserved — surface not built yet   |
 
+## Environment Variables
+
+| Variable | Required | Description |
+| -------- | -------- | ----------- |
+| `DATABASE_URL` | yes | asyncpg connection string |
+| `CLERK_SECRET_KEY` | yes | Clerk backend secret |
+| `ANTHROPIC_API_KEY` | yes | Claude API key |
+| `ENCRYPTION_KEY` | yes | Fernet key for token encryption |
+| `SENTRY_DSN` | no | If set, enables Sentry error tracking (FastAPI + React). Set in Railway env vars for both the API and web services. `traces_sample_rate=0.1`. |
+| `VITE_SENTRY_DSN` | no | Same DSN value, exposed to the React frontend via Vite. |
+
+## CI
+
+GitHub Actions runs on every pull request and push to `main`.
+
+- **backend** job: `pytest apps/api/tests` with SQLite in-memory. Requires no external services.
+- **frontend** job: `pnpm build` + Playwright chromium smoke test. Uses `TEST_MODE=1` to mock Jira HTTP calls.
+
+See `.github/workflows/test.yml`.
+
 ## Common Issues
 
 ### CORS errors on a new environment

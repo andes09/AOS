@@ -73,7 +73,7 @@ export function JiraSyncControl() {
       }, 3000)
     } catch (err) {
       setSyncing(false)
-      setMessage(err instanceof Error ? err.message : 'Sync failed')
+      setMessage((err as any)?.response?.data?.detail ?? (err instanceof Error ? err.message : 'Sync failed'))
     }
   }
 

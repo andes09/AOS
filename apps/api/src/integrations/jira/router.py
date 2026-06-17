@@ -341,17 +341,11 @@ async def get_jira_boards(
         try:
             projects = await client.get_projects()
         except Exception as proj_exc:
-            proj_body = ""
             proj_resp = getattr(proj_exc, "response", None)
-            if proj_resp is not None:
-                try:
-                    proj_body = proj_resp.text[:500]
-                except Exception:
-                    pass
-            _log.warning(
-                "project fallback failed for %s: %s %s",
-                conn.jira_cloud_url, proj_exc, proj_body,
-            )
+            proj_status = getattr(proj_resp, "status_code", None) if proj_resp else None
+            if proj_status in (401, 403):
+                raise HTTPException(status_code=502, detail=f"Jira auth/scope error: {proj_status}")
+            _log.warning("project fallback failed for %s: %s", conn.jira_cloud_url, proj_exc)
             return []
 
         return [
@@ -373,7 +367,9 @@ async def get_jira_boards(
 
     all_boards = []
     for site_result in results:
-        if isinstance(site_result, list):
+        if isinstance(site_result, HTTPException):
+            raise site_result
+        elif isinstance(site_result, list):
             all_boards.extend(site_result)
         else:
             _log.warning("_boards_for_connection raised unexpectedly: %s", site_result)
@@ -393,9 +389,9 @@ async def get_team_members(
     run yet), fetches users from Jira inline and upserts them first.
     """
     import logging as _logging
-    from sqlalchemy import func
+    from sqlalchemy import func, update as sa_update
     from sqlalchemy.dialects.postgresql import insert as pg_insert
-    from src.models.developer import TeamMember
+    from src.models.developer import Developer
     from src.models.ticket import Ticket
 
     try:
@@ -445,35 +441,50 @@ async def get_team_members(
         if not account_id:
             continue
         fresh_account_ids.add(account_id)
-        stmt = pg_insert(TeamMember).values(
+        display_name = user.get("displayName", account_id)
+        email = user.get("emailAddress")
+        stmt = pg_insert(Developer).values(
             id=uuid.uuid4(),
             team_id=team.id,
             jira_account_id=account_id,
-            display_name=user.get("displayName", account_id),
-            email=user.get("emailAddress"),
+            name=display_name,
+            email=email,
+            is_active=True,
+            app_role="developer",
         ).on_conflict_do_update(
             index_elements=["team_id", "jira_account_id"],
-            set_={
-                "display_name": user.get("displayName", account_id),
-                "email": user.get("emailAddress"),
-            },
+            index_where=Developer.jira_account_id.isnot(None),
+            set_={"name": display_name, "email": email},
         )
         await db.execute(stmt)
 
-    # Remove TeamMembers that are no longer returned by Jira (service accounts
-    # that were stored before accountType filtering was in place).
+    # Handle accounts no longer returned by Jira (bot/service accounts removed):
+    # — Jira-only rows (no Clerk account) are deleted entirely.
+    # — Rows with a Clerk account just have their jira_account_id nulled out.
     if fresh_account_ids:
         await db.execute(
-            delete(TeamMember).where(
-                TeamMember.team_id == team.id,
-                TeamMember.jira_account_id.isnot(None),
-                TeamMember.jira_account_id.notin_(fresh_account_ids),
+            delete(Developer).where(
+                Developer.team_id == team.id,
+                Developer.jira_account_id.isnot(None),
+                Developer.jira_account_id.notin_(fresh_account_ids),
+                Developer.clerk_user_id.is_(None),
             )
+        )
+        await db.execute(
+            sa_update(Developer).where(
+                Developer.team_id == team.id,
+                Developer.jira_account_id.isnot(None),
+                Developer.jira_account_id.notin_(fresh_account_ids),
+                Developer.clerk_user_id.isnot(None),
+            ).values(jira_account_id=None)
         )
     await db.commit()
 
     existing = (await db.scalars(
-        select(TeamMember).where(TeamMember.team_id == team.id)
+        select(Developer).where(
+            Developer.team_id == team.id,
+            Developer.jira_account_id.isnot(None),
+        )
     )).all()
 
     # Build issue counts per member.
@@ -486,14 +497,14 @@ async def get_team_members(
 
     return [
         {
-            "id": str(m.id),
-            "name": m.display_name,
-            "handle": m.display_name.lower().replace(" ", "."),
-            "email": m.email,
-            "jira_account_id": m.jira_account_id,
-            "issues": issue_counts.get(m.id, 0),
+            "id": str(d.id),
+            "name": d.name,
+            "handle": d.name.lower().replace(" ", "."),
+            "email": d.email,
+            "jira_account_id": d.jira_account_id,
+            "issues": issue_counts.get(d.id, 0),
         }
-        for m in existing
+        for d in existing
     ]
 
 
@@ -588,7 +599,7 @@ async def save_board_selection(
         )
         background_tasks.add_task(_run_sync_in_process, team_id_str)
 
-    return {"saved": True}
+    return {"saved": True, "team_id": team_id_str}
 
 
 class BoardSwitchRequest(BaseModel):
@@ -700,4 +711,41 @@ async def get_sync_status(
         "last_synced_at": connection.last_synced_at.isoformat()
         if connection and connection.last_synced_at
         else None
+    }
+
+
+@router.get("/sync-status/{team_id}")
+async def get_team_sync_status(
+    team_id: str,
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return structured SyncStatus for a team (state, timestamps, counts)."""
+    from src.models.sync_status import SyncStatus
+
+    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+    if not org:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    try:
+        team_uuid = uuid.UUID(team_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid team_id")
+
+    team = await db.scalar(select(Team).where(Team.id == team_uuid, Team.organization_id == org.id))
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    row = await db.get(SyncStatus, team_uuid)
+    if not row:
+        return {"state": "unknown", "tickets_synced": 0, "members_synced": 0}
+
+    return {
+        "state": row.state,
+        "started_at": row.started_at.isoformat() if row.started_at else None,
+        "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+        "error_code": row.error_code,
+        "error_message": row.error_message,
+        "tickets_synced": row.tickets_synced,
+        "members_synced": row.members_synced,
     }

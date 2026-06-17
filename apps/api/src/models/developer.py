@@ -14,26 +14,16 @@ class AppRole(enum.Enum):
     ADMIN     = "admin"
 
 
-class TeamMember(Base):
-    """Jira-sourced team member, distinct from Clerk-registered Developer users."""
-    __tablename__ = "team_members"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id"), index=True)
-    jira_account_id: Mapped[str] = mapped_column(String(255), index=True)
-    display_name: Mapped[str] = mapped_column(String(255))
-    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
-
-    team: Mapped["Team"] = relationship(back_populates="team_members")
-    tickets: Mapped[list["Ticket"]] = relationship(back_populates="assignee")
-
-
 class Developer(Base):
     __tablename__ = "developers"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     team_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id"), index=True)
     clerk_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # Jira account ID — set when this developer is matched/synced from Jira.
+    # Partial unique index (team_id, jira_account_id) WHERE jira_account_id IS NOT NULL
+    # is enforced in the DB; NULLs here mean "no Jira account linked yet".
+    jira_account_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -54,3 +44,4 @@ class Developer(Base):
     team: Mapped["Team"] = relationship(back_populates="developers")
     velocity_profiles: Mapped[list["DeveloperVelocityProfile"]] = relationship(back_populates="developer")
     sprint_tickets: Mapped[list["SprintTicket"]] = relationship(back_populates="assignee")
+    tickets: Mapped[list["Ticket"]] = relationship(back_populates="assignee")

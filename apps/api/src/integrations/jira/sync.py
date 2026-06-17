@@ -340,21 +340,29 @@ def sync_jira_team(self, team_id: str):
 
 
 def _fire_sprint_close_hooks(team_id: str, closed_sprint_ids: list[uuid.UUID]) -> None:
-    """Best-effort Initiative A hooks. Opens its own AsyncSessionLocal per hook.
+    """Best-effort Initiative A hooks. Builds a per-call async engine so the
+    asyncpg connection binds to the loop we run the hooks on, not to whatever
+    loop happened to import ``src.database`` at app startup. Critical when this
+    runs from a FastAPI BackgroundTasks thread (the in-process onboarding sync
+    path): reusing ``database.AsyncSessionLocal`` there would hand back a
+    connection bound to uvicorn's main loop and hang.
+
     All exceptions logged and swallowed so sync results stay durable.
     """
-    from src.database import AsyncSessionLocal
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
     from src.services.identifier_refresh_service import refresh_after_sprint_close
     from src.services.plan_quality import persist_plan_quality
 
     loop = _get_or_create_event_loop()
+    hook_engine = create_async_engine(settings.database_url)
+    HookSession = async_sessionmaker(hook_engine, expire_on_commit=False)
 
     async def _run_refresh():
-        async with AsyncSessionLocal() as adb:
+        async with HookSession() as adb:
             await refresh_after_sprint_close(uuid.UUID(team_id), None, adb)
 
     async def _run_plan_quality(sprint_id: uuid.UUID):
-        async with AsyncSessionLocal() as adb:
+        async with HookSession() as adb:
             await persist_plan_quality(str(sprint_id), adb)
 
     try:
@@ -367,6 +375,11 @@ def _fire_sprint_close_hooks(team_id: str, closed_sprint_ids: list[uuid.UUID]) -
             loop.run_until_complete(_run_plan_quality(sid))
         except Exception:
             logger.exception("sprint_close_hook: persist_plan_quality failed for sprint %s", sid)
+
+    try:
+        loop.run_until_complete(hook_engine.dispose())
+    except Exception:
+        pass
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)

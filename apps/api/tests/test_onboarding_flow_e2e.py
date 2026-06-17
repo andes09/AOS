@@ -187,12 +187,17 @@ async def test_boards_project_fallback_401_raises_502(tmp_db):
 
 
 # ---------------------------------------------------------------------------
-# Step 4: board-selection with Celery down → in-process fallback
+# Step 4: board-selection always runs sync in-process (no silent Celery queue)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_board_selection_celery_fallback(tmp_db):
-    """When Celery is down, board-selection falls back to in-process sync."""
+    """board-selection schedules in-process sync regardless of Celery state.
+
+    Earlier design queued via .delay() and only fell back to in-process when
+    the broker raised — but that left tasks silently sitting in the queue
+    whenever the broker accepted the publish but no worker was consuming.
+    """
     async for db in app.dependency_overrides[get_db]():
         _, team, conn = await _seed_org_team_conn(db)
         conn_id = str(conn.id)

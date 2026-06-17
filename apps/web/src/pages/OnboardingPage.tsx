@@ -607,9 +607,10 @@ function ConnectScreen({ onConnected, onBack }: { onConnected: (id: string) => v
 // ─── BoardPicker ──────────────────────────────────────────────────────────────
 
 // ─── ScanningScreen ───────────────────────────────────────────────────────────
-function ScanningScreen({ boardId, boardName, boardKey, connectionId, onDone }: {
+function ScanningScreen({ boardId, boardName, boardKey, connectionId, onDone, onReset }: {
   boardId: string; boardName: string; boardKey: string; connectionId: string;
   onDone: (members: Member[]) => void
+  onReset: () => void
 }) {
   const { post, get } = useApi()
   const [done, setDone] = useState(0)
@@ -619,20 +620,52 @@ function ScanningScreen({ boardId, boardName, boardKey, connectionId, onDone }: 
 
   useEffect(() => {
     let cancelled = false
+    let pollTimer: ReturnType<typeof setInterval> | null = null
+
+    async function pollSyncStatus(teamId: string): Promise<void> {
+      return new Promise((resolve, reject) => {
+        let attempts = 0
+        pollTimer = setInterval(async () => {
+          if (cancelled) { if (pollTimer) clearInterval(pollTimer); resolve(); return }
+          attempts++
+          if (attempts > 60) { // 2 min timeout
+            if (pollTimer) clearInterval(pollTimer)
+            reject(new Error('Sync timed out — please try again'))
+            return
+          }
+          try {
+            const status = await get<{ state: string; error_message?: string }>(
+              `/api/integrations/jira/sync-status/${teamId}`
+            )
+            if (status.state === 'complete' || status.state === 'unknown') {
+              if (pollTimer) clearInterval(pollTimer)
+              resolve()
+            } else if (status.state === 'failed') {
+              if (pollTimer) clearInterval(pollTimer)
+              reject(new Error(status.error_message || 'Sync failed'))
+            }
+          } catch { /* network blip — keep polling */ }
+        }, 2000)
+      })
+    }
 
     async function run() {
       try {
         // Step 0 → 1: save board selection (triggers Celery sync in background)
         await new Promise(r => setTimeout(r, 420))
         if (cancelled) return
-        await post('/api/integrations/jira/board-selection', {
+        const sel = await post<{ saved: boolean; team_id?: string }>('/api/integrations/jira/board-selection', {
           connection_id: connectionId, board_id: boardId, project_key: boardKey,
         })
         if (cancelled) return
         setDone(1)
 
-        // Step 1 → 2: fetch team members (inline sync if none exist yet)
-        await new Promise(r => setTimeout(r, 460))
+        // Step 1 → 2: wait for background sync via polling
+        if (sel.team_id) {
+          await pollSyncStatus(sel.team_id)
+        } else {
+          await new Promise(r => setTimeout(r, 460))
+        }
         if (cancelled) return
         setDone(2)
 
@@ -660,12 +693,12 @@ function ScanningScreen({ boardId, boardName, boardKey, connectionId, onDone }: 
         }))
         onDone(members)
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Import failed')
+        if (!cancelled) setError((e as any)?.response?.data?.detail ?? (e instanceof Error ? e.message : 'Import failed'))
       }
     }
 
     run()
-    return () => { cancelled = true }
+    return () => { cancelled = true; if (pollTimer) clearInterval(pollTimer) }
   }, [retryKey])
 
   return (
@@ -698,7 +731,10 @@ function ScanningScreen({ boardId, boardName, boardKey, connectionId, onDone }: 
       {error && (
         <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '12px 16px', fontSize: 13, color: '#dc2626' }}>
           <strong>Import failed:</strong> {error}
-          <div style={{ marginTop: 8 }}><Btn size="sm" onClick={() => { setError(null); setDone(0); setRetryKey(k => k + 1) }}>Try again</Btn></div>
+          <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+            <Btn size="sm" onClick={() => { setError(null); setDone(0); setRetryKey(k => k + 1) }}>Try again</Btn>
+            <Btn size="sm" onClick={() => { if (window.confirm('Reset Jira connection and start over?')) onReset() }}>Reset connection</Btn>
+          </div>
         </div>
       )}
     </div>
@@ -708,9 +744,10 @@ function ScanningScreen({ boardId, boardName, boardKey, connectionId, onDone }: 
 // ─── ConnectFlow ──────────────────────────────────────────────────────────────
 type ConnectStage = 'connect' | 'board' | 'scanning'
 
-function ConnectFlowFull({ onImport, onBack, initialConnectionId }: {
+function ConnectFlowFull({ onImport, onBack, onReset, initialConnectionId }: {
   onImport: (members: Member[], boardId: string, boardName: string, boardKey: string) => void
   onBack: () => void
+  onReset: () => void
   initialConnectionId?: string
 }) {
   const [stage, setStage] = useState<ConnectStage>(initialConnectionId ? 'board' : 'connect')
@@ -740,6 +777,7 @@ function ConnectFlowFull({ onImport, onBack, initialConnectionId }: {
     <ScanningScreen
       boardId={boardId} boardName={boardName} boardKey={boardKey} connectionId={connectionId}
       onDone={members => onImport(members, boardId, boardName, boardKey)}
+      onReset={onReset}
     />
   )
 }
@@ -1141,7 +1179,7 @@ export function OnboardingPage() {
       })
     } catch (err) {
       setSaving(false)
-      setSaveError(err instanceof Error ? err.message : 'Failed to save team. Please try again.')
+      setSaveError((err as any)?.response?.data?.detail ?? (err instanceof Error ? err.message : 'Failed to save team. Please try again.'))
       return
     }
     setSaving(false)
@@ -1164,6 +1202,10 @@ export function OnboardingPage() {
             <ConnectFlowFull
               onImport={onImport}
               onBack={() => setStep(-1)}
+              onReset={async () => {
+                try { await post('/api/onboarding/reset', {}) } catch { /* best-effort */ }
+                setStep(-1)
+              }}
               initialConnectionId={oauthConnectionId ?? undefined}
             />
           )}

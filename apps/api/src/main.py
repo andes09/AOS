@@ -1,4 +1,5 @@
 import logging
+import os as _os
 from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -6,6 +7,12 @@ from src.config import settings
 from src.auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
+
+_sentry_dsn = _os.getenv("SENTRY_DSN")
+if _sentry_dsn:
+    import sentry_sdk
+    sentry_sdk.init(dsn=_sentry_dsn, traces_sample_rate=0.1, environment=_os.getenv("ENVIRONMENT", "development"))
+
 from src.routers import sprint_brain as sprint_brain_router
 from src.routers import velocity as velocity_router
 from src.routers import sprints as sprints_router

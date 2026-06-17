@@ -19,6 +19,7 @@ from src.models.recalibration_proposal import RecalibrationProposal, ProposalKin
 from src.models.ticket_revision import TicketRevision
 from src.models.oauth_state import OAuthState
 from src.models.ticket_complexity_cache import TicketComplexityCache
+from src.models.sync_status import SyncStatus
 
 __all__ = [
     "Organization",
@@ -60,4 +61,5 @@ __all__ = [
     "TicketRevision",
     "OAuthState",
     "TicketComplexityCache",
+    "SyncStatus",
 ]

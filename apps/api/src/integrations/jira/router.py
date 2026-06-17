@@ -341,17 +341,11 @@ async def get_jira_boards(
         try:
             projects = await client.get_projects()
         except Exception as proj_exc:
-            proj_body = ""
             proj_resp = getattr(proj_exc, "response", None)
-            if proj_resp is not None:
-                try:
-                    proj_body = proj_resp.text[:500]
-                except Exception:
-                    pass
-            _log.warning(
-                "project fallback failed for %s: %s %s",
-                conn.jira_cloud_url, proj_exc, proj_body,
-            )
+            proj_status = getattr(proj_resp, "status_code", None) if proj_resp else None
+            if proj_status in (401, 403):
+                raise HTTPException(status_code=502, detail=f"Jira auth/scope error: {proj_status}")
+            _log.warning("project fallback failed for %s: %s", conn.jira_cloud_url, proj_exc)
             return []
 
         return [
@@ -373,7 +367,9 @@ async def get_jira_boards(
 
     all_boards = []
     for site_result in results:
-        if isinstance(site_result, list):
+        if isinstance(site_result, HTTPException):
+            raise site_result
+        elif isinstance(site_result, list):
             all_boards.extend(site_result)
         else:
             _log.warning("_boards_for_connection raised unexpectedly: %s", site_result)
@@ -603,7 +599,7 @@ async def save_board_selection(
         )
         background_tasks.add_task(_run_sync_in_process, team_id_str)
 
-    return {"saved": True}
+    return {"saved": True, "team_id": team_id_str}
 
 
 class BoardSwitchRequest(BaseModel):
@@ -715,4 +711,41 @@ async def get_sync_status(
         "last_synced_at": connection.last_synced_at.isoformat()
         if connection and connection.last_synced_at
         else None
+    }
+
+
+@router.get("/sync-status/{team_id}")
+async def get_team_sync_status(
+    team_id: str,
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return structured SyncStatus for a team (state, timestamps, counts)."""
+    from src.models.sync_status import SyncStatus
+
+    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+    if not org:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    try:
+        team_uuid = uuid.UUID(team_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid team_id")
+
+    team = await db.scalar(select(Team).where(Team.id == team_uuid, Team.organization_id == org.id))
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    row = await db.get(SyncStatus, team_uuid)
+    if not row:
+        return {"state": "unknown", "tickets_synced": 0, "members_synced": 0}
+
+    return {
+        "state": row.state,
+        "started_at": row.started_at.isoformat() if row.started_at else None,
+        "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+        "error_code": row.error_code,
+        "error_message": row.error_message,
+        "tickets_synced": row.tickets_synced,
+        "members_synced": row.members_synced,
     }

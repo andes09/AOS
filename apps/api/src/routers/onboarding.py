@@ -379,6 +379,29 @@ async def confirm_team(
     return ConfirmTeamResponse(upserted=upserted, completed_at=now.isoformat())
 
 
+@onboarding_router.post("/reset")
+async def reset_onboarding(
+    _user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
+    _role: str = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset onboarding state so the org can reconnect Jira from scratch."""
+    from sqlalchemy import update, delete
+    from src.models.sync_status import SyncStatus
+
+    org, team = await _resolve_org_and_team(clerk_org_id, db)
+    await db.execute(
+        update(JiraConnection).where(JiraConnection.organization_id == org.id).values(is_active=False)
+    )
+    team.jira_board_id = None
+    team.jira_project_key = None
+    org.onboarding_completed_at = None
+    await db.execute(delete(SyncStatus).where(SyncStatus.team_id == team.id))
+    await db.commit()
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------------------
 # Invitations endpoints
 # ---------------------------------------------------------------------------

@@ -1,0 +1,63 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -e ".[dev]" aiosqlite
+      - name: Run tests
+        run: pytest tests/ -v --tb=short -x
+        env:
+          DATABASE_URL: sqlite+aiosqlite:///:memory:
+          DATABASE_URL_SYNC: sqlite:///:memory:
+          CLERK_SECRET_KEY: sk_test_dummy
+          CLERK_PUBLISHABLE_KEY: pk_test_dummy
+          CLERK_WEBHOOK_SECRET: whsec_dummy
+          ENCRYPTION_KEY: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          ANTHROPIC_API_KEY: sk-ant-dummy
+          REDIS_URL: redis://localhost:6379/0
+          ENVIRONMENT: test
+
+  frontend:
+    name: Frontend (build + Playwright)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - name: Install dependencies
+        run: pnpm install
+      - name: Build
+        run: pnpm build
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: pk_test_dummy
+          VITE_API_URL: http://localhost:8000
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install chromium --with-deps
+      - name: Run Playwright tests
+        run: pnpm exec playwright test
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: pk_test_dummy
+          VITE_API_URL: http://localhost:8000

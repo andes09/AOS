@@ -46,29 +46,51 @@ export function JiraSyncControl() {
     if (syncing) return
     setSyncing(true)
     setMessage(null)
-    const prevSyncedAt = status?.last_synced_at ?? null
     try {
       const org = await post<{ teamId: string }>('/api/organizations', { name: 'My Org' })
-      await post(`/api/integrations/jira/sync?team_id=${org.teamId}`, {})
+      const teamId = org.teamId
+      await post(`/api/integrations/jira/sync?team_id=${teamId}`, {})
 
+      // Poll the structured per-team status so we can distinguish running/complete/failed
+      // and surface the real error_message instead of timing out blindly.
       let attempts = 0
+      const MAX_ATTEMPTS = 100 // 100 * 3s = 5 min ceiling for a stuck "running" state
       pollRef.current = setInterval(async () => {
         attempts++
         try {
-          const s = await get<{ last_synced_at: string | null }>('/api/integrations/jira/sync-status')
-          if (s.last_synced_at && s.last_synced_at !== prevSyncedAt) {
+          const s = await get<{
+            state: 'running' | 'complete' | 'failed' | 'unknown'
+            error_code?: string | null
+            error_message?: string | null
+            tickets_synced?: number
+            members_synced?: number
+          }>(`/api/integrations/jira/sync-status/${teamId}`)
+
+          if (s.state === 'complete') {
             if (pollRef.current) clearInterval(pollRef.current)
             setSyncing(false)
             setMessage(null)
             fetchStatus()
+            return
+          }
+          if (s.state === 'failed') {
+            if (pollRef.current) clearInterval(pollRef.current)
+            setSyncing(false)
+            const detail = s.error_message?.trim()
+            setMessage(detail ? `Sync failed: ${detail}` : `Sync failed${s.error_code ? ` (${s.error_code})` : ''}`)
+            return
+          }
+          // running or unknown → keep polling, show progress hint if we have one
+          if (s.state === 'running' && ((s.tickets_synced ?? 0) > 0 || (s.members_synced ?? 0) > 0)) {
+            setMessage(`Syncing — ${s.tickets_synced ?? 0} tickets, ${s.members_synced ?? 0} members`)
           }
         } catch {
-          // keep polling
+          // network blip — keep polling
         }
-        if (attempts >= 20) {
+        if (attempts >= MAX_ATTEMPTS) {
           if (pollRef.current) clearInterval(pollRef.current)
           setSyncing(false)
-          setMessage('Sync taking longer than expected')
+          setMessage('Sync still running — check back in a minute or refresh')
         }
       }, 3000)
     } catch (err) {
@@ -102,7 +124,7 @@ export function JiraSyncControl() {
       <span
         title={status.last_synced_at ?? undefined}
         style={{
-          color: message ? 'var(--color-danger)' : 'var(--color-text-muted)',
+          color: message && !syncing ? 'var(--color-danger)' : 'var(--color-text-muted)',
           fontFamily: 'var(--font-sans)',
           fontSize: 'var(--text-xs)',
         }}

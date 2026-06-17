@@ -130,7 +130,7 @@ async def get_team_capacity_endpoint(
     sprint_id: str | None = Query(default=None),
     _user_id: str = Depends(get_current_user_id),
     clerk_org_id: str = Depends(get_current_org_id),
-    _role: str = Depends(require_role("lead")),
+    _role: str = Depends(require_role("developer")),
     db: AsyncSession = Depends(get_db),
 ):
     team = await _resolve_team(team_id, clerk_org_id, db)

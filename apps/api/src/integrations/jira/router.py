@@ -585,19 +585,19 @@ async def save_board_selection(
     await db.commit()
 
     import logging as _sync_log
-    from src.integrations.jira.sync import sync_jira_team
     team_id_str = str(team.id)
-    try:
-        sync_jira_team.delay(team_id_str)
-        _sync_log.getLogger(__name__).info("board-selection: queued initial sync for team %s", team_id_str)
-    except Exception as exc:
-        # Celery broker unreachable — fall back to in-process background task so
-        # the user gets their backlog synced without waiting for the 2am beat job.
-        _sync_log.getLogger(__name__).warning(
-            "board-selection: Celery unavailable (%s); falling back to in-process sync for team %s",
-            exc, team_id_str,
-        )
-        background_tasks.add_task(_run_sync_in_process, team_id_str)
+    # Always run the onboarding sync in-process. The previous Celery-first
+    # design only fell back to in-process when .delay() *raised* (broker
+    # unreachable). It did NOT catch the much more common failure: broker
+    # reachable but no worker consuming the queue (worker dyno crashed,
+    # pointed at a different REDIS_URL, or simply not deployed). In that
+    # case the message sat in Redis forever and the user stared at a
+    # spinner that never completed. The user is waiting in the UI here —
+    # running in-process is what we actually want.
+    background_tasks.add_task(_run_sync_in_process, team_id_str)
+    _sync_log.getLogger(__name__).info(
+        "board-selection: in-process sync scheduled for team %s", team_id_str,
+    )
 
     return {"saved": True, "team_id": team_id_str}
 

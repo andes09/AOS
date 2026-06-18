@@ -4,10 +4,37 @@ from src.config import settings
 
 JIRA_AUTH_URL = "https://auth.atlassian.com/authorize"
 JIRA_TOKEN_URL = "https://auth.atlassian.com/oauth/token"
+# Granular OAuth 2.0 scopes. Atlassian unified-Jira enforces granular scopes
+# for /rest/agile/1.0 — classic read:jira-work returns
+# {"code":401,"message":"Unauthorized; scope does not match"} on board calls
+# even though docs claim coverage. Mixing classic and granular on the same
+# OAuth app is rejected by the dev console, so we go fully granular.
 JIRA_SCOPES = " ".join([
-    "read:jira-work",
-    "write:jira-work",
-    "read:jira-user",
+    # --- Jira Platform (api/3) reads ---
+    "read:project:jira",            # GET /project/search
+    "read:issue:jira",              # GET /issue/{key}
+    "read:issue-details:jira",      # /issue/{key} with full field set + JQL search
+    "read:issue-meta:jira",         # issue metadata returned on reads
+    "read:issue-link:jira",         # issuelinks field
+    "read:issue-type:jira",         # issuetype on issue payloads
+    "read:status:jira",             # status on issue payloads
+    "read:field:jira",              # customfield_* references
+    "read:jql:jira",                # POST /search/jql
+    # --- Jira users ---
+    "read:user:jira",               # GET /users/search
+    "read:application-role:jira",   # user object enrichment
+    "read:group:jira",              # user object enrichment
+    "read:avatar:jira",             # user avatars
+    # --- Jira Platform writes ---
+    "write:issue:jira",             # PUT /issue/{key} (fields + assignee)
+    # --- Jira Software (Agile API) ---
+    # Issue payloads returned by these endpoints are covered by the
+    # platform-side read:issue:jira + read:issue-details:jira scopes above —
+    # there's no equivalent jira-software variant in Atlassian's catalog.
+    "read:board-scope:jira-software",      # GET /board, /board/{id}/backlog
+    "read:sprint:jira-software",           # GET /board/{id}/sprint, /sprint/{id}/issue
+    "write:sprint:jira-software",          # POST /sprint, POST /sprint/{id}/issue
+    # --- Refresh ---
     "offline_access",
 ])
 JIRA_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"

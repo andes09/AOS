@@ -76,15 +76,59 @@ class JiraClient:
         return issues
 
     async def get_projects(self) -> list[dict]:
-        r = await self._http.get(
-            f"{self.base_url}/project/search",
-            headers=self._headers(),
-            params={"maxResults": 50, "orderBy": "name"},
-        )
-        if not r.is_success:
-            logger.error("Jira project/search %s — body: %s", r.status_code, r.text[:500])
-        r.raise_for_status()
-        return r.json().get("values", [])
+        """Discover projects by listing boards and deduping by project.
+
+        Originally hit /rest/api/3/project/search, but Atlassian's edge denied
+        that call with FAILURE_CLIENT_SCOPE_CHECK ("scope does not match")
+        even with every documented and undocumented project-* granular scope
+        granted — the platform-side endpoint appears broken for free-tier 3LO
+        apps. /rest/agile/1.0/board works with the same OAuth grant and each
+        board carries its parent project's id/key/name in `location`, so we
+        dedupe by project key to get the equivalent list.
+
+        Side effect: only projects with at least one board appear. That's
+        exactly the subset onboarding needs (it requires a board), so this
+        also removes a class of dead-end where users picked a Work-Management
+        project then hit "no boards" at the next step.
+
+        Returns dicts shaped { "id": str, "key": str, "name": str } to match
+        the prior /project/search response shape.
+        """
+        boards = []
+        start_at = 0
+        while True:
+            r = await self._http.get(
+                f"{self.agile_base_url}/board",
+                headers=self._headers(),
+                params={"maxResults": 50, "startAt": start_at},
+            )
+            if not r.is_success:
+                logger.error(
+                    "Jira agile/board (for project discovery) %s — body: %s",
+                    r.status_code, r.text[:500],
+                )
+            r.raise_for_status()
+            data = r.json()
+            batch = data.get("values", [])
+            boards.extend(batch)
+            if data.get("isLast", True) or not batch:
+                break
+            start_at += len(batch)
+
+        seen_keys: set[str] = set()
+        projects: list[dict] = []
+        for b in boards:
+            loc = b.get("location") or {}
+            key = loc.get("projectKey")
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            projects.append({
+                "id": str(loc.get("projectId", "")),
+                "key": key,
+                "name": loc.get("projectName") or loc.get("displayName") or key,
+            })
+        return projects
 
     async def get_boards(self) -> list[dict]:
         """GET /agile/1.0/board — returns all boards visible to the token.

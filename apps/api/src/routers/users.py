@@ -9,20 +9,28 @@ GET /api/users/me/role
 
 POST /api/users/role
     Admin-only: update another developer's app role by clerkUserId.
+
+DELETE /api/users/me
+    Delete the authenticated user's account and personal data.
 """
+import logging
 import uuid
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.auth import get_current_user_id, get_current_org_id
+from src.auth import _clerk, get_current_user_id, get_current_org_id
 from src.auth_roles import require_role
 from src.database import get_db
 from src.models.developer import Developer
 from src.models.organization import Organization
+from src.models.sprint import SprintTicket
 from src.models.team import Team
+from src.models.velocity import DeveloperVelocityProfile
+
+logger = logging.getLogger(__name__)
 
 users_router = APIRouter(tags=["users"])
 
@@ -105,6 +113,46 @@ async def patch_my_role(
     await db.commit()
     await db.refresh(developer)
     return RoleResponse(user_id=user_id, app_role=developer.app_role)
+
+
+@users_router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_my_account(
+    user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete the authenticated user's Developer row + personal data, then delete the Clerk user."""
+    developer = await db.scalar(
+        select(Developer)
+        .join(Team, Developer.team_id == Team.id)
+        .join(Organization, Team.organization_id == Organization.id)
+        .where(
+            Organization.clerk_org_id == clerk_org_id,
+            Developer.clerk_user_id == user_id,
+        )
+    )
+
+    if developer is not None:
+        # FKs without ondelete: clear assignee on sprint_tickets, drop velocity profiles.
+        await db.execute(
+            update(SprintTicket)
+            .where(SprintTicket.assignee_id == developer.id)
+            .values(assignee_id=None)
+        )
+        await db.execute(
+            delete(DeveloperVelocityProfile).where(DeveloperVelocityProfile.developer_id == developer.id)
+        )
+        # Remaining FKs (team_access, capacity, tickets, sprint_plan_override,
+        # recalibration_proposal) use ondelete CASCADE or SET NULL.
+        await db.delete(developer)
+        await db.commit()
+
+    try:
+        await _clerk.users.delete_async(user_id=user_id)
+    except Exception:
+        logger.exception("Failed to delete Clerk user %s after local purge", user_id)
+
+    return None
 
 
 @users_router.post("/role", response_model=RoleResponse)

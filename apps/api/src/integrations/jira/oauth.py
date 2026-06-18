@@ -40,8 +40,6 @@ JIRA_SCOPES = " ".join([
     "read:application-role:jira",
     "read:group:jira",
     "read:avatar:jira",
-    "read:me",
-    "read:account",
     "read:permission:jira",
     # --- Jira Platform writes ---
     "write:issue:jira",

@@ -55,26 +55,39 @@ def _log_scope_diagnostics(
     endpoint_label: str,
     conn: "JiraConnection",
     body_text: str,
+    resp=None,
 ) -> None:
     """When Jira returns "scope does not match", log granted vs. expected scopes.
 
     The Jira 401 body never names the missing scope. This helper diffs the
     token's granted scope list (stored on JiraConnection at OAuth callback)
     against the scopes Atlassian's docs require for the failing endpoint,
-    so the missing one is named explicitly in the log.
+    and also logs the WWW-Authenticate header (per OAuth 2.0 spec it should
+    name the missing scope) — which is the only authoritative signal when
+    the documented scope set turns out to be incomplete.
     """
     if "scope does not match" not in (body_text or "").lower():
         return
     expected = _REQUIRED_SCOPES.get(endpoint_label, [])
     granted = list(conn.scopes or [])
     missing = [s for s in expected if s not in granted]
+    # Atlassian sometimes includes the required scope in WWW-Authenticate
+    # ("Bearer scope=\"read:foo:bar\""). Log every response header so we
+    # can see what Atlassian is actually telling us about the denial.
+    headers_dump = ""
+    if resp is not None:
+        try:
+            headers_dump = "; ".join(f"{k}={v}" for k, v in resp.headers.items())
+        except Exception:
+            headers_dump = "(failed to read headers)"
     logger.warning(
-        "scope diagnostic for %s on %s — granted=%s expected=%s missing=%s",
+        "scope diagnostic for %s on %s — granted=%s expected=%s missing=%s | response_headers: %s",
         endpoint_label,
         conn.jira_cloud_url,
         granted,
         expected,
         missing or "(none — Atlassian denied for non-scope reason)",
+        headers_dump or "(no response object)",
     )
 
 
@@ -374,7 +387,7 @@ async def get_jira_projects(
                 "get_projects failed for %s (status=%s): %s",
                 conn.jira_cloud_url, status_code, body_text or exc,
             )
-            _log_scope_diagnostics(_log, "project_search", conn, body_text)
+            _log_scope_diagnostics(_log, "project_search", conn, body_text, resp)
             site_failures.append((conn.jira_cloud_url, status_code))
             return []
         return [
@@ -465,7 +478,7 @@ async def get_jira_boards(
                 "get_boards_for_project(%s) failed for %s (status=%s): %s",
                 project_key, conn.jira_cloud_url, status_code, body_text or exc,
             )
-            _log_scope_diagnostics(_log, "boards_for_project", conn, body_text)
+            _log_scope_diagnostics(_log, "boards_for_project", conn, body_text, resp)
             if "suspended" in body_text.lower():
                 return []
             if status_code in (401, 403):

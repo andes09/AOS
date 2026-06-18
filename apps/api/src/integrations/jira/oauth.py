@@ -12,6 +12,8 @@ JIRA_TOKEN_URL = "https://auth.atlassian.com/oauth/token"
 JIRA_SCOPES = " ".join([
     # --- Jira Platform (api/3) reads ---
     "read:project:jira",            # GET /project/search
+    "read:project-category:jira",   # /project/search includes category data; without
+                                    # this the endpoint returns 401 "scope does not match"
     "read:issue:jira",              # GET /issue/{key}
     "read:issue-details:jira",      # /issue/{key} with full field set + JQL search
     "read:issue-meta:jira",         # issue metadata returned on reads

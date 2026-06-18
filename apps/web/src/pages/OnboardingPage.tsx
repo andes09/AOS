@@ -915,11 +915,6 @@ function BoardPickerInner({ connectionId, projectKey, onImport, onBack }: {
       .then(data => {
         const withRec = data.map((b, i) => ({ ...b, recommended: i === 0 }))
         setBoards(withRec)
-        if (withRec.length === 1) {
-          // Only one board in the project — skip the picker entirely.
-          onImport(withRec[0])
-          return
-        }
         if (withRec.length > 0) setSel(withRec[0].id)
       })
       .catch(e => setError(e.message || 'Failed to load boards'))

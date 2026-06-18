@@ -742,7 +742,7 @@ function ScanningScreen({ boardId, boardName, boardKey, connectionId, onDone, on
 }
 
 // ─── ConnectFlow ──────────────────────────────────────────────────────────────
-type ConnectStage = 'connect' | 'board' | 'scanning'
+type ConnectStage = 'connect' | 'project' | 'board' | 'scanning'
 
 function ConnectFlowFull({ onImport, onBack, onReset, initialConnectionId }: {
   onImport: (members: Member[], boardId: string, boardName: string, boardKey: string) => void
@@ -750,29 +750,50 @@ function ConnectFlowFull({ onImport, onBack, onReset, initialConnectionId }: {
   onReset: () => void
   initialConnectionId?: string
 }) {
-  const [stage, setStage] = useState<ConnectStage>(initialConnectionId ? 'board' : 'connect')
+  // After OAuth lands back here, we already have a connection — start at project picker, not board.
+  const [stage, setStage] = useState<ConnectStage>(initialConnectionId ? 'project' : 'connect')
   const [connectionId, setConnectionId] = useState(initialConnectionId ?? '')
+  const [projectKey, setProjectKey] = useState('')
   const [boardId, setBoardId] = useState('')
   const [boardName, setBoardName] = useState('')
   const [boardKey, setBoardKey] = useState('')
 
   function onConnected(id: string) {
     setConnectionId(id)
+    setStage('project')
+  }
+
+  function onProjectSelected(p: { key: string; connection_id: string }) {
+    setProjectKey(p.key)
+    // Narrow from possibly-multi connection_ids down to the single connection that owns this project.
+    setConnectionId(p.connection_id)
     setStage('board')
   }
 
-  function onBoardSelected(boards: { id: string; name: string; project_key: string; connection_id: string }[], selectedId: string) {
-    const b = boards.find(x => x.id === selectedId)
-    if (!b) return
-    setBoardId(b.id)
-    setBoardName(b.name)
-    setBoardKey(b.project_key)
-    setConnectionId(b.connection_id)
+  function onBoardSelected(board: { id: string; name: string; project_key: string; connection_id: string }) {
+    setBoardId(board.id)
+    setBoardName(board.name)
+    setBoardKey(board.project_key || projectKey)
+    setConnectionId(board.connection_id)
     setStage('scanning')
   }
 
   if (stage === 'connect') return <ConnectScreen onConnected={onConnected} onBack={onBack} />
-  if (stage === 'board') return <BoardPickerInner connectionId={connectionId} onImport={onBoardSelected} onBack={() => setStage('connect')} />
+  if (stage === 'project') return (
+    <ProjectPickerInner
+      connectionId={connectionId}
+      onPick={onProjectSelected}
+      onBack={() => setStage('connect')}
+    />
+  )
+  if (stage === 'board') return (
+    <BoardPickerInner
+      connectionId={connectionId}
+      projectKey={projectKey}
+      onImport={onBoardSelected}
+      onBack={() => setStage('project')}
+    />
+  )
   return (
     <ScanningScreen
       boardId={boardId} boardName={boardName} boardKey={boardKey} connectionId={connectionId}
@@ -782,9 +803,99 @@ function ConnectFlowFull({ onImport, onBack, onReset, initialConnectionId }: {
   )
 }
 
-function BoardPickerInner({ connectionId, onImport, onBack }: {
+interface JiraProject { id: string; key: string; name: string; connection_id: string }
+
+function ProjectPickerInner({ connectionId, onPick, onBack }: {
   connectionId: string
-  onImport: (boards: Board[], selectedId: string) => void
+  onPick: (p: JiraProject) => void
+  onBack: () => void
+}) {
+  const { get } = useApi()
+  const [projects, setProjects] = useState<JiraProject[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [sel, setSel] = useState<string>('')
+
+  useEffect(() => {
+    setLoading(true)
+    setError(null)
+    const isMulti = connectionId.includes(',')
+    const param = isMulti
+      ? `connection_ids=${encodeURIComponent(connectionId)}`
+      : `connection_id=${encodeURIComponent(connectionId)}`
+    get<JiraProject[]>(`/api/integrations/jira/projects?${param}`)
+      .then(data => {
+        setProjects(data)
+        if (data.length > 0) setSel(data[0].key)
+      })
+      .catch(e => setError(e.message || 'Failed to load projects'))
+      .finally(() => setLoading(false))
+  }, [connectionId])
+
+  const selected = projects.find(p => p.key === sel)
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18, animation: 'fadeUp 0.22s ease both' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: C.success, background: C.successBg, border: `1px solid ${C.success}`, padding: '3px 10px', borderRadius: 20 }}>
+          <svg width="10" height="10" viewBox="0 0 8 8"><path d="M1 4 L3 6 L7 1" stroke={C.success} strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          Jira connected
+        </span>
+      </div>
+      <div>
+        <h2 style={{ fontSize: 21, fontWeight: 700, color: C.t1, letterSpacing: '-0.3px', marginBottom: 5 }}>Which Jira project is your team working in?</h2>
+        <p style={{ fontSize: 14, color: C.t2, lineHeight: 1.55 }}>Pick a project and we'll show you the boards inside it next.</p>
+      </div>
+
+      {loading && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '24px 0', color: C.t3, fontSize: 14 }}>
+          <div style={{ width: 18, height: 18, border: `2px solid ${C.accent}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+          Loading projects…
+        </div>
+      )}
+      {error && (
+        <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '14px 16px', fontSize: 13, color: '#dc2626' }}>
+          <strong>Couldn't load projects:</strong> {error}
+        </div>
+      )}
+      {!loading && !error && projects.length === 0 && (
+        <div style={{ background: C.bg1, border: `1px solid ${C.border}`, borderRadius: 8, padding: '20px', textAlign: 'center', color: C.t3, fontSize: 14 }}>
+          No projects found in this Jira account. Make sure you have access to at least one project, then reconnect.
+        </div>
+      )}
+      {!loading && projects.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+          {projects.map(p => {
+            const isSel = sel === p.key
+            return (
+              <button key={p.id} onClick={() => setSel(p.key)} style={{
+                width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 13, cursor: 'pointer',
+                background: isSel ? C.accentSubtle : C.bg0, border: `1.5px solid ${isSel ? C.accent : C.border}`, borderRadius: 10, padding: '13px 14px', transition: 'all .12s',
+              }}>
+                <div style={{ width: 18, height: 18, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${isSel ? C.accent : C.borderStrong}`, background: isSel ? C.accent : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {isSel && <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#fff' }} />}
+                </div>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: C.t1, marginBottom: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</div>
+                  <div style={{ fontFamily: 'monospace', fontSize: 11, color: C.t2, background: C.bg3, padding: '1px 5px', borderRadius: 4, display: 'inline-block' }}>{p.key}</div>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      )}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 4 }}>
+        <Btn variant="ghost" onClick={onBack}>← Back</Btn>
+        <Btn onClick={() => { if (selected) onPick(selected) }} disabled={!selected || loading}>Next →</Btn>
+      </div>
+    </div>
+  )
+}
+
+function BoardPickerInner({ connectionId, projectKey, onImport, onBack }: {
+  connectionId: string
+  projectKey: string
+  onImport: (board: Board) => void
   onBack: () => void
 }) {
   const { get } = useApi()
@@ -797,16 +908,23 @@ function BoardPickerInner({ connectionId, onImport, onBack }: {
     setLoading(true)
     setError(null)
     const isMulti = connectionId.includes(',')
-    const param = isMulti ? `connection_ids=${encodeURIComponent(connectionId)}` : `connection_id=${encodeURIComponent(connectionId)}`
-    get<Board[]>(`/api/integrations/jira/boards?${param}`)
+    const connParam = isMulti
+      ? `connection_ids=${encodeURIComponent(connectionId)}`
+      : `connection_id=${encodeURIComponent(connectionId)}`
+    get<Board[]>(`/api/integrations/jira/boards?${connParam}&project_key=${encodeURIComponent(projectKey)}`)
       .then(data => {
         const withRec = data.map((b, i) => ({ ...b, recommended: i === 0 }))
         setBoards(withRec)
+        if (withRec.length === 1) {
+          // Only one board in the project — skip the picker entirely.
+          onImport(withRec[0])
+          return
+        }
         if (withRec.length > 0) setSel(withRec[0].id)
       })
       .catch(e => setError(e.message || 'Failed to load boards'))
       .finally(() => setLoading(false))
-  }, [connectionId])
+  }, [connectionId, projectKey])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18, animation: 'fadeUp 0.22s ease both' }}>
@@ -846,8 +964,9 @@ function BoardPickerInner({ connectionId, onImport, onBack }: {
         )
       })()}
       {!loading && !error && boards.length === 0 && (
-        <div style={{ background: C.bg1, border: `1px solid ${C.border}`, borderRadius: 8, padding: '20px', textAlign: 'center', color: C.t3, fontSize: 14 }}>
-          No boards found. Make sure you have access to at least one Jira board.
+        <div style={{ background: C.bg1, border: `1px solid ${C.border}`, borderRadius: 8, padding: '20px', color: C.t2, fontSize: 14, lineHeight: 1.55 }}>
+          <div style={{ fontWeight: 600, color: C.t1, marginBottom: 6 }}>No boards in this project yet</div>
+          Project <span style={{ fontFamily: 'monospace', fontSize: 12, color: C.t1, background: C.bg3, padding: '1px 5px', borderRadius: 4 }}>{projectKey}</span> doesn't have any Scrum or Kanban boards. Create one in Jira (Boards → Create board), then come back and pick it.
         </div>
       )}
       {!loading && boards.length > 0 && (
@@ -879,8 +998,16 @@ function BoardPickerInner({ connectionId, onImport, onBack }: {
         </div>
       )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 4 }}>
-        <Btn variant="ghost" onClick={onBack}>← Back</Btn>
-        <Btn onClick={() => { if (sel) onImport(boards, sel) }} disabled={!sel || loading}>Import team →</Btn>
+        <Btn variant="ghost" onClick={onBack}>← Back to projects</Btn>
+        <Btn
+          onClick={() => {
+            const b = boards.find(x => x.id === sel)
+            if (b) onImport(b)
+          }}
+          disabled={!sel || loading}
+        >
+          Import team →
+        </Btn>
       </div>
     </div>
   )

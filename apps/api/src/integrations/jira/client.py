@@ -111,6 +111,30 @@ class JiraClient:
             start_at += len(batch)
         return boards
 
+    async def get_boards_for_project(self, project_key: str) -> list[dict]:
+        """GET /agile/1.0/board?projectKeyOrId=<key> — boards scoped to one project."""
+        boards = []
+        start_at = 0
+        while True:
+            r = await self._http.get(
+                f"{self.agile_base_url}/board",
+                headers=self._headers(),
+                params={"projectKeyOrId": project_key, "maxResults": 50, "startAt": start_at},
+            )
+            if not r.is_success:
+                logger.error(
+                    "Jira agile/board?projectKeyOrId=%s %s — body: %s",
+                    project_key, r.status_code, r.text[:500],
+                )
+            r.raise_for_status()
+            data = r.json()
+            batch = data.get("values", [])
+            boards.extend(batch)
+            if data.get("isLast", True) or not batch:
+                break
+            start_at += len(batch)
+        return boards
+
     async def get_board_sprints(self, board_id: str) -> list[dict]:
         """GET /agile/1.0/board/{boardId}/sprint — all sprints for a board."""
         sprints = []

@@ -204,6 +204,26 @@ def sync_jira_team(self, team_id: str):
             logger.warning("Team %s not found", team_id)
             return
 
+        # Pre-2026-06-17 onboarding could persist synthetic "project-<id>" values
+        # in jira_board_id when the Agile API came back empty. Those aren't valid
+        # board IDs — /board/project-<id>/sprint comes back 401 from Atlassian's
+        # gateway, which looks like an auth failure but is really bad data. Fail
+        # fast with a clear message instead of retrying.
+        if team.jira_board_id and team.jira_board_id.startswith("project-"):
+            _write_sync_status(
+                db, team_id, state="failed", finished_at=datetime.utcnow(),
+                error_code="invalid_board_id",
+                error_message=(
+                    "This team's saved board is a Jira project, not a real board "
+                    "(legacy onboarding). Reconnect Jira in Settings and pick a board."
+                ),
+            )
+            logger.warning(
+                "[sync] team=%s aborted: legacy project-* board_id %r",
+                team_id, team.jira_board_id,
+            )
+            return
+
         connection = db.execute(
             select(JiraConnection)
             .where(

@@ -3,20 +3,24 @@ import { test, expect } from '@playwright/test'
 /**
  * Smoke test for the onboarding flow.
  *
- * Uses TEST_MODE=1 (set in playwright.config env / CI) to serve canned Jira
- * API responses from the backend so no real Atlassian credentials are needed.
- *
- * The test intercepts the OAuth redirect (Clerk auth is mocked in TEST_MODE)
- * and walks the flow from /onboarding through to /app/sprint-planner.
+ * Requires VITE_TEST_MODE=true (set in playwright.config.ts env / CI).
+ * In test mode, App.tsx skips the <SignedIn> wrapper so the page renders
+ * without a real Clerk session. All API routes are intercepted with canned
+ * responses so no backend or Atlassian credentials are needed.
  */
-
-const BASE = process.env.VITE_API_URL ?? 'http://localhost:8000'
 
 test.describe('Onboarding flow', () => {
   test('loads the onboarding page and shows the welcome step', async ({ page }) => {
-    // Intercept Clerk auth — in TEST_MODE the frontend uses a stub session
     await page.route('**/api/integrations/jira/connect', route =>
       route.fulfill({ status: 200, body: JSON.stringify({ auth_url: '/onboarding?connection_id=test-conn-id' }) })
+    )
+    await page.route('**/api/integrations/jira/projects*', route =>
+      route.fulfill({
+        status: 200,
+        body: JSON.stringify([
+          { id: 'p-1', key: 'E2E', name: 'E2E Project', connection_id: 'test-conn-id' },
+        ]),
+      })
     )
     await page.route('**/api/integrations/jira/boards*', route =>
       route.fulfill({
@@ -47,7 +51,7 @@ test.describe('Onboarding flow', () => {
 
     await page.goto('/onboarding')
 
-    // Welcome step should be visible
-    await expect(page.locator('text=Connect Jira')).toBeVisible({ timeout: 5000 })
+    // Welcome step should be visible (VITE_TEST_MODE bypasses <SignedIn> wrapper)
+    await expect(page.locator('text=Connect Jira')).toBeVisible({ timeout: 10000 })
   })
 })

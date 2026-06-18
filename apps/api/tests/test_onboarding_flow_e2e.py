@@ -112,14 +112,14 @@ async def test_callback_creates_jira_connection(tmp_db):
 
 @pytest.mark.asyncio
 async def test_boards_returns_list(tmp_db):
-    """GET /boards returns non-empty list when JiraClient.get_boards succeeds."""
+    """GET /boards returns non-empty list when JiraClient.get_boards_for_project succeeds."""
     async for db in app.dependency_overrides[get_db]():
         _, _, conn = await _seed_org_team_conn(db)
         conn_id = str(conn.id)
         break
 
     mock_client = MagicMock()
-    mock_client.get_boards = AsyncMock(return_value=[
+    mock_client.get_boards_for_project = AsyncMock(return_value=[
         {"id": 1, "name": "Team Board", "type": "scrum", "location": {"projectKey": "E2E"}},
     ])
 
@@ -131,7 +131,7 @@ async def test_boards_returns_list(tmp_db):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/api/integrations/jira/boards",
-                params={"connection_id": conn_id},
+                params={"connection_id": conn_id, "project_key": "E2E"},
                 headers={"Authorization": "Bearer tok"},
             )
 
@@ -142,28 +142,25 @@ async def test_boards_returns_list(tmp_db):
 
 
 # ---------------------------------------------------------------------------
-# Regression: boards project-fallback 401 → 502
+# Regression: boards endpoint surfaces auth/scope errors as 502
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_boards_project_fallback_401_raises_502(tmp_db):
-    """When project fallback returns 401, the endpoint raises 502."""
-    from httpx import Response as HttpxResponse
-
+async def test_boards_auth_error_raises_502(tmp_db):
+    """When the per-project board fetch returns 401/403, /boards raises 502 with a clear message."""
     async for db in app.dependency_overrides[get_db]():
         _, _, conn = await _seed_org_team_conn(db, "org_boards_401")
         conn_id = str(conn.id)
         break
 
-    # Simulate 401 response on get_projects
     fake_resp = MagicMock()
     fake_resp.status_code = 401
-    proj_exc = Exception("Unauthorized")
-    proj_exc.response = fake_resp
+    fake_resp.text = "Unauthorized"
+    boards_exc = Exception("Unauthorized")
+    boards_exc.response = fake_resp
 
     mock_client = MagicMock()
-    mock_client.get_boards = AsyncMock(return_value=[])  # agile returns nothing
-    mock_client.get_projects = AsyncMock(side_effect=proj_exc)
+    mock_client.get_boards_for_project = AsyncMock(side_effect=boards_exc)
 
     def _patch_clerk_401(org_id="org_boards_401", user_id="user_e2e"):
         payload = {"sub": user_id, "org_id": org_id}
@@ -178,12 +175,12 @@ async def test_boards_project_fallback_401_raises_502(tmp_db):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get(
                 "/api/integrations/jira/boards",
-                params={"connection_id": conn_id},
+                params={"connection_id": conn_id, "project_key": "E2E"},
                 headers={"Authorization": "Bearer tok"},
             )
 
     assert resp.status_code == 502
-    assert "auth/scope" in resp.json()["detail"].lower()
+    assert "jira software" in resp.json()["detail"].lower() or "reconnect" in resp.json()["detail"].lower()
 
 
 # ---------------------------------------------------------------------------

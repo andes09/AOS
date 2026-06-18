@@ -230,29 +230,16 @@ async def jira_disconnect(
     return {"disconnected": True}
 
 
-@router.get("/boards")
-async def get_jira_boards(
-    connection_id: str = Query(default=None),
-    connection_ids: str = Query(default=None),
-    clerk_org_id: str = Depends(get_current_org_id),
-    db: AsyncSession = Depends(get_db),
-):
-    """List scrum boards.
+async def _resolve_jira_connections(
+    db: AsyncSession,
+    org: Organization,
+    connection_id: str | None,
+    connection_ids: str | None,
+) -> list[JiraConnection]:
+    """Resolve a single connection_id or comma-separated connection_ids to JiraConnection rows.
 
-    Accepts either ?connection_id=<uuid> (single active connection) or
-    ?connection_ids=<uuid1>,<uuid2>,... (pending connections from multi-site
-    OAuth). In the latter case boards from all connections are aggregated and
-    each board carries a connection_id field so board-selection can activate
-    the right connection transparently.
+    Raises HTTPException on bad input or unknown connection.
     """
-    import asyncio as _asyncio
-    import logging as _logging
-
-    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
-    if not org:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    # Resolve the list of connections to query.
     if connection_ids:
         ids = [s.strip() for s in connection_ids.split(",") if s.strip()]
         result = await db.execute(
@@ -261,8 +248,8 @@ async def get_jira_boards(
                 JiraConnection.organization_id == org.id,
             )
         )
-        connections = result.scalars().all()
-    elif connection_id:
+        return list(result.scalars().all())
+    if connection_id:
         try:
             conn_uuid = uuid.UUID(connection_id)
         except ValueError:
@@ -270,42 +257,66 @@ async def get_jira_boards(
         connection = await db.get(JiraConnection, conn_uuid)
         if not connection or connection.organization_id != org.id:
             raise HTTPException(status_code=404, detail="Jira connection not found")
-        connections = [connection]
-    else:
-        raise HTTPException(status_code=400, detail="connection_id or connection_ids required")
+        return [connection]
+    raise HTTPException(status_code=400, detail="connection_id or connection_ids required")
 
+
+async def _authed_jira_client(conn: JiraConnection) -> JiraClient | None:
+    """Build a JiraClient for a connection, refreshing the token if expired.
+
+    Returns None if token refresh fails (caller should treat the site as
+    unreachable rather than aborting the whole request).
+    """
+    import logging as _logging
     _log = _logging.getLogger(__name__)
 
-    async def _boards_for_connection(conn: JiraConnection) -> list[dict]:
-        """Return boards for one site. Always returns a list — never raises.
-
-        Suspended or unreachable sites return [] so that asyncio.gather can
-        complete for all sites; errors are logged as warnings.
-        """
-        access_token = decrypt(conn.encrypted_access_token)
-        if conn.token_expires_at and conn.token_expires_at <= datetime.utcnow():
-            try:
-                refresh_tok = decrypt(conn.encrypted_refresh_token)
-                tokens = await refresh_access_token(refresh_tok)
-                access_token = tokens["access_token"]
-                conn.encrypted_access_token = encrypt(access_token)
-                if "refresh_token" in tokens:
-                    conn.encrypted_refresh_token = encrypt(tokens["refresh_token"])
-                if "expires_in" in tokens:
-                    conn.token_expires_at = datetime.utcnow() + timedelta(seconds=tokens["expires_in"])
-            except Exception as exc:
-                _log.warning("Token refresh failed for %s: %s", conn.jira_cloud_url, exc)
-                return []
-        client = JiraClient(cloud_id=conn.jira_cloud_id, access_token=access_token)
-
-        # Try Agile boards API first (requires Jira Software product).
-        # Classic read:jira-work returns 401 on this endpoint — that's expected;
-        # fall through to project/search below which classic scopes do cover.
-        # Suspended sites return 403 with "suspended-inactivity" — skip fallback.
-        raw = []
-        agile_failed = False
+    access_token = decrypt(conn.encrypted_access_token)
+    if conn.token_expires_at and conn.token_expires_at <= datetime.utcnow():
         try:
-            raw = await client.get_boards()
+            refresh_tok = decrypt(conn.encrypted_refresh_token)
+            tokens = await refresh_access_token(refresh_tok)
+            access_token = tokens["access_token"]
+            conn.encrypted_access_token = encrypt(access_token)
+            if "refresh_token" in tokens:
+                conn.encrypted_refresh_token = encrypt(tokens["refresh_token"])
+            if "expires_in" in tokens:
+                conn.token_expires_at = datetime.utcnow() + timedelta(seconds=tokens["expires_in"])
+        except Exception as exc:
+            _log.warning("Token refresh failed for %s: %s", conn.jira_cloud_url, exc)
+            return None
+    return JiraClient(cloud_id=conn.jira_cloud_id, access_token=access_token)
+
+
+@router.get("/projects")
+async def get_jira_projects(
+    connection_id: str = Query(default=None),
+    connection_ids: str = Query(default=None),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """List Jira projects visible to the connection(s).
+
+    Onboarding is project-first: user picks a project, then picks a board
+    within that project (see GET /boards?project_key=…). Returns
+    {id, key, name, connection_id} per project, aggregated across all
+    connections when ?connection_ids= is supplied.
+    """
+    import asyncio as _asyncio
+    import logging as _logging
+
+    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+    if not org:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    connections = await _resolve_jira_connections(db, org, connection_id, connection_ids)
+    _log = _logging.getLogger(__name__)
+
+    async def _projects_for_connection(conn: JiraConnection) -> list[dict]:
+        client = await _authed_jira_client(conn)
+        if client is None:
+            return []
+        try:
+            projects = await client.get_projects()
         except Exception as exc:
             resp = getattr(exc, "response", None)
             status_code = getattr(resp, "status_code", None) if resp else None
@@ -316,47 +327,109 @@ async def get_jira_boards(
                 except Exception:
                     pass
             _log.warning(
-                "get_boards agile failed for %s (status=%s): %s",
+                "get_projects failed for %s (status=%s): %s",
                 conn.jira_cloud_url, status_code, body_text or exc,
             )
-            if "suspended" in body_text.lower():
-                # Site is suspended — project/search will also fail; give up early.
-                return []
-            agile_failed = True
-
-        if raw:
-            return [
-                {
-                    "id": str(b["id"]),
-                    "name": b["name"],
-                    "project_key": b.get("location", {}).get("projectKey", ""),
-                    "type": b.get("type", "scrum"),
-                    "connection_id": str(conn.id),
-                }
-                for b in raw
-            ]
-
-        # Agile returned nothing or failed (scope/product issue) — fall back to
-        # project list. Classic read:jira-work covers /rest/api/3/project/search.
-        try:
-            projects = await client.get_projects()
-        except Exception as proj_exc:
-            proj_resp = getattr(proj_exc, "response", None)
-            proj_status = getattr(proj_resp, "status_code", None) if proj_resp else None
-            if proj_status in (401, 403):
-                raise HTTPException(status_code=502, detail=f"Jira auth/scope error: {proj_status}")
-            _log.warning("project fallback failed for %s: %s", conn.jira_cloud_url, proj_exc)
+            if status_code in (401, 403):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Jira auth/scope error: {status_code} — reconnect Jira to re-grant access",
+                )
             return []
-
         return [
             {
-                "id": f"project-{p['id']}",
+                "id": str(p["id"]),
+                "key": p.get("key", ""),
                 "name": p["name"],
-                "project_key": p.get("key", ""),
-                "type": "project",
                 "connection_id": str(conn.id),
             }
             for p in projects
+        ]
+
+    results = await _asyncio.gather(
+        *[_projects_for_connection(c) for c in connections],
+        return_exceptions=True,
+    )
+    await db.commit()
+
+    all_projects: list[dict] = []
+    for site_result in results:
+        if isinstance(site_result, HTTPException):
+            raise site_result
+        elif isinstance(site_result, list):
+            all_projects.extend(site_result)
+        else:
+            _log.warning("_projects_for_connection raised unexpectedly: %s", site_result)
+
+    return all_projects
+
+
+@router.get("/boards")
+async def get_jira_boards(
+    project_key: str = Query(..., description="Jira project key the boards belong to"),
+    connection_id: str = Query(default=None),
+    connection_ids: str = Query(default=None),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """List Scrum/Kanban boards within a single Jira project.
+
+    project_key is required: onboarding always picks a project before a board,
+    so we scope the Agile board query to that project. This avoids the old
+    "list every board the token can see" fallback that returned synthetic
+    project-* identifiers when the Agile API came up empty (those weren't
+    usable as board IDs and produced 401s during sync).
+    """
+    import asyncio as _asyncio
+    import logging as _logging
+
+    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
+    if not org:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    connections = await _resolve_jira_connections(db, org, connection_id, connection_ids)
+    _log = _logging.getLogger(__name__)
+
+    async def _boards_for_connection(conn: JiraConnection) -> list[dict]:
+        client = await _authed_jira_client(conn)
+        if client is None:
+            return []
+        try:
+            raw = await client.get_boards_for_project(project_key)
+        except Exception as exc:
+            resp = getattr(exc, "response", None)
+            status_code = getattr(resp, "status_code", None) if resp else None
+            body_text = ""
+            if resp is not None:
+                try:
+                    body_text = resp.text[:400]
+                except Exception:
+                    pass
+            _log.warning(
+                "get_boards_for_project(%s) failed for %s (status=%s): %s",
+                project_key, conn.jira_cloud_url, status_code, body_text or exc,
+            )
+            if "suspended" in body_text.lower():
+                return []
+            if status_code in (401, 403):
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Jira denied access to boards for this project. Your connection "
+                        "may be missing the 'Jira Software' product — disconnect Jira "
+                        "and reconnect to re-grant access."
+                    ),
+                )
+            return []
+        return [
+            {
+                "id": str(b["id"]),
+                "name": b["name"],
+                "project_key": b.get("location", {}).get("projectKey", "") or project_key,
+                "type": b.get("type", "scrum"),
+                "connection_id": str(conn.id),
+            }
+            for b in raw
         ]
 
     results = await _asyncio.gather(
@@ -365,7 +438,7 @@ async def get_jira_boards(
     )
     await db.commit()
 
-    all_boards = []
+    all_boards: list[dict] = []
     for site_result in results:
         if isinstance(site_result, HTTPException):
             raise site_result

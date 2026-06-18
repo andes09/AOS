@@ -15,7 +15,7 @@ DELETE /api/users/me
 """
 import logging
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 from sqlalchemy import delete, select, update
@@ -115,7 +115,7 @@ async def patch_my_role(
     return RoleResponse(user_id=user_id, app_role=developer.app_role)
 
 
-@users_router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+@users_router.delete("/me")
 async def delete_my_account(
     user_id: str = Depends(get_current_user_id),
     clerk_org_id: str = Depends(get_current_org_id),
@@ -152,7 +152,7 @@ async def delete_my_account(
     except Exception:
         logger.exception("Failed to delete Clerk user %s after local purge", user_id)
 
-    return None
+    return {"deleted": True}
 
 
 @users_router.post("/role", response_model=RoleResponse)

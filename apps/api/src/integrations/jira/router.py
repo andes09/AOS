@@ -45,7 +45,11 @@ router = APIRouter(prefix="/api/integrations/jira", tags=["jira"])
 # names the missing scope, so we compute the diff against the granted token
 # scopes and surface it in the API log.
 _REQUIRED_SCOPES = {
-    "project_search": ["read:project:jira", "read:project-category:jira"],
+    # get_projects now derives projects from /agile/1.0/board (the Platform-side
+    # /project/search was edge-denied with FAILURE_CLIENT_SCOPE_CHECK even with
+    # every documented scope granted), so the expected scope is the same as for
+    # the boards endpoint.
+    "project_search": ["read:board-scope:jira-software"],
     "boards_for_project": ["read:board-scope:jira-software", "read:project:jira"],
 }
 

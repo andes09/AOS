@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
+import { useClerk } from '@clerk/clerk-react'
 import { useApi, ApiError } from '../lib/api'
 import { useAppRole } from '../hooks/useAppRole'
 import { Card, CardHeader, CardBody } from '../components/ui/Card'
@@ -67,6 +68,23 @@ export function SettingsPage() {
   const { get, del, post, put } = useApi()
   const { appRole } = useAppRole()
   const isLead = appRole === 'lead' || appRole === 'exec' || appRole === 'admin'
+  const { signOut } = useClerk()
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState('')
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  async function handleDeleteAccount() {
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      await del('/api/users/me')
+      await signOut({ redirectUrl: '/' })
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete account')
+      setDeleting(false)
+    }
+  }
 
   async function fetchAnthropicStatus() {
     try {
@@ -503,6 +521,65 @@ export function SettingsPage() {
         </CardBody>
       </Card>
       )}
+
+      {/* Delete Account */}
+      <Card style={{ ...sectionGap, borderColor: 'var(--color-danger)' }}>
+        <CardHeader>
+          <span style={{ color: 'var(--color-danger)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
+            Delete Account
+          </span>
+        </CardHeader>
+        <CardBody>
+          <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: '0 0 12px' }}>
+            Permanently delete your account and all associated data. This cannot be undone.
+          </p>
+          {!deleteOpen ? (
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={() => { setDeleteOpen(true); setDeleteConfirm(''); setDeleteError(null) }}
+            >
+              Delete Account
+            </Button>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <p style={{ color: 'var(--color-text-primary)', fontSize: 'var(--text-sm)', margin: 0 }}>
+                Type <strong>DELETE</strong> to confirm.
+              </p>
+              <Input
+                type="text"
+                placeholder="DELETE"
+                value={deleteConfirm}
+                onChange={e => setDeleteConfirm(e.target.value)}
+                disabled={deleting}
+              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={handleDeleteAccount}
+                  disabled={deleting || deleteConfirm !== 'DELETE'}
+                >
+                  {deleting ? 'Deleting…' : 'Permanently Delete'}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => { setDeleteOpen(false); setDeleteConfirm(''); setDeleteError(null) }}
+                  disabled={deleting}
+                >
+                  Cancel
+                </Button>
+              </div>
+              {deleteError && (
+                <div style={{ color: 'var(--color-danger)', fontSize: 'var(--text-sm)' }}>
+                  {deleteError}
+                </div>
+              )}
+            </div>
+          )}
+        </CardBody>
+      </Card>
     </div>
   )
 }

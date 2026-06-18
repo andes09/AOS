@@ -10,32 +10,46 @@ JIRA_TOKEN_URL = "https://auth.atlassian.com/oauth/token"
 # even though docs claim coverage. Mixing classic and granular on the same
 # OAuth app is rejected by the dev console, so we go fully granular.
 JIRA_SCOPES = " ".join([
-    # --- Jira Platform (api/3) reads ---
-    "read:project:jira",            # GET /project/search
-    "read:project-category:jira",   # /project/search includes category data; without
-                                    # this the endpoint returns 401 "scope does not match"
-    "read:issue:jira",              # GET /issue/{key}
-    "read:issue-details:jira",      # /issue/{key} with full field set + JQL search
-    "read:issue-meta:jira",         # issue metadata returned on reads
-    "read:issue-link:jira",         # issuelinks field
-    "read:issue-type:jira",         # issuetype on issue payloads
-    "read:status:jira",             # status on issue payloads
-    "read:field:jira",              # customfield_* references
-    "read:jql:jira",                # POST /search/jql
-    # --- Jira users ---
-    "read:user:jira",               # GET /users/search
-    "read:application-role:jira",   # user object enrichment
-    "read:group:jira",              # user object enrichment
-    "read:avatar:jira",             # user avatars
+    # --- Jira Platform: project metadata ---
+    # /project/search was returning FAILURE_CLIENT_SCOPE_CHECK with only
+    # read:project:jira + read:project-category:jira granted, so we add
+    # every plausible project-* scope to cover whatever undocumented
+    # requirement Atlassian's edge is enforcing.
+    "read:project:jira",
+    "read:project-category:jira",
+    "read:project-version:jira",
+    "read:project-role:jira",
+    "read:project.property:jira",
+    "read:project.component:jira",
+    "read:project.feature:jira",
+    # --- Jira Platform: issue reads ---
+    "read:issue:jira",
+    "read:issue-details:jira",
+    "read:issue-meta:jira",
+    "read:issue-link:jira",
+    "read:issue-type:jira",
+    "read:issue.changelog:jira",
+    "read:issue.transition:jira",
+    "read:issue.property:jira",
+    "read:issue-worklog:jira",
+    "read:status:jira",
+    "read:field:jira",
+    "read:jql:jira",
+    # --- Jira users + identity ---
+    "read:user:jira",
+    "read:application-role:jira",
+    "read:group:jira",
+    "read:avatar:jira",
+    "read:me",
+    "read:account",
+    "read:permission:jira",
     # --- Jira Platform writes ---
-    "write:issue:jira",             # PUT /issue/{key} (fields + assignee)
+    "write:issue:jira",
     # --- Jira Software (Agile API) ---
-    # Issue payloads returned by these endpoints are covered by the
-    # platform-side read:issue:jira + read:issue-details:jira scopes above —
-    # there's no equivalent jira-software variant in Atlassian's catalog.
-    "read:board-scope:jira-software",      # GET /board, /board/{id}/backlog
-    "read:sprint:jira-software",           # GET /board/{id}/sprint, /sprint/{id}/issue
-    "write:sprint:jira-software",          # POST /sprint, POST /sprint/{id}/issue
+    "read:board-scope:jira-software",
+    "read:sprint:jira-software",
+    "read:epic:jira-software",
+    "write:sprint:jira-software",
     # --- Refresh ---
     "offline_access",
 ])

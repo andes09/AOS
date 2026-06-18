@@ -311,9 +311,15 @@ async def get_jira_projects(
     connections = await _resolve_jira_connections(db, org, connection_id, connection_ids)
     _log = _logging.getLogger(__name__)
 
+    # Track per-site failures so we can fall back to a 502 only when EVERY
+    # connection failed. With multi-site OAuth, a single restricted/admin-only
+    # site shouldn't hide projects from the user's other working sites.
+    site_failures: list[tuple[str, int | None]] = []
+
     async def _projects_for_connection(conn: JiraConnection) -> list[dict]:
         client = await _authed_jira_client(conn)
         if client is None:
+            site_failures.append((conn.jira_cloud_url, None))
             return []
         try:
             projects = await client.get_projects()
@@ -330,11 +336,7 @@ async def get_jira_projects(
                 "get_projects failed for %s (status=%s): %s",
                 conn.jira_cloud_url, status_code, body_text or exc,
             )
-            if status_code in (401, 403):
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Jira auth/scope error: {status_code} — reconnect Jira to re-grant access",
-                )
+            site_failures.append((conn.jira_cloud_url, status_code))
             return []
         return [
             {
@@ -354,12 +356,27 @@ async def get_jira_projects(
 
     all_projects: list[dict] = []
     for site_result in results:
-        if isinstance(site_result, HTTPException):
-            raise site_result
-        elif isinstance(site_result, list):
+        if isinstance(site_result, list):
             all_projects.extend(site_result)
         else:
             _log.warning("_projects_for_connection raised unexpectedly: %s", site_result)
+
+    # Only raise 502 when we got nothing AND every connection failed with an
+    # auth/scope error. Otherwise the user can still pick from working sites.
+    if not all_projects and connections and len(site_failures) == len(connections):
+        auth_failures = [f for f in site_failures if f[1] in (401, 403)]
+        if auth_failures:
+            sites = ", ".join(url for url, _ in auth_failures)
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Jira denied project access on {len(auth_failures)} of "
+                    f"{len(connections)} connected site(s) ({sites}). Disconnect "
+                    "and reconnect Jira to re-grant access, or check that your "
+                    "Atlassian account has project-browse permission on at least "
+                    "one site."
+                ),
+            )
 
     return all_projects
 

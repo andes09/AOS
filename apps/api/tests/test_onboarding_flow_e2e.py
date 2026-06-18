@@ -184,6 +184,118 @@ async def test_boards_auth_error_raises_502(tmp_db):
 
 
 # ---------------------------------------------------------------------------
+# Regression: /projects tolerates per-connection auth failures in multi-site OAuth
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_projects_tolerates_partial_site_failure(tmp_db):
+    """With multi-site OAuth, one 403'ing site must not hide projects from working sites."""
+    from src.models.organization import Organization
+    from src.models.jira_connection import JiraConnection
+
+    org_clerk_id = "org_proj_partial"
+    async for db in app.dependency_overrides[get_db]():
+        org = Organization(id=uuid.uuid4(), clerk_org_id=org_clerk_id,
+                           name="P Org", slug=org_clerk_id, use_managed_key=False)
+        good = JiraConnection(id=uuid.uuid4(), organization_id=org.id,
+                              jira_cloud_id="cloud_good", jira_cloud_url="https://good.atlassian.net",
+                              encrypted_access_token="enc", encrypted_refresh_token="enc", is_active=False)
+        bad = JiraConnection(id=uuid.uuid4(), organization_id=org.id,
+                             jira_cloud_id="cloud_bad", jira_cloud_url="https://bad.atlassian.net",
+                             encrypted_access_token="enc", encrypted_refresh_token="enc", is_active=False)
+        db.add_all([org, good, bad])
+        await db.commit()
+        good_id, bad_id = str(good.id), str(bad.id)
+        break
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 403
+    fake_resp.text = "Forbidden"
+    forbidden = Exception("Forbidden")
+    forbidden.response = fake_resp
+
+    def client_factory(*_args, cloud_id=None, **_kw):
+        m = MagicMock()
+        if cloud_id == "cloud_good":
+            m.get_projects = AsyncMock(return_value=[
+                {"id": 1, "key": "GOOD", "name": "Good Project"},
+            ])
+        else:
+            m.get_projects = AsyncMock(side_effect=forbidden)
+        return m
+
+    def _patch_clerk_org(user_id="user_e2e"):
+        payload = {"sub": user_id, "org_id": org_clerk_id}
+        state = type("S", (), {"is_signed_in": True, "payload": payload})()
+        return patch("src.auth._clerk.authenticate_request_async", new=AsyncMock(return_value=state))
+
+    with (
+        _patch_clerk_org(),
+        patch("src.integrations.jira.router.decrypt", return_value="tok"),
+        patch("src.integrations.jira.router.JiraClient", side_effect=client_factory),
+    ):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get(
+                "/api/integrations/jira/projects",
+                params={"connection_ids": f"{good_id},{bad_id}"},
+                headers={"Authorization": "Bearer tok"},
+            )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["key"] == "GOOD"
+
+
+@pytest.mark.asyncio
+async def test_projects_all_sites_403_raises_502(tmp_db):
+    """When every connection 403s on /project/search, /projects raises 502 with a helpful message."""
+    from src.models.organization import Organization
+    from src.models.jira_connection import JiraConnection
+
+    org_clerk_id = "org_proj_allbad"
+    async for db in app.dependency_overrides[get_db]():
+        org = Organization(id=uuid.uuid4(), clerk_org_id=org_clerk_id,
+                           name="P Org 2", slug=org_clerk_id, use_managed_key=False)
+        conn = JiraConnection(id=uuid.uuid4(), organization_id=org.id,
+                              jira_cloud_id="cloud_a", jira_cloud_url="https://a.atlassian.net",
+                              encrypted_access_token="enc", encrypted_refresh_token="enc", is_active=False)
+        db.add_all([org, conn])
+        await db.commit()
+        cid = str(conn.id)
+        break
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 403
+    fake_resp.text = "Forbidden"
+    forbidden = Exception("Forbidden")
+    forbidden.response = fake_resp
+
+    mock_client = MagicMock()
+    mock_client.get_projects = AsyncMock(side_effect=forbidden)
+
+    def _patch_clerk_org(user_id="user_e2e"):
+        payload = {"sub": user_id, "org_id": org_clerk_id}
+        state = type("S", (), {"is_signed_in": True, "payload": payload})()
+        return patch("src.auth._clerk.authenticate_request_async", new=AsyncMock(return_value=state))
+
+    with (
+        _patch_clerk_org(),
+        patch("src.integrations.jira.router.decrypt", return_value="tok"),
+        patch("src.integrations.jira.router.JiraClient", return_value=mock_client),
+    ):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get(
+                "/api/integrations/jira/projects",
+                params={"connection_id": cid},
+                headers={"Authorization": "Bearer tok"},
+            )
+
+    assert resp.status_code == 502
+    assert "reconnect" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
 # Step 4: board-selection always runs sync in-process (no silent Celery queue)
 # ---------------------------------------------------------------------------
 

@@ -40,6 +40,44 @@ from src.services.encryption import decrypt, encrypt
 router = APIRouter(prefix="/api/integrations/jira", tags=["jira"])
 
 
+# Documented granular scopes per endpoint we hit. Used purely for diagnostic
+# logging when Atlassian returns 401 "scope does not match" — the body never
+# names the missing scope, so we compute the diff against the granted token
+# scopes and surface it in the API log.
+_REQUIRED_SCOPES = {
+    "project_search": ["read:project:jira", "read:project-category:jira"],
+    "boards_for_project": ["read:board-scope:jira-software", "read:project:jira"],
+}
+
+
+def _log_scope_diagnostics(
+    logger,
+    endpoint_label: str,
+    conn: "JiraConnection",
+    body_text: str,
+) -> None:
+    """When Jira returns "scope does not match", log granted vs. expected scopes.
+
+    The Jira 401 body never names the missing scope. This helper diffs the
+    token's granted scope list (stored on JiraConnection at OAuth callback)
+    against the scopes Atlassian's docs require for the failing endpoint,
+    so the missing one is named explicitly in the log.
+    """
+    if "scope does not match" not in (body_text or "").lower():
+        return
+    expected = _REQUIRED_SCOPES.get(endpoint_label, [])
+    granted = list(conn.scopes or [])
+    missing = [s for s in expected if s not in granted]
+    logger.warning(
+        "scope diagnostic for %s on %s — granted=%s expected=%s missing=%s",
+        endpoint_label,
+        conn.jira_cloud_url,
+        granted,
+        expected,
+        missing or "(none — Atlassian denied for non-scope reason)",
+    )
+
+
 def _run_sync_in_process(team_id: str) -> None:
     """Wrapper that runs sync_jira_team in the current thread and surfaces errors.
 
@@ -336,6 +374,7 @@ async def get_jira_projects(
                 "get_projects failed for %s (status=%s): %s",
                 conn.jira_cloud_url, status_code, body_text or exc,
             )
+            _log_scope_diagnostics(_log, "project_search", conn, body_text)
             site_failures.append((conn.jira_cloud_url, status_code))
             return []
         return [
@@ -426,6 +465,7 @@ async def get_jira_boards(
                 "get_boards_for_project(%s) failed for %s (status=%s): %s",
                 project_key, conn.jira_cloud_url, status_code, body_text or exc,
             )
+            _log_scope_diagnostics(_log, "boards_for_project", conn, body_text)
             if "suspended" in body_text.lower():
                 return []
             if status_code in (401, 403):

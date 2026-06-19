@@ -149,8 +149,12 @@ async def delete_my_account(
 ):
     """Delete the authenticated user's account and any data they own.
 
-    Always removes the user's Developer row and their personal velocity profile.
-    If the user is the only Developer on their team, also wipes all team-scoped
+    The product is used by scrum masters; the Developer table also holds rows
+    for imported Jira team members (clerk_user_id IS NULL). "Solo on team" is
+    judged by the count of other *signed-in* users only — those imported rows
+    don't count, since they represent the team board the scrum master owns.
+
+    If the user is the only signed-in user on the team, wipes all team-scoped
     data (sprints, tickets, retros, alerts, etc.) and deletes the team. If the
     team was the only one in the org, wipes Jira connections and deletes the org.
     Finally deletes the Clerk user so the account can't be re-used.
@@ -170,11 +174,15 @@ async def delete_my_account(
         team = await db.get(Team, team_id)
         org_id = team.organization_id if team else None
 
-        other_devs = await db.scalar(
+        other_signed_in = await db.scalar(
             select(func.count(Developer.id))
-            .where(Developer.team_id == team_id, Developer.id != developer.id)
+            .where(
+                Developer.team_id == team_id,
+                Developer.id != developer.id,
+                Developer.clerk_user_id.is_not(None),
+            )
         )
-        solo_on_team = (other_devs or 0) == 0
+        solo_on_team = (other_signed_in or 0) == 0
 
         # Personal data first — keeps the developer-delete path consistent
         # whether or not we end up wiping the rest of the team.

@@ -61,3 +61,4 @@ jobs:
         env:
           VITE_CLERK_PUBLISHABLE_KEY: pk_test_dummy
           VITE_API_URL: http://localhost:8000
+          VITE_TEST_MODE: 'true'

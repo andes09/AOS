@@ -2,59 +2,35 @@
 
 ---
 
-## 🔨 Active: Onboarding — Design Rebuild + Boards Fix
+## 🔨 Active: Beta Onboarding Hardening (6 streams)
 
-**Goal:** Implement the design from `Team Onboarding.html` with real Jira data (no mocked boards).
+- [ ] E: sync.py warn on date parse; router.py boards 502 on auth error
+- [ ] B: SyncStatus model + migration + sync upsert + /sync-status endpoint + Sentry
+- [ ] D: POST /onboarding/reset + test
+- [ ] A: test_onboarding_flow_e2e.py
+- [ ] C: frontend error detail + polling + reset button + Sentry React + Playwright
+- [ ] F: .github/workflows/test.yml
 
-### Root causes to fix
-- Boards endpoint silently returns `[]` on any exception — need fallback + visible errors
-- Old `OnboardingPage.tsx` used a 4-step wizard (Connect → Select Board → Import History → Invite) instead of the design's Jira-first import flow
+### 🐞 Boards fallback footgun (found 2026-06-17 in prod)
 
-### Plan
+Onboarding's boards endpoint silently falls back to projects (synthetic `project-<id>` IDs) when Jira's Agile API returns empty — usually because the OAuth connection is missing `read:jira-software`. The picker shows these indistinguishably from real boards, user selects one, sync then hits `/board/project-10192/sprint` and Jira 401s.
 
-**Backend (2 additions + 1 fix)**
-
-- [x] **B1** — Fix `/api/integrations/jira/boards`: add fallback to `/project/search` if Agile API returns empty; propagate errors instead of silent `[]`
-- [x] **B2** — Add `GET /api/integrations/jira/team-members?connection_id=<cid>`: returns `TeamMember` rows with per-member issue count; triggers inline sync (no Celery) if no members exist yet — this powers the ConfirmTeam step
-- [x] **B3** — Add `POST /api/onboarding/confirm-team`: receives included members with `{name, jira_account_id, capacity, role, seniority, strengths, meetings}`; upserts `Developer` records; calls `onboarding/complete` inline
-
-**Frontend (1 full rewrite)**
-
-- [x] **F1** — Rewrite `apps/web/src/pages/OnboardingPage.tsx` to match the design pixel-for-pixel:
-  - Step **-1 WelcomeStep**: Omada + Jira logos, "Import your team from Jira", 3-step preview row, "Connect Jira →" CTA
-  - Step **0 ConnectFlow** (3 sub-stages):
-    - `ConnectScreen` — OAuth permission screen (real `useJiraOAuth` hook → Atlassian redirect)
-    - `BoardPicker` — calls real `/api/integrations/jira/boards?connection_id=<cid>`, shows board cards with member count, type badge, "Most active" tag
-    - `ScanningScreen` — calls `POST /api/integrations/jira/board-selection` then `GET /api/integrations/jira/team-members`; shows animated step-by-step progress
-  - Step **1 ConfirmTeamStep** — flip cards (PlayerCard/RosterCard), capacity stepper, MemberEditor modal, excluded list, "Add someone Jira missed"
-  - Step **2 ReviewStep** — stats grid, full member list, privacy note, "Sync sprint history →" calls B3 then navigates to `/app/sprint-planner`
-  - Step **99 DoneStep** — success screen
-  - **Layout A** (split sidebar + "Why we ask" footer) matching the design exactly
-  - All design tokens, animations (fadeUp, checkPop, card flip), and component styles copied faithfully
-
-### Files touched
-- `apps/api/src/integrations/jira/router.py` (B1 + B2)
-- `apps/api/src/routers/onboarding.py` (B3)
-- `apps/web/src/pages/OnboardingPage.tsx` (F1 — full rewrite)
-- `apps/web/src/pages/onboarding/ConnectJiraStep.tsx` (kept — used by ConnectScreen via useJiraOAuth)
-- No new files required
-
-### Verification
-- [ ] OAuth flow redirects to Atlassian and back
-- [ ] Boards appear after OAuth (real boards, not mocked)
-- [ ] ScanningScreen completes and ConfirmTeam shows real Jira members
-- [ ] Capacity stepper, card flip, MemberEditor modal all work
-- [ ] Review → "Sync sprint history" → navigates to `/app/sprint-planner`
-- [ ] OrgProvider correctly redirects incomplete orgs to `/onboarding`
+- [ ] `router.py:351` — stop returning `project-*` synthetic IDs from the project fallback. Either:
+  - (preferred) call `/rest/agile/1.0/board?projectKeyOrId=<key>` per project to fetch real boards, OR
+  - return an explicit error: `{detail: "No Jira boards found. Your Jira connection may be missing the 'Software' product — disconnect and reconnect to re-consent."}` with a 422 so the UI can show it
+- [ ] `sync.py` — defensive guard: if `team.jira_board_id` starts with `project-`, mark sync `failed` with `error_code="invalid_board_id"` and a human message instead of letting Jira return a confusing 401
+- [ ] OAuth scope check: log/surface granted scopes after callback; if `read:jira-software` is absent, show a banner on the board-picker step telling the user to reconnect
 
 ---
 
 ## ✅ Done (archived)
 
+- **Onboarding Design Rebuild + Boards Fix** — full rewrite of `OnboardingPage.tsx` to match design (WelcomeStep, ConnectFlow, ConfirmTeam, Review, Done); real Jira boards via `/integrations/jira/boards` (B1); team-members endpoint (B2); confirm-team endpoint (B3).
 - **Stage 2 Simulator (M1–M6)** — multi-team matrix, all archetypes, parallel execution, HTML report. 89 tests passing. See `omada-simulator/docs/STAGE2_HOWTO.md`.
 - **Stage 2 Bug fixes (2026-05-20)** — omada_team_id clobber (A), push 409s (B), missing audit logs (C), backlog sync gap (D), Celery worker (E). Large/omada flipped 33% → 50% after Fix A.
 - **Initiative A — Identifier Associations** — merged. Team glossary, skill-intensity vectors, Sprint Brain routing, Scope Cop 5th criterion, override capture + recalibration loop, sprint-close refresh hooks.
 - **Initiative B — Inline Ticket Refinement** — merged (waves 0–4). Scope Cop suggested revisions, Jira write integration, conflict detection, Plan Review Modal, Sign-off Carousel, batched commit, telemetry.
+- **Initiative C Phase 1 — Sprint Gen Speed** — prompt caching (cache_control on system+tools), complexity cache table (alembic 0023), SSE streaming on `/plan` with stage events; frontend stage chip. Shipped 2026-06-02.
 
 ---
 
@@ -94,6 +70,14 @@ All code is written and committed. Nothing to build yet — just configuration t
 
 Nothing active — both major initiatives are shipped. Next work items are billing (configure + launch) and whatever comes after.
 
+### Infra — split Celery workers by queue
+
+- [ ] Idea: run multiple Celery worker processes, each bound to a dedicated queue, instead of one worker draining everything
+  - Likely split: `jira-sync` (long, IO-heavy) | `default` (fast user-facing tasks) | `beat` (scheduled)
+  - Why: a slow Jira backfill currently blocks every other task behind it; isolating queues stops head-of-line blocking and lets us tune `--concurrency` per workload
+  - Cheap to do on current runtime (no k8s needed) — just additional worker processes with `-Q <queue>` and route tasks via `task_routes`
+  - Revisit Kubernetes only when we outgrow PaaS-managed workers (many services, custom autoscaling, platform team) — not yet
+
 ### Post-beta — Multi-board / switch-board support
 
 Removed from beta Settings on 2026-06-07 in favour of "one board, set during onboarding." Bring back for main release.
@@ -106,17 +90,9 @@ Removed from beta Settings on 2026-06-07 in favour of "one board, set during onb
 
 ---
 
-## 🚀 Initiative C — Sprint Gen Speed
+## ⏸️ Initiative C — Sprint Gen Speed (Phases 2–4 deferred)
 
-**Deferred:** Consent + training-data capture (Phases 2-4 below) — paused pending user research on GDPR/CCPA/privacy law.
-
-### Phase 1 — Speed ✅ shipped (2026-06-02)
-
-- **1a. Prompt caching** — both Claude calls now mark `system`+`tools` (and stable user prefix on assignment call) as `cache_control: ephemeral`. Within a planning session, what-if and re-plan hit cache_read on the heavy prefix.
-- **1b. Complexity cache** — new table `ticket_complexity_cache` (alembic 0023), content-hashed; `_analyse_ticket_complexity` partial-fills and skips the Claude call entirely when all tickets hit.
-- **1c. SSE streaming** — `/plan` accepts `Accept: text/event-stream` and emits `stage` events (complexity_start/done, assigning_start/done, enrichment_start/done) then a final `result` (or `error`). JSON path preserved for backward compat. Frontend `SprintPlannerPage` consumes the stream and shows a stage chip.
-
-### ⏸️ DEFERRED — Phases 2-4 below paused pending privacy-law research
+Phase 1 shipped — see archived. Phases 2–4 paused pending GDPR/CCPA research.
 
 ### Phase 2 — Consent UI
 
@@ -208,7 +184,7 @@ Removed from beta Settings on 2026-06-07 in favour of "one board, set during onb
 ### Verification (Phase 1)
 - [ ] Time a full generation before/after — log latency delta to demonstrate
 - [ ] Verify `cache_read_tokens` shows up in cost_tracker logs on warm runs
-remo- [ ] Manually clear `ticket_complexity_cache` rows for one team → confirm fallback to Claude call works
+- [ ] Manually clear `ticket_complexity_cache` rows for one team → confirm fallback to Claude call works
 - [ ] SSE: open dev console, confirm event stream emits stage events; verify JSON fallback still works for tests
 - [ ] Existing test suite passes; add focused tests for cache hit path + cache miss path
 

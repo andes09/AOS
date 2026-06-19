@@ -19,13 +19,15 @@ function SignInPage() {
   return <SignIn routing="path" path="/sign-in" />
 }
 
+const testMode = import.meta.env.VITE_TEST_MODE === 'true'
+
 export default function App() {
   return (
     <Routes>
       <Route path="/sign-in/*" element={<SignInPage />} />
       <Route path="/invite" element={<SignedIn><InviteAcceptPage /></SignedIn>} />
       <Route path="/onboarding/*" element={
-        <SignedIn><OnboardingPage /></SignedIn>
+        testMode ? <OnboardingPage /> : <SignedIn><OnboardingPage /></SignedIn>
       } />
       <Route path="/app" element={
         <>

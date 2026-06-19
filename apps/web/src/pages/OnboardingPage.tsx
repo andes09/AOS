@@ -637,13 +637,14 @@ function ScanningScreen({ boardId, boardName, boardKey, connectionId, onDone, on
             const status = await get<{ state: string; error_message?: string }>(
               `/api/integrations/jira/sync-status/${teamId}`
             )
-            if (status.state === 'complete' || status.state === 'unknown') {
+            if (status.state === 'complete') {
               if (pollTimer) clearInterval(pollTimer)
               resolve()
             } else if (status.state === 'failed') {
               if (pollTimer) clearInterval(pollTimer)
               reject(new Error(status.error_message || 'Sync failed'))
             }
+            // 'running' and 'unknown' (sync not started yet) → keep polling
           } catch { /* network blip — keep polling */ }
         }, 2000)
       })

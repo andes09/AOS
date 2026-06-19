@@ -139,6 +139,8 @@ async def _wipe_team_data(db: AsyncSession, team_id: uuid.UUID) -> None:
     await db.execute(text("DELETE FROM dependencies WHERE team_id = :tid"), {"tid": team_id})
     await db.execute(text("DELETE FROM ticket_analyses WHERE team_id = :tid"), {"tid": team_id})
     await db.execute(text("DELETE FROM developer_velocity_profiles WHERE team_id = :tid"), {"tid": team_id})
+    # developers.team_id has no CASCADE — delete all team members before the team row.
+    await db.execute(text("DELETE FROM developers WHERE team_id = :tid"), {"tid": team_id})
 
 
 @users_router.delete("/me")
@@ -197,8 +199,9 @@ async def delete_my_account(
 
         if solo_on_team and team is not None:
             await _wipe_team_data(db, team_id)
-            # Developer.team_id has no ondelete, so delete the dev row before the team.
-            await db.delete(developer)
+            # _wipe_team_data deleted all developers including this one; expunge the
+            # stale in-session instance so SQLAlchemy doesn't try to re-delete it.
+            db.expunge(developer)
             await db.execute(text("DELETE FROM teams WHERE id = :tid"), {"tid": team_id})
 
             if org_id is not None:

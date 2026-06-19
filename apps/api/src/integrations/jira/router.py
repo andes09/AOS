@@ -251,10 +251,17 @@ async def jira_status(
     )
     if not connection:
         return {"connected": False}
+
+    team = await db.scalar(select(Team).where(Team.organization_id == org.id))
+    board_id = team.jira_board_id if team else None
+    board_ok = bool(board_id and not board_id.startswith("project-"))
+
     return {
         "connected": True,
         "cloud_url": connection.jira_cloud_url,
         "last_synced_at": connection.last_synced_at.isoformat() if connection.last_synced_at else None,
+        "board_id": board_id,
+        "board_configured": board_ok,
     }
 
 

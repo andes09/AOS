@@ -5,6 +5,8 @@ import { useApi } from '../lib/api'
 interface JiraStatus {
   connected: boolean
   last_synced_at?: string | null
+  board_id?: string | null
+  board_configured?: boolean
 }
 
 function formatRelative(iso: string | null | undefined): string {
@@ -69,7 +71,11 @@ export function JiraSyncControl() {
           if (s.state === 'complete') {
             if (pollRef.current) clearInterval(pollRef.current)
             setSyncing(false)
-            setMessage(null)
+            if ((s.tickets_synced ?? 0) === 0) {
+              setMessage('Sync complete — no tickets found. Check your board has open issues.')
+            } else {
+              setMessage(null)
+            }
             fetchStatus()
             return
           }

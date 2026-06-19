@@ -363,10 +363,10 @@ export function SprintPlannerPage() {
         scopeCopRanAt: data.analyzedAt,
         scopeCopResults: data.results.map(r => ({
           ...r,
-          stackAlignment: null,
-          matchedIdentifierCount: null,
-          suggestedRevision: null,
-          fetchedUpdatedAt: null,
+          stackAlignment: r.stackAlignment ?? null,
+          matchedIdentifierCount: r.matchedIdentifierCount ?? null,
+          suggestedRevision: r.suggestedRevision ?? null,
+          fetchedUpdatedAt: r.fetchedUpdatedAt ?? null,
         })),
       } : prev)
     },

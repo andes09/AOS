@@ -2,29 +2,15 @@
 
 ---
 
-## 🔨 Active: Beta Onboarding Hardening (6 streams)
+## 📋 Up next active work
 
-- [ ] E: sync.py warn on date parse; router.py boards 502 on auth error
-- [ ] B: SyncStatus model + migration + sync upsert + /sync-status endpoint + Sentry
-- [ ] D: POST /onboarding/reset + test
-- [ ] A: test_onboarding_flow_e2e.py
-- [ ] C: frontend error detail + polling + reset button + Sentry React + Playwright
-- [ ] F: .github/workflows/test.yml
-
-### 🐞 Boards fallback footgun (found 2026-06-17 in prod)
-
-Onboarding's boards endpoint silently falls back to projects (synthetic `project-<id>` IDs) when Jira's Agile API returns empty — usually because the OAuth connection is missing `read:jira-software`. The picker shows these indistinguishably from real boards, user selects one, sync then hits `/board/project-10192/sprint` and Jira 401s.
-
-- [ ] `router.py:351` — stop returning `project-*` synthetic IDs from the project fallback. Either:
-  - (preferred) call `/rest/agile/1.0/board?projectKeyOrId=<key>` per project to fetch real boards, OR
-  - return an explicit error: `{detail: "No Jira boards found. Your Jira connection may be missing the 'Software' product — disconnect and reconnect to re-consent."}` with a 422 so the UI can show it
-- [ ] `sync.py` — defensive guard: if `team.jira_board_id` starts with `project-`, mark sync `failed` with `error_code="invalid_board_id"` and a human message instead of letting Jira return a confusing 401
-- [ ] OAuth scope check: log/surface granted scopes after callback; if `read:jira-software` is absent, show a banner on the board-picker step telling the user to reconnect
+Nothing active — beta onboarding hardening shipped 2026-06-17 (see archived).
 
 ---
 
 ## ✅ Done (archived)
 
+- **Beta Onboarding Hardening (6 streams + boards-fallback footgun)** — shipped 2026-06-17 (commit `e2e4440`). Stream E (sync.py warn-on-date-parse + router.py 502 on Jira auth error), Stream B (SyncStatus model + migration 0026 + /sync-status endpoint + Sentry), Stream D (POST /onboarding/reset + tests), Stream A (test_onboarding_flow_e2e.py — 6 tests + reset tests), Stream C (frontend polling + reset button + Sentry React + Playwright smoke), Stream F (CI workflow). Boards-fallback footgun resolved by `0a98162` (drop project-* synthetic IDs, pick-project-then-board flow) plus OAuth scope fixes (`e713a1e`, `62d6ef9`, `b17a573`).
 - **Onboarding Design Rebuild + Boards Fix** — full rewrite of `OnboardingPage.tsx` to match design (WelcomeStep, ConnectFlow, ConfirmTeam, Review, Done); real Jira boards via `/integrations/jira/boards` (B1); team-members endpoint (B2); confirm-team endpoint (B3).
 - **Stage 2 Simulator (M1–M6)** — multi-team matrix, all archetypes, parallel execution, HTML report. 89 tests passing. See `omada-simulator/docs/STAGE2_HOWTO.md`.
 - **Stage 2 Bug fixes (2026-05-20)** — omada_team_id clobber (A), push 409s (B), missing audit logs (C), backlog sync gap (D), Celery worker (E). Large/omada flipped 33% → 50% after Fix A.
@@ -77,6 +63,17 @@ Nothing active — both major initiatives are shipped. Next work items are billi
   - Why: a slow Jira backfill currently blocks every other task behind it; isolating queues stops head-of-line blocking and lets us tune `--concurrency` per workload
   - Cheap to do on current runtime (no k8s needed) — just additional worker processes with `-Q <queue>` and route tasks via `task_routes`
   - Revisit Kubernetes only when we outgrow PaaS-managed workers (many services, custom autoscaling, platform team) — not yet
+
+### Sprint gen — gate commit/push on low confidence
+
+- [ ] Idea: today `/plan` always returns a plan and the UI surfaces `confidence_score` only as a gauge (`SprintPlannerPage.tsx:472`). One-click `pushMutation` (`SprintPlannerPage.tsx:330`) fires regardless. Low-confidence plans get pushed to Jira without friction.
+- [ ] Don't block generation — the lead still needs the assignments + what-if affordances to fix a shaky sprint. Generation should always run.
+- [ ] Add a threshold (start ~0.5, configurable) → when `confidence_score` is below it:
+  - Show a "Low confidence — review before committing" banner above the plan
+  - Disable Push-to-Jira until the lead explicitly acknowledges (checkbox or two-step confirm)
+  - Leave drop / what-if / refine flows fully enabled so the lead can raise confidence first
+- [ ] Decide where the threshold lives — feature flag vs. team setting. Start as a constant, promote to flag if leads ask to tune it.
+- [ ] Telemetry: log acknowledge-and-push-anyway events so we can see how often the gate actually catches a bad plan vs. just annoys people.
 
 ### Post-beta — Multi-board / switch-board support
 

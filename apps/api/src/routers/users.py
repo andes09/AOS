@@ -18,7 +18,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import _clerk, get_current_user_id, get_current_org_id
@@ -26,7 +26,7 @@ from src.auth_roles import require_role
 from src.database import get_db
 from src.models.developer import Developer
 from src.models.organization import Organization
-from src.models.sprint import SprintTicket
+from src.models.sprint import Sprint, SprintTicket
 from src.models.team import Team
 from src.models.velocity import DeveloperVelocityProfile
 
@@ -115,13 +115,46 @@ async def patch_my_role(
     return RoleResponse(user_id=user_id, app_role=developer.app_role)
 
 
+async def _wipe_team_data(db: AsyncSession, team_id: uuid.UUID) -> None:
+    """Delete every row scoped to a team, in FK-dependency order.
+
+    Many team-scoped tables don't have ondelete CASCADE on their FK to teams
+    (sprints, tickets, retros, sprint_alerts, dependencies, ticket_analyses,
+    developer_velocity_profiles), so we have to walk them by hand. Tables that
+    *do* CASCADE (team_access, ticket_revisions, sync_status,
+    recalibration_proposal, invitation, slack_config, team_identifiers) clean
+    up automatically when the team row is dropped at the end.
+    """
+    # Children of sprints first.
+    await db.execute(text(
+        "DELETE FROM sprint_tickets WHERE sprint_id IN "
+        "(SELECT id FROM sprints WHERE team_id = :tid)"
+    ), {"tid": team_id})
+    await db.execute(text("DELETE FROM sprint_alerts WHERE team_id = :tid"), {"tid": team_id})
+    await db.execute(text("DELETE FROM retro_patterns WHERE team_id = :tid"), {"tid": team_id})
+    await db.execute(text("DELETE FROM retrospectives WHERE team_id = :tid"), {"tid": team_id})
+    # Tickets reference sprints (no cascade); drop tickets before sprints.
+    await db.execute(text("DELETE FROM tickets WHERE team_id = :tid"), {"tid": team_id})
+    await db.execute(text("DELETE FROM sprints WHERE team_id = :tid"), {"tid": team_id})
+    await db.execute(text("DELETE FROM dependencies WHERE team_id = :tid"), {"tid": team_id})
+    await db.execute(text("DELETE FROM ticket_analyses WHERE team_id = :tid"), {"tid": team_id})
+    await db.execute(text("DELETE FROM developer_velocity_profiles WHERE team_id = :tid"), {"tid": team_id})
+
+
 @users_router.delete("/me")
 async def delete_my_account(
     user_id: str = Depends(get_current_user_id),
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete the authenticated user's Developer row + personal data, then delete the Clerk user."""
+    """Delete the authenticated user's account and any data they own.
+
+    Always removes the user's Developer row and their personal velocity profile.
+    If the user is the only Developer on their team, also wipes all team-scoped
+    data (sprints, tickets, retros, alerts, etc.) and deletes the team. If the
+    team was the only one in the org, wipes Jira connections and deletes the org.
+    Finally deletes the Clerk user so the account can't be re-used.
+    """
     developer = await db.scalar(
         select(Developer)
         .join(Team, Developer.team_id == Team.id)
@@ -133,7 +166,18 @@ async def delete_my_account(
     )
 
     if developer is not None:
-        # FKs without ondelete: clear assignee on sprint_tickets, drop velocity profiles.
+        team_id = developer.team_id
+        team = await db.get(Team, team_id)
+        org_id = team.organization_id if team else None
+
+        other_devs = await db.scalar(
+            select(func.count(Developer.id))
+            .where(Developer.team_id == team_id, Developer.id != developer.id)
+        )
+        solo_on_team = (other_devs or 0) == 0
+
+        # Personal data first — keeps the developer-delete path consistent
+        # whether or not we end up wiping the rest of the team.
         await db.execute(
             update(SprintTicket)
             .where(SprintTicket.assignee_id == developer.id)
@@ -142,9 +186,27 @@ async def delete_my_account(
         await db.execute(
             delete(DeveloperVelocityProfile).where(DeveloperVelocityProfile.developer_id == developer.id)
         )
-        # Remaining FKs (team_access, capacity, tickets, sprint_plan_override,
-        # recalibration_proposal) use ondelete CASCADE or SET NULL.
-        await db.delete(developer)
+
+        if solo_on_team and team is not None:
+            await _wipe_team_data(db, team_id)
+            # Developer.team_id has no ondelete, so delete the dev row before the team.
+            await db.delete(developer)
+            await db.execute(text("DELETE FROM teams WHERE id = :tid"), {"tid": team_id})
+
+            if org_id is not None:
+                remaining_teams = await db.scalar(
+                    select(func.count(Team.id)).where(Team.organization_id == org_id)
+                )
+                if (remaining_teams or 0) == 0:
+                    await db.execute(
+                        text("DELETE FROM jira_connections WHERE organization_id = :oid"),
+                        {"oid": org_id},
+                    )
+                    await db.execute(text("DELETE FROM organizations WHERE id = :oid"), {"oid": org_id})
+        else:
+            # Other devs share the team — only nuke this user.
+            await db.delete(developer)
+
         await db.commit()
 
     try:

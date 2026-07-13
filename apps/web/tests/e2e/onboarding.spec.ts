@@ -51,7 +51,8 @@ test.describe('Onboarding flow', () => {
 
     await page.goto('/onboarding')
 
-    // Welcome step should be visible (VITE_TEST_MODE bypasses <SignedIn> wrapper)
-    await expect(page.locator('text=Connect Jira')).toBeVisible({ timeout: 10000 })
+    // Welcome step should be visible (VITE_TEST_MODE bypasses <SignedIn> wrapper).
+    // Role-scoped: bare `text=Connect Jira` matches the sidebar step labels too.
+    await expect(page.getByRole('button', { name: /Connect Jira/ })).toBeVisible({ timeout: 10000 })
   })
 })

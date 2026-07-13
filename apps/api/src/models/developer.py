@@ -26,6 +26,7 @@ class Developer(Base):
     jira_account_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     role: Mapped[str | None] = mapped_column(String(100), nullable=True)
     app_role: Mapped[str] = mapped_column(
         SAEnum(AppRole, native_enum=False, values_callable=lambda obj: [e.value for e in obj]),

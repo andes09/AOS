@@ -21,3 +21,4 @@ class Organization(Base):
 
     teams: Mapped[list["Team"]] = relationship(back_populates="organization")
     jira_connections: Mapped[list["JiraConnection"]] = relationship(back_populates="organization")
+    github_connections: Mapped[list["GithubConnection"]] = relationship(back_populates="organization")

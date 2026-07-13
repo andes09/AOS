@@ -15,6 +15,7 @@ export type FeatureFlags = {
   dependency_radar: boolean
   omada_simulator: boolean
   onboarding: boolean
+  onboarding_v2: boolean
 }
 
 type FeaturesResponse = {

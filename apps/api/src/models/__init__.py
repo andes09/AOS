@@ -20,6 +20,8 @@ from src.models.ticket_revision import TicketRevision
 from src.models.oauth_state import OAuthState
 from src.models.ticket_complexity_cache import TicketComplexityCache
 from src.models.sync_status import SyncStatus
+from src.models.github_connection import GithubConnection
+from src.models.onboarding_session import OnboardingSession, OnboardingMessage, OnboardingSessionStatus, ProjectPurpose
 
 __all__ = [
     "Organization",
@@ -62,4 +64,9 @@ __all__ = [
     "OAuthState",
     "TicketComplexityCache",
     "SyncStatus",
+    "GithubConnection",
+    "OnboardingSession",
+    "OnboardingMessage",
+    "OnboardingSessionStatus",
+    "ProjectPurpose",
 ]

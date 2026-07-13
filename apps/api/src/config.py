@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     jira_client_secret: str = ""
     jira_redirect_uri: str = "http://localhost:8000/api/integrations/jira/callback"
 
+    github_client_id: str = ""
+    github_client_secret: str = ""
+    github_redirect_uri: str = "http://localhost:8000/api/integrations/github/callback"
+
+    # Platform-level Anthropic key used for the onboarding idea interview,
+    # which runs before the org has had a chance to save its own BYOK key.
+    # Org BYOK still wins when present.
+    anthropic_api_key: str = ""
+
     encryption_key: str  # 32-byte hex string
 
     environment: str = "local"

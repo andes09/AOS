@@ -2,9 +2,118 @@
 
 ---
 
+## 🚀 ACTIVE — Pivot: Onboarding v2 (project roadmap AI)
+
+Pivot: Omada becomes an interactive project-roadmap AI. This work replaces the Jira onboarding entry path (old wizard kept behind flag) with: GitHub connect → name+phone → LLM idea interview. Deliverable = backend API + headless hooks layer (partner builds the real UI). Full plan: `~/.claude/plans/we-are-pivoting-abd-sorted-sparrow.md`.
+
+- [x] 1. Migration `0027_onboarding_v2` + models: `developers.phone`, `github_connections`, `onboarding_sessions`, `onboarding_messages`
+- [x] 2. Config (`github_client_id/secret/redirect_uri`, `anthropic_api_key`) + `onboarding_v2` flag (local true, prod false) + `featureFlags.ts`
+- [x] 3. GitHub OAuth integration (`integrations/github/`, mirrors Jira): /connect /callback /status /disconnect /repos + tests
+- [x] 4. Onboarding v2 router: GET /state (derived), POST /github/skip, PUT /profile, POST /complete + tests
+- [x] 5. Idea interview: `services/idea_interview.py` (stream reply + tool-choice brief extraction, 40-msg cap, cost tracking); chat endpoints incl. SSE /chat/message + tests
+- [x] 6. Headless layer `apps/web/src/features/onboarding-v2/` (types, api, hooks, barrel — no styling)
+- [x] 7. Reference UI `OnboardingV2Page.tsx` + App.tsx flag-switched routing (`/onboarding/legacy` = old wizard, `/onboarding/v2` = explicit new flow)
+- [x] 8. Playwright e2e (SSE mocked) + full verification (pytest, tsc, build, legacy spec green)
+- [x] 9. Project purpose classification (hobby/startup/learning) — new explicit step, steers the idea interview's system prompt
+- [x] 10. Partner frontend-integration doc (`docs/onboarding-v2-frontend-integration.md`)
+- [ ] Ops (external): GitHub OAuth apps per env (callback `/api/integrations/github/callback`), Clerk GitHub social provider, `GITHUB_*` + `ANTHROPIC_API_KEY` in Railway
+
+### Review (2026-07-13)
+
+**Shipped.** 45 backend tests (36 original + 9 for purpose) + 3 Playwright tests, all green; `tsc` and prod build clean. Full pytest suite has 24 failures that are byte-identical on a clean tree (pre-existing: they need a local Postgres). Migrations not yet applied to a real DB — run `alembic upgrade head` when one is up (offline SQL compile verified for both 0027 and 0028).
+
+Flow is now: `github_connect → profile → purpose → idea_chat → done`. Purpose (hobby/startup/learning) is collected as an explicit 3-way choice — not chat-extracted — because it deterministically selects one of three system-prompt variants in `services/idea_interview.py` (`_PURPOSE_GUIDANCE`), each prioritizing different things: hobby → fun/free-time/small scope; startup → market/MVP/timeline pressure; learning → skill goals/depth vs breadth. The opening chat message is also purpose-flavored. `chat/start` and `chat/message` now 409 with `purpose_not_set` if called before `PUT /purpose`.
+
+Notes for the partner (UI): see `docs/onboarding-v2-frontend-integration.md` — full hook usage, flow diagram, local setup, and rules of the road. Short version: build against `apps/web/src/features/onboarding-v2/index.ts`, never call `fetch` directly, render off `state.currentStep` rather than hardcoding step order.
+
+Deviations from plan: added `brief_complete` column to `onboarding_sessions` (LLM "enough" judgment is distinct from user override); added explicit `/onboarding/v2` route; made Playwright port overridable via `E2E_PORT` (local 5174 is taken by the LandingPage dev server); fixed a strict-mode-ambiguous locator in the legacy onboarding spec; added the purpose step (not in the original plan — requested afterward, ships as migration 0028).
+
+---
+
 ## 📋 Up next active work
 
-Nothing active — beta onboarding hardening shipped 2026-06-17 (see archived).
+### Sprint Brain Quality — Phase 1 (Readiness Warnings) + Phase 2 (Auto-trim)
+
+**Goal:** stop generating dishonest sprint plans. Fix inputs before we call the model (Phase 1) and recover after the call when the plan is still shaky (Phase 2). User edits that lower confidence are out of scope — only initial generation is gated.
+
+**Design principle:** warnings-first, no hard blocks. One `ReadinessCard` component above the Generate button surfaces every issue; Generate is always enabled. Only truly terminal cases (zero developers, zero backlog tickets) return an inline error on click. Warnings are logged onto the trace so we can measure which ones predict bad outcomes.
+
+---
+
+**Phase 1a — Readiness checks (backend)**
+
+- [ ] New service `services/sprint_brain_readiness.py` — pure function `check_readiness(team_id, candidate_tickets, developer_profiles, sprint_length_days) -> ReadinessReport`
+- [ ] `ReadinessReport` shape: `{ overall_severity: "ok" | "warning" | "critical", issues: [{ code, severity, message, fix_hint, fix_url? }] }`
+- [ ] Implement these checks:
+  - `NO_DEVELOPERS` (critical, terminal) — zero eligible developers
+  - `NO_BACKLOG` (critical, terminal) — zero candidate tickets
+  - `ALL_DEVELOPERS_ON_PTO` (critical, terminal) — 0 total available days
+  - `THIN_VELOCITY_HISTORY` (warning) — any developer with < 3 recorded sprints; list which ones
+  - `NO_SKILL_VECTORS` (warning) — `skill_based_assignment` enabled but >50% of candidate tickets have no skill vector entries ≥ 0.2
+  - `UNESTIMATED_TICKETS` (warning) — >20% of candidates have no story points
+  - `BACKLOG_OVER_CAPACITY` (warning) — candidate total points > 1.5× team safe capacity; include suggested trim size
+  - `NEW_TEAM` (info) — team has < 2 completed sprints on record
+- [ ] Restore `_MIN_SPRINTS = 3` in `sprint_brain.py:278` — Phase 1 covers the cold-start UX gap that originally blocked this
+
+**Phase 1b — Wire readiness into the plan endpoint**
+
+- [ ] New endpoint `GET /api/teams/{team_id}/sprint-brain/readiness` — returns `ReadinessReport` without generating a plan; used by frontend to render the card pre-click
+- [ ] In `POST /plan` — call `check_readiness` first; if `overall_severity == "critical"` and any terminal issue is present, return 400 with the report (don't call the model)
+- [ ] On successful generation, attach `readiness_report` to the response so warnings echo on the returned plan
+- [ ] Persist readiness report onto the generation trace (extend existing trace payload or add a column — check current shape first)
+
+**Phase 1c — Frontend `ReadinessCard`**
+
+- [ ] New component `apps/web/src/components/SprintPlanner/ReadinessCard.tsx`
+- [ ] Renders above the Generate button on `SprintPlannerPage.tsx`
+- [ ] One row per issue: severity chip (info/warning/critical), message, optional "Fix" link
+- [ ] Uses TanStack Query on the readiness endpoint, refetches when team/backlog changes
+- [ ] For `BACKLOG_OVER_CAPACITY` — inline "Cap candidate set at top ~X points?" toggle (defaults on) that gets passed into the generate mutation
+- [ ] On the generated plan panel, show a compact banner echoing any warnings that were present at generate time
+
+**Phase 2a — Auto-trim via `what_if_dropped` (backend)**
+
+- [ ] Threshold constant `_CONFIDENCE_TARGET = 0.7` (top of `sprint_brain.py`, easy to tune)
+- [ ] After first plan generation, if `confidence_score < _CONFIDENCE_TARGET`:
+  - Pick ticket with highest value in `what_if_dropped` (biggest confidence lift on drop)
+  - Remove from candidate set, re-run `create_sprint_plan` with trimmed set
+  - Repeat up to `_MAX_AUTO_TRIM = 3` iterations
+  - Track dropped tickets in a `deferred` list
+- [ ] If still below threshold after max trims → skip to Phase 2b retry
+- [ ] Return payload extended: `{ plan, deferred: [{ticket_id, reason: "auto-trimmed to raise confidence from X to Y"}], auto_trim_iterations: N }`
+
+**Phase 2b — One tightened-prompt retry**
+
+- [ ] If Phase 2a hits max iterations and still below `_CONFIDENCE_TARGET`, one final retry with an appended user message: "The previous pass returned confidence {X}. Identify which assignments are driving that down and either reassign to a better-fit developer or move them to deferred."
+- [ ] Return whichever of (original, best-trimmed, retry) has highest confidence; label the response with which path was used
+- [ ] Never return worse than the original plan
+
+**Phase 2c — Frontend deferred surface**
+
+- [ ] On plan render, if `deferred` non-empty, show a "Set aside to raise confidence" section below the plan
+- [ ] Each deferred ticket has a "Bring back" button that re-runs generation with it forced in (bypasses auto-trim for that ticket)
+- [ ] Copy: "We set these aside because including them dropped confidence below 70%. Bring them back if you want to override."
+
+**Phase 3 — Telemetry (do alongside, not after)**
+
+- [ ] Log every readiness report + eventual `confidence_score` + override count on the trace
+- [ ] Log auto-trim iteration count and which tickets were dropped
+- [ ] After ~50 traces, review: which warnings correlate with low final confidence / high override rate? Prune warnings that are noise; strengthen copy on ones that predict badly.
+
+**Verification**
+
+- [ ] Backend unit tests for each readiness check (fixture inputs → expected report)
+- [ ] Backend integration test: team with thin history → readiness returns `THIN_VELOCITY_HISTORY`, `/plan` still succeeds and echoes the warning
+- [ ] Backend integration test: backlog 3× capacity → auto-trim triggers, deferred list non-empty, final confidence above threshold
+- [ ] Backend integration test: pathological inputs (all critical warnings) → returns 400 with report, no Claude call made (assert cost tracker unchanged)
+- [ ] Frontend Playwright: seed a thin-history team → open Sprint Planner → verify readiness card renders warnings → generate → verify plan banner echoes warnings
+- [ ] Manual: run against a real beta team, compare `confidence_score` distribution before/after over ~10 sprints
+
+**Out of scope (intentionally)**
+
+- Blocking user edits that lower confidence — the user retains full control post-generation
+- Push-to-Jira gating — separate P0 item, tracked below
+- Confidence calibration (Phase 3 of the parent Sprint Brain Quality plan) — comes after we have telemetry from Phase 1+2
 
 ---
 

@@ -9,6 +9,8 @@ import { ExecDashboardPage } from './pages/ExecDashboardPage'
 import { DependencyRadarPage } from './pages/DependencyRadarPage'
 import { RetrospectivePage } from './pages/RetrospectivePage'
 import { OnboardingPage } from './pages/OnboardingPage'
+import { OnboardingV2Page } from './pages/OnboardingV2Page'
+import { useFeatureFlags } from './featureFlags'
 import { SettingsPage } from './pages/SettingsPage'
 import { TeamGlossaryPage } from './pages/settings/TeamGlossaryPage'
 import { CalibrationSuggestionsPage } from './pages/settings/CalibrationSuggestionsPage'
@@ -21,13 +23,29 @@ function SignInPage() {
 
 const testMode = import.meta.env.VITE_TEST_MODE === 'true'
 
+/** /onboarding entry: v2 flow when the onboarding_v2 flag is on, else the
+ * legacy Jira wizard. Waits for flags to avoid flashing the wrong flow. */
+function OnboardingEntry() {
+  const { data: flags, isLoading } = useFeatureFlags()
+  if (isLoading) return null
+  return flags?.onboarding_v2 ? <OnboardingV2Page /> : <OnboardingPage />
+}
+
 export default function App() {
   return (
     <Routes>
       <Route path="/sign-in/*" element={<SignInPage />} />
       <Route path="/invite" element={<SignedIn><InviteAcceptPage /></SignedIn>} />
-      <Route path="/onboarding/*" element={
+      {/* Explicit variants: /v2 for building against the new flow pre-flag-flip,
+          /legacy as the escape hatch once the flag is on. */}
+      <Route path="/onboarding/v2" element={
+        testMode ? <OnboardingV2Page /> : <SignedIn><OnboardingV2Page /></SignedIn>
+      } />
+      <Route path="/onboarding/legacy" element={
         testMode ? <OnboardingPage /> : <SignedIn><OnboardingPage /></SignedIn>
+      } />
+      <Route path="/onboarding/*" element={
+        testMode ? <OnboardingPage /> : <SignedIn><OnboardingEntry /></SignedIn>
       } />
       <Route path="/app" element={
         <>

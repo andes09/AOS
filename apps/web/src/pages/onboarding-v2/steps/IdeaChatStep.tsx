@@ -1,0 +1,147 @@
+/**
+ * Step 4 — the AI idea interview. Renders the transcript plus the in-flight
+ * streamed reply, and a live ProjectBrief panel that fills in as the AI
+ * extracts structure. The "finish up" override appears after some back-and-forth.
+ */
+import { useEffect, useRef, useState } from 'react'
+import { useIdeaChat } from '../../../features/onboarding-v2'
+import type { ProjectBrief } from '../../../features/onboarding-v2'
+import { Btn, C, Spinner, WARM } from '../theme'
+
+export function IdeaChatStep() {
+  const chat = useIdeaChat()
+  const [draft, setDraft] = useState('')
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  const disabled = chat.isStreaming || chat.status === 'completed'
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+  }, [chat.messages.length, chat.streamingReply])
+
+  const submit = () => {
+    const content = draft.trim()
+    if (!content) return
+    setDraft('')
+    void chat.send(content)
+  }
+
+  if (chat.isLoading) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '32px 0', color: C.t3, fontSize: 14, animation: 'fadeUp 0.22s ease both' }}>
+        <Spinner /> Starting the interview…
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18, animation: 'fadeUp 0.22s ease both' }}>
+      <div>
+        <h2 style={{ fontSize: 21, fontWeight: 700, color: C.t1, letterSpacing: '-0.3px', marginBottom: 5 }}>Tell us about your idea</h2>
+        <p style={{ fontSize: 14, color: C.t2, lineHeight: 1.55 }}>Chat through what you're building. We'll turn the conversation into a structured brief on the right.</p>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 260px', gap: 18, alignItems: 'start' }}>
+        {/* Chat column */}
+        <div style={{ display: 'flex', flexDirection: 'column', border: `1px solid ${C.border}`, borderRadius: 12, background: C.bg0, overflow: 'hidden' }}>
+          <div ref={scrollRef} style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 16, maxHeight: 340, minHeight: 220, overflowY: 'auto' }}>
+            {chat.messages.map(m => <Bubble key={m.id} role={m.role} text={m.content} />)}
+            {chat.isStreaming && <Bubble role="assistant" text={chat.streamingReply} busy />}
+          </div>
+
+          {chat.error && (
+            <div role="alert" style={{ margin: '0 16px 12px', background: C.dangerBg, border: `1px solid ${C.dangerBd}`, borderRadius: 8, padding: '9px 12px', fontSize: 12.5, color: C.danger }}>
+              {chat.error}
+            </div>
+          )}
+
+          <form
+            onSubmit={e => { e.preventDefault(); submit() }}
+            style={{ display: 'flex', gap: 8, padding: 12, borderTop: `1px solid ${C.borderSubtle}`, background: C.bg1 }}
+          >
+            <input
+              aria-label="Your message"
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              disabled={disabled}
+              placeholder={chat.status === 'completed' ? 'Interview complete' : 'Type your reply…'}
+              style={{ flex: 1, background: C.bg0, border: `1px solid ${C.border}`, borderRadius: 6, padding: '9px 12px', fontSize: 14, color: C.t1, opacity: disabled ? 0.6 : 1 }}
+            />
+            <Btn type="submit" disabled={disabled || !draft.trim()} style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+              {chat.isStreaming ? <Spinner size={13} color="rgba(255,255,255,0.85)" /> : 'Send'}
+            </Btn>
+          </form>
+        </div>
+
+        {/* Brief panel */}
+        <BriefPanel brief={chat.brief} complete={chat.briefComplete} />
+      </div>
+
+      {chat.status !== 'completed' && chat.messages.length > 2 && (
+        <div>
+          <Btn variant="outline" size="sm" onClick={() => void chat.complete()}>That's enough — finish up</Btn>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Bubble({ role, text, busy }: { role: 'user' | 'assistant'; text: string; busy?: boolean }) {
+  const isUser = role === 'user'
+  return (
+    <div data-role={role} aria-busy={busy || undefined} style={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
+      <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: C.t3, marginBottom: 3 }}>{isUser ? 'You' : 'Omada'}</span>
+      <div style={{
+        maxWidth: '86%', padding: '9px 13px', borderRadius: 12, fontSize: 13.5, lineHeight: 1.5, whiteSpace: 'pre-wrap',
+        color: isUser ? '#fff' : C.t1,
+        background: isUser ? C.accent : C.bg3,
+        borderBottomRightRadius: isUser ? 3 : 12,
+        borderBottomLeftRadius: isUser ? 12 : 3,
+      }}>
+        {text}
+        {busy && <span style={{ marginLeft: 3, color: C.t3 }}>▍</span>}
+      </div>
+    </div>
+  )
+}
+
+const BRIEF_FIELDS: { key: keyof ProjectBrief; label: string }[] = [
+  { key: 'projectName', label: 'Name' },
+  { key: 'problemStatement', label: 'Problem' },
+  { key: 'targetAudience', label: 'Audience' },
+  { key: 'coreFeatures', label: 'Core features' },
+  { key: 'scope', label: 'Scope' },
+  { key: 'timeline', label: 'Timeline' },
+]
+
+function BriefPanel({ brief, complete }: { brief: ProjectBrief | null; complete: boolean }) {
+  const fmt = (v: ProjectBrief[keyof ProjectBrief]): string | null => {
+    if (v == null) return null
+    if (Array.isArray(v)) return v.length ? v.join(', ') : null
+    return String(v) || null
+  }
+  return (
+    <aside style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: WARM.surface, padding: 16, position: 'sticky', top: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: C.t3 }}>Your brief</span>
+        {complete && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 600, color: C.success, background: C.successBg, border: `1px solid ${C.success}`, padding: '2px 7px', borderRadius: 20 }}>
+            <svg width="8" height="8" viewBox="0 0 8 8"><path d="M1 4 L3 6 L7 1" stroke={C.success} strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            Ready
+          </span>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {BRIEF_FIELDS.map(({ key, label }) => {
+          const val = brief ? fmt(brief[key]) : null
+          return (
+            <div key={String(key)}>
+              <div style={{ fontSize: 10.5, fontWeight: 600, color: C.t3, marginBottom: 2 }}>{label}</div>
+              <div style={{ fontSize: 12.5, lineHeight: 1.4, color: val ? C.t1 : C.t3 }}>{val ?? '—'}</div>
+            </div>
+          )
+        })}
+      </div>
+    </aside>
+  )
+}

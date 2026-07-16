@@ -28,3 +28,4 @@ class Team(Base):
     developers: Mapped[list["Developer"]] = relationship(back_populates="team")
     sprints: Mapped[list["Sprint"]] = relationship(back_populates="team")
     sprint_alerts: Mapped[list["SprintAlert"]] = relationship(back_populates="team")
+    projects: Mapped[list["Project"]] = relationship(back_populates="team")

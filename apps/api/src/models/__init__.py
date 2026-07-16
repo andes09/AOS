@@ -22,6 +22,9 @@ from src.models.ticket_complexity_cache import TicketComplexityCache
 from src.models.sync_status import SyncStatus
 from src.models.github_connection import GithubConnection
 from src.models.onboarding_session import OnboardingSession, OnboardingMessage, OnboardingSessionStatus, ProjectPurpose
+from src.models.project import Project
+from src.models.milestone import Milestone
+from src.models.task import Task, TaskStatus
 
 __all__ = [
     "Organization",
@@ -69,4 +72,8 @@ __all__ = [
     "OnboardingMessage",
     "OnboardingSessionStatus",
     "ProjectPurpose",
+    "Project",
+    "Milestone",
+    "Task",
+    "TaskStatus",
 ]

@@ -46,6 +46,7 @@ class OnboardingSession(Base):
     messages: Mapped[list["OnboardingMessage"]] = relationship(
         back_populates="session", order_by="OnboardingMessage.seq"
     )
+    project: Mapped["Project | None"] = relationship(back_populates="onboarding_session", uselist=False)
 
 
 class OnboardingMessage(Base):

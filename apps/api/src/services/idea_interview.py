@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import settings
 from src.models.onboarding_session import OnboardingMessage, OnboardingSession
+from src.schemas.project_brief import anthropic_tool_properties, content_field_aliases
 from src.services.ai_client import get_anthropic_key
 from src.services.cost_tracker import record_generation_cost
 
@@ -58,20 +59,8 @@ DEFAULT_OPENING_MESSAGE = _OPENING_MESSAGES["startup"]
 def opening_message(purpose: str | None) -> str:
     return _OPENING_MESSAGES.get(purpose or "", DEFAULT_OPENING_MESSAGE)
 
-_BRIEF_LIST_FIELDS = [
-    "coreFeatures",
-    "outOfScope",
-    "techConstraints",
-    "existingAssets",
-    "openQuestions",
-]
-_BRIEF_SCALAR_FIELDS = [
-    "projectName",
-    "problemStatement",
-    "targetAudience",
-    "scope",
-    "timeline",
-]
+
+_BRIEF_SCALAR_FIELDS, _BRIEF_LIST_FIELDS = content_field_aliases()
 # Fields that must be filled before the interview counts as complete.
 _REQUIRED_FIELDS = [
     "projectName",
@@ -138,26 +127,28 @@ def _system_prompt(purpose: str | None) -> str:
         return _BASE_SYSTEM_PROMPT
     return _BASE_SYSTEM_PROMPT + "\n" + guidance
 
+
+def _brief_tool_input_schema() -> dict:
+    """Derive the forced-tool input_schema from ProjectBrief, then layer
+    `isComplete` on top — it's an extraction-protocol control field, not
+    project content, so it's intentionally not part of ProjectBrief itself.
+    """
+    properties = anthropic_tool_properties()
+    properties["isComplete"] = {
+        "type": "boolean",
+        "description": "True when the brief has enough substance to plan a roadmap",
+    }
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": ["isComplete"],
+    }
+
+
 _BRIEF_TOOL = {
     "name": "update_project_brief",
     "description": "Record everything learned so far about the founder's project.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "projectName": {"type": ["string", "null"], "description": "Working name of the project, if stated"},
-            "problemStatement": {"type": ["string", "null"], "description": "The problem being solved, in the founder's terms"},
-            "targetAudience": {"type": ["string", "null"], "description": "Who the project is for"},
-            "coreFeatures": {"type": "array", "items": {"type": "string"}, "description": "Key features described so far"},
-            "scope": {"type": ["string", "null"], "description": "What the first/MVP version includes"},
-            "outOfScope": {"type": "array", "items": {"type": "string"}, "description": "Explicitly excluded from the first version"},
-            "timeline": {"type": ["string", "null"], "description": "Target timeline or deadline"},
-            "techConstraints": {"type": "array", "items": {"type": "string"}, "description": "Stack preferences, integrations, platform constraints"},
-            "existingAssets": {"type": "array", "items": {"type": "string"}, "description": "Existing code, designs, repos, or resources"},
-            "openQuestions": {"type": "array", "items": {"type": "string"}, "description": "Things still unclear that a planner would need"},
-            "isComplete": {"type": "boolean", "description": "True when the brief has enough substance to plan a roadmap"},
-        },
-        "required": ["isComplete"],
-    },
+    "input_schema": _brief_tool_input_schema(),
 }
 
 

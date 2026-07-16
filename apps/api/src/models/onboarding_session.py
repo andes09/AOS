@@ -53,7 +53,7 @@ class OnboardingMessage(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("onboarding_sessions.id"), index=True
+        UUID(as_uuid=True), ForeignKey("onboarding_sessions.id", ondelete="CASCADE"), index=True
     )
     role: Mapped[str] = mapped_column(String(20))  # "user" | "assistant"
     content: Mapped[str] = mapped_column(Text)

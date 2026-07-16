@@ -213,6 +213,18 @@ async def delete_my_account(
                         text("DELETE FROM jira_connections WHERE organization_id = :oid"),
                         {"oid": org_id},
                     )
+                    # onboarding_sessions and github_connections FK to organizations.id
+                    # with no ondelete cascade — must delete before the org row, same as
+                    # jira_connections above. (onboarding_messages cascades automatically
+                    # via its own DB-level FK to onboarding_sessions.id.)
+                    await db.execute(
+                        text("DELETE FROM onboarding_sessions WHERE organization_id = :oid"),
+                        {"oid": org_id},
+                    )
+                    await db.execute(
+                        text("DELETE FROM github_connections WHERE organization_id = :oid"),
+                        {"oid": org_id},
+                    )
                     await db.execute(text("DELETE FROM organizations WHERE id = :oid"), {"oid": org_id})
         else:
             # Other devs share the team — only nuke this user.

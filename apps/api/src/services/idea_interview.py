@@ -1,7 +1,7 @@
 """
 Idea interview — the LLM-driven onboarding questionnaire (onboarding v2).
 
-Each turn makes two Claude calls:
+Each turn makes two LLM calls (Groq, via its OpenAI-compatible API):
 1. A streaming conversational reply (tokens forwarded to the caller for SSE).
 2. A non-streaming forced-tool extraction over the transcript that updates the
    structured ProjectBrief and judges whether the interview has enough.
@@ -16,20 +16,19 @@ import logging
 from datetime import datetime
 from typing import Awaitable, Callable
 
-import anthropic
 from fastapi import HTTPException, status
+from openai import APIError, AsyncOpenAI, AuthenticationError, RateLimitError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import settings
 from src.models.onboarding_session import OnboardingMessage, OnboardingSession
 from src.schemas.project_brief import anthropic_tool_properties, content_field_aliases
-from src.services.ai_client import get_anthropic_key
 from src.services.cost_tracker import record_generation_cost
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-sonnet-4-6"
+_MODEL = settings.groq_model
 _REPLY_MAX_TOKENS = 1024
 _EXTRACT_MAX_TOKENS = 2048
 
@@ -145,28 +144,32 @@ def _brief_tool_input_schema() -> dict:
     }
 
 
+# OpenAI/Groq function-tool form. `_brief_tool_input_schema()` returns a plain
+# JSON Schema object, which serves as the function `parameters` unchanged.
 _BRIEF_TOOL = {
-    "name": "update_project_brief",
-    "description": "Record everything learned so far about the founder's project.",
-    "input_schema": _brief_tool_input_schema(),
+    "type": "function",
+    "function": {
+        "name": "update_project_brief",
+        "description": "Record everything learned so far about the founder's project.",
+        "parameters": _brief_tool_input_schema(),
+    },
 }
 
 
 async def resolve_api_key(clerk_org_id: str, db: AsyncSession) -> str:
-    """Org BYOK key if saved, else the platform key. 402 when neither exists.
+    """The platform Groq API key for the idea interview. 402 when unset.
 
-    Onboarding runs before the org has had a chance to save its own key, so
-    unlike other AI features this one may fall back to the platform key.
+    The interview runs on Groq's free API, before the org has saved any of its
+    own AI keys, so there's no per-org BYOK path here — it always uses the
+    platform key. `clerk_org_id`/`db` are kept for interface stability with the
+    router (and a possible future per-org key).
     """
-    try:
-        return await get_anthropic_key(clerk_org_id, db)
-    except HTTPException:
-        if settings.anthropic_api_key:
-            return settings.anthropic_api_key
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="No Anthropic API key available for the idea interview.",
-        )
+    if settings.groq_api_key:
+        return settings.groq_api_key
+    raise HTTPException(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        detail="No Groq API key configured for the idea interview. Set GROQ_API_KEY.",
+    )
 
 
 def missing_fields(brief: dict | None) -> list[str]:
@@ -242,28 +245,37 @@ async def run_interview_turn(
     await db.flush()
 
     transcript = await _transcript(session, db)
-    client = anthropic.AsyncAnthropic(api_key=api_key)
+    client = AsyncOpenAI(api_key=api_key, base_url=settings.groq_base_url)
 
+    system_prompt = _system_prompt(session.project_purpose) + _turn_context(session.project_brief)
     reply_parts: list[str] = []
+    reply_usage = None
     try:
-        async with client.messages.stream(
+        stream = await client.chat.completions.create(
             model=_MODEL,
             max_tokens=_REPLY_MAX_TOKENS,
-            system=_system_prompt(session.project_purpose) + _turn_context(session.project_brief),
-            messages=transcript,
-        ) as stream:
-            async for text in stream.text_stream:
+            messages=[{"role": "system", "content": system_prompt}, *transcript],
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        async for chunk in stream:
+            # The final usage-only chunk carries no choices.
+            if chunk.usage is not None:
+                reply_usage = chunk.usage
+            if not chunk.choices:
+                continue
+            text = chunk.choices[0].delta.content
+            if text:
                 reply_parts.append(text)
                 await on_token(text)
-            reply_response = await stream.get_final_message()
-    except anthropic.AuthenticationError as exc:
-        raise ValueError("Invalid Anthropic API key.") from exc
-    except anthropic.RateLimitError as exc:
+    except AuthenticationError as exc:
+        raise ValueError("Invalid Groq API key.") from exc
+    except RateLimitError as exc:
         raise RuntimeError(
-            "Anthropic API rate limit reached. Please wait a moment and try again."
+            "Groq API rate limit reached. Please wait a moment and try again."
         ) from exc
-    except anthropic.APIError as exc:
-        raise RuntimeError(f"Anthropic API error: {exc.message}") from exc
+    except APIError as exc:
+        raise RuntimeError(f"Groq API error: {exc}") from exc
 
     reply_text = "".join(reply_parts)
     assistant_msg = OnboardingMessage(
@@ -275,33 +287,39 @@ async def run_interview_turn(
     # Extraction pass over the updated transcript.
     extract_usage = None
     try:
-        extraction = await client.messages.create(
+        extraction = await client.chat.completions.create(
             model=_MODEL,
             max_tokens=_EXTRACT_MAX_TOKENS,
-            system=(
-                "Extract everything known about the founder's project from this "
-                "onboarding interview transcript. Only record facts the founder "
-                "actually stated — never invent details."
-            ),
-            messages=[{
-                "role": "user",
-                "content": "Transcript:\n" + json.dumps(transcript + [{"role": "assistant", "content": reply_text}]),
-            }],
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract everything known about the founder's project from this "
+                        "onboarding interview transcript. Only record facts the founder "
+                        "actually stated — never invent details."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": "Transcript:\n" + json.dumps(transcript + [{"role": "assistant", "content": reply_text}]),
+                },
+            ],
             tools=[_BRIEF_TOOL],
-            tool_choice={"type": "tool", "name": "update_project_brief"},
+            tool_choice={"type": "function", "function": {"name": "update_project_brief"}},
         )
         extract_usage = extraction.usage
-        tool_block = next(
-            (b for b in extraction.content if b.type == "tool_use" and b.name == "update_project_brief"),
+        tool_calls = extraction.choices[0].message.tool_calls or []
+        tool_call = next(
+            (t for t in tool_calls if t.function.name == "update_project_brief"),
             None,
         )
-        if tool_block is not None:
-            extracted = tool_block.input
+        if tool_call is not None:
+            extracted = json.loads(tool_call.function.arguments)
             session.project_brief = merge_brief(session.project_brief, extracted)
             # Trust the model's judgment only when the required fields back it up.
             if extracted.get("isComplete") and not missing_fields(session.project_brief):
                 session.brief_complete = True
-    except anthropic.APIError:
+    except (APIError, json.JSONDecodeError):
         # Extraction is best-effort — a failed pass must not lose the reply.
         logger.exception("idea_interview extraction failed for session %s", session.id)
 
@@ -313,7 +331,7 @@ async def run_interview_turn(
 
     record_generation_cost(
         "idea_interview",
-        reply_response.usage,
+        reply_usage,
         extract_usage,
         model=_MODEL,
         session_id=str(session.id),

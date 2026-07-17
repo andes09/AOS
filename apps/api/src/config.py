@@ -28,10 +28,17 @@ class Settings(BaseSettings):
     github_client_secret: str = ""
     github_redirect_uri: str = "http://localhost:8000/api/integrations/github/callback"
 
-    # Platform-level Anthropic key used for the onboarding idea interview,
-    # which runs before the org has had a chance to save its own BYOK key.
-    # Org BYOK still wins when present.
+    # Platform-level Anthropic key used by the main AI features (sprint brain,
+    # scope cop, retro, etc.). Org BYOK still wins when present.
     anthropic_api_key: str = ""
+
+    # The onboarding idea interview runs on Groq's free, OpenAI-compatible API
+    # (kept separate from the Anthropic-backed features above). Only the
+    # platform key is used here — the interview happens before an org has saved
+    # any of its own AI keys. Get a free key at https://console.groq.com/keys.
+    groq_api_key: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_model: str = "llama-3.3-70b-versatile"
 
     encryption_key: str  # 32-byte hex string
 

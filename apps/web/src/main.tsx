@@ -2,11 +2,12 @@
 // This runs synchronously, before the React tree mounts.
 ;(function () {
   try {
-    const stored = localStorage.getItem('aos_theme')
-    const theme = stored === 'dark' || stored === 'light' ? stored : 'light'
+    // Dark-first: default to dark unless the user has explicitly toggled.
+    const stored = localStorage.getItem('aos_theme_v2')
+    const theme = stored === 'dark' || stored === 'light' ? stored : 'dark'
     document.documentElement.setAttribute('data-theme', theme)
   } catch {
-    document.documentElement.setAttribute('data-theme', 'light')
+    document.documentElement.setAttribute('data-theme', 'dark')
   }
 })()
 

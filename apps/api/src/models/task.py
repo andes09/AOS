@@ -1,7 +1,7 @@
 import enum
 import uuid
-from datetime import datetime
-from sqlalchemy import String, Text, DateTime, ForeignKey, Integer, Index
+from datetime import date, datetime
+from sqlalchemy import String, Text, Date, DateTime, ForeignKey, Integer, Index
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -32,6 +32,9 @@ class Task(Base):
         server_default="todo",
     )
     sort_order: Mapped[int] = mapped_column(Integer)
+    # Calendar day this task is planned for (roadmap calendar view). Nullable so
+    # tasks can exist unscheduled; the generator fills it in on creation.
+    scheduled_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     github_repo: Mapped[str | None] = mapped_column(String, nullable=True)
     github_path: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

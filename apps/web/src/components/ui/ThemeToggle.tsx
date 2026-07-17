@@ -1,7 +1,7 @@
 import { Sun, Moon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
-const STORAGE_KEY = 'aos_theme'
+const STORAGE_KEY = 'aos_theme_v2'
 type Theme = 'light' | 'dark'
 
 function getStoredTheme(): Theme {
@@ -9,7 +9,7 @@ function getStoredTheme(): Theme {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (stored === 'dark' || stored === 'light') return stored
   } catch {}
-  return 'light'
+  return 'dark'
 }
 
 function applyTheme(theme: Theme) {

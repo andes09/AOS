@@ -77,7 +77,7 @@ export function BurndownChart({ data, sprintLength, predictedEndDay, teamId }: B
     return (
       <Card style={{ height: 280, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <span style={{ color: is404 ? 'var(--color-text-muted)' : 'var(--color-danger)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)' }}>
-          {is404 ? 'No active sprint — connect Jira to sync sprint data' : 'Failed to load burndown data'}
+          {is404 ? 'No active sprint data yet' : 'Failed to load burndown data'}
         </span>
       </Card>
     )

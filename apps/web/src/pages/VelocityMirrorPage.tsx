@@ -116,7 +116,7 @@ export function VelocityMirrorPage() {
               fontSize: 'var(--text-sm)',
               marginTop: 4,
             }}>
-              {error instanceof ApiError && error.status === 404 ? 'No active sprint — connect Jira to get started' : 'Could not load sprint data'}
+              {error instanceof ApiError && error.status === 404 ? 'No sprint data yet' : 'Could not load sprint data'}
             </div>
           )}
           {sprint && (

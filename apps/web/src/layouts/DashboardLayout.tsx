@@ -1,12 +1,14 @@
-import { CSSProperties } from 'react'
+import { CSSProperties, useState } from 'react'
 import { Outlet, NavLink } from 'react-router-dom'
 import { UserButton } from '@clerk/clerk-react'
+import { Settings } from 'lucide-react'
 import { useAppRole } from '../hooks/useAppRole'
 import { RoleSwitcher } from '../components/RoleSwitcher'
 import { TeamProvider } from '../contexts/TeamContext'
 import { TeamSwitcher } from '../components/TeamSwitcher'
 import { ThemeToggle } from '../components/ui/ThemeToggle'
-import { JiraSyncControl } from '../components/JiraSyncControl'
+import { Modal } from '../components/ui/Modal'
+import { SettingsPage } from '../pages/SettingsPage'
 import { useFeature } from '../featureFlags'
 
 function navItemStyle(isActive: boolean): CSSProperties {
@@ -42,11 +44,11 @@ const sectionLabel: CSSProperties = {
 
 export function DashboardLayout() {
   const { appRole } = useAppRole()
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const canSeeLead = appRole === 'lead' || appRole === 'exec' || appRole === 'admin'
   const canSeeExec = appRole === 'exec' || appRole === 'admin'
   const showMultiTeam = useFeature('multi_team_dashboard')
   const showExecDashboard = useFeature('exec_dashboard')
-  const showDependencyRadar = useFeature('dependency_radar')
 
   return (
     <TeamProvider>
@@ -88,25 +90,13 @@ export function DashboardLayout() {
           <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
             <li>
               <NavLink to="/app/sprint-planner" style={({ isActive }) => navItemStyle(isActive)}>
-                Sprint Planner
-              </NavLink>
-            </li>
-            <li>
-              <NavLink to="/app/velocity-mirror" style={({ isActive }) => navItemStyle(isActive)}>
-                Sprint Pulse
+                Planner
               </NavLink>
             </li>
 
             {canSeeLead && (
               <>
                 <li style={sectionLabel}>Intelligence</li>
-                {showDependencyRadar && (
-                  <li>
-                    <NavLink to="/app/dependency-radar" style={({ isActive }) => navItemStyle(isActive)}>
-                      Dependency Radar
-                    </NavLink>
-                  </li>
-                )}
                 <li>
                   <NavLink to="/app/retrospective" style={({ isActive }) => navItemStyle(isActive)}>
                     Retro Prep
@@ -132,16 +122,30 @@ export function DashboardLayout() {
                 </li>
               </>
             )}
-
-            <li>
-              <NavLink to="/app/settings" style={({ isActive }) => navItemStyle(isActive)}>
-                Settings
-              </NavLink>
-            </li>
           </ul>
 
-          <div style={{ padding: '8px 10px 0' }}>
+          {/* Profile + settings gear, bottom-left */}
+          <div style={{ padding: '8px 10px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
             <UserButton />
+            <button
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Settings"
+              title="Settings"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 30,
+                height: 30,
+                borderRadius: 'var(--radius-md)',
+                background: 'transparent',
+                border: '1px solid var(--color-border)',
+                color: 'var(--color-text-secondary)',
+                cursor: 'pointer',
+              }}
+            >
+              <Settings size={16} />
+            </button>
           </div>
         </nav>
 
@@ -158,7 +162,6 @@ export function DashboardLayout() {
             padding: '0 16px',
             gap: 12,
           }}>
-            <JiraSyncControl />
             <ThemeToggle />
           </header>
           <main style={{ flex: 1, padding: 24, overflowY: 'auto', background: 'var(--color-bg-primary)' }}>
@@ -167,6 +170,10 @@ export function DashboardLayout() {
         </div>
 
         {import.meta.env.DEV && <RoleSwitcher />}
+
+        <Modal open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Settings">
+          <SettingsPage onClose={() => setSettingsOpen(false)} />
+        </Modal>
       </div>
     </TeamProvider>
   )

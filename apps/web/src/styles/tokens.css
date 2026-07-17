@@ -41,39 +41,39 @@
   color-scheme: light;
 }
 
-/* ── Dark Theme — Linear-style deep navy ──────────────────── */
+/* ── Dark Theme — neutral warm grey (ChatGPT-inspired), soft on the eyes ── */
 [data-theme="dark"] {
-  /* Backgrounds */
-  --color-bg-primary:    #0d1117;
-  --color-bg-secondary:  #161b22;
-  --color-bg-tertiary:   #1c2330;
-  --color-bg-elevated:   #1c2330;
+  /* Backgrounds — neutral greys, no blue tint; nothing pure-black */
+  --color-bg-primary:    #212121;  /* main content + body */
+  --color-bg-secondary:  #171717;  /* sidebar / recessed surfaces */
+  --color-bg-tertiary:   #2f2f2f;  /* hover / subtle fills */
+  --color-bg-elevated:   #2a2a2a;  /* cards, modals — a step above primary */
 
-  /* Borders */
-  --color-border:        #30363d;
-  --color-border-subtle: #21262d;
+  /* Borders — low-contrast grey so panels read softly */
+  --color-border:        #3a3a3a;
+  --color-border-subtle: #2b2b2b;
 
-  /* Text */
-  --color-text-primary:   #e6edf3;
-  --color-text-secondary: #8b949e;
-  --color-text-muted:     #484f58;
+  /* Text — off-white, not pure white, to cut glare */
+  --color-text-primary:   #ececec;
+  --color-text-secondary: #b4b4b4;
+  --color-text-muted:     #8e8e8e;
 
-  /* Accent — same Atlassian blue, lighter in dark */
-  --color-accent:        #579DFF;
-  --color-accent-hover:  #85B8FF;
-  --color-accent-subtle: #0c2340;
+  /* Accent — keep the blue, sitting on grey rather than navy */
+  --color-accent:        #6ea8fe;
+  --color-accent-hover:  #8fbcff;
+  --color-accent-subtle: #273140;  /* selected nav / info fills */
 
-  /* Semantic */
-  --color-success:       #3fb950;
-  --color-success-bg:    #0d2d1a;
-  --color-warning:       #d29922;
-  --color-warning-bg:    #2d2005;
-  --color-danger:        #f85149;
-  --color-danger-subtle: #2d0f0f;
+  /* Semantic — muted so they don't glare against grey */
+  --color-success:       #4cae6a;
+  --color-success-bg:    #17271c;
+  --color-warning:       #d6a94e;
+  --color-warning-bg:    #2a2411;
+  --color-danger:        #f0736a;
+  --color-danger-subtle: #2c1a18;
 
   /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.04);
-  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.5), 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.55), 0 0 1px rgba(255, 255, 255, 0.05);
 
   /* Scrollbar */
   color-scheme: dark;

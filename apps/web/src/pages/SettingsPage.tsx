@@ -43,7 +43,7 @@ interface InvitationItem {
   createdAt: string
 }
 
-export function SettingsPage() {
+export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
   const showSlackAlerts = useFeature('slack_alerts')
   const showGlossary = useFeature('skill_based_assignment')
   const [anthropicKey, setAnthropicKey] = useState('')
@@ -231,9 +231,13 @@ export function SettingsPage() {
 
   return (
     <div style={{ maxWidth: 640, margin: '0 auto', fontFamily: 'var(--font-sans)' }}>
-      <h1 style={{ color: 'var(--color-text-primary)', fontSize: 'var(--text-xl)', fontWeight: 700, marginBottom: 24, margin: '0 0 24px' }}>
-        Settings
-      </h1>
+      {/* In the modal the dialog header already says "Settings"; only show this
+          heading when rendered as a standalone page. */}
+      {!onClose && (
+        <h1 style={{ color: 'var(--color-text-primary)', fontSize: 'var(--text-xl)', fontWeight: 700, margin: '0 0 24px' }}>
+          Settings
+        </h1>
+      )}
 
       {/* Anthropic API Key */}
       <Card>
@@ -383,6 +387,7 @@ export function SettingsPage() {
             </p>
             <Link
               to="/app/settings/glossary"
+              onClick={onClose}
               style={{
                 color: 'var(--color-accent)',
                 fontFamily: 'var(--font-sans)',
@@ -411,6 +416,7 @@ export function SettingsPage() {
             </p>
             <Link
               to="/app/settings/calibration"
+              onClick={onClose}
               style={{
                 color: 'var(--color-accent)',
                 fontFamily: 'var(--font-sans)',

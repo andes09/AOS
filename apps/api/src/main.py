@@ -30,6 +30,7 @@ from src.routers.dependency_radar import dependency_radar_router
 from src.routers.retro import retro_router
 from src.routers.onboarding import onboarding_router, invitations_router
 from src.routers.onboarding_v2 import router as onboarding_v2_router
+from src.routers.roadmap import router as roadmap_router
 from src.routers.capacity import capacity_router
 from src.routers.teams import teams_router
 from src.routers.slack import slack_router
@@ -92,6 +93,7 @@ app.include_router(dependency_radar_router, prefix="/api/dependency-radar")
 app.include_router(retro_router, prefix="/api/retro")
 app.include_router(onboarding_router, prefix="/api/onboarding")
 app.include_router(onboarding_v2_router)
+app.include_router(roadmap_router)
 app.include_router(invitations_router, prefix="/api/invitations")
 app.include_router(capacity_router, prefix="/api/capacity")
 app.include_router(teams_router, prefix="/api/teams")

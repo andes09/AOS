@@ -130,7 +130,7 @@ export function DependencyRadarPage() {
     })
   }
 
-  async function handleScanJira() {
+  async function handleScan() {
     setScanning(true)
     try {
       const result = await post<ScanResponse>('/api/dependency-radar/scan', { teamId: TEAM_ID })
@@ -215,10 +215,10 @@ export function DependencyRadarPage() {
           <Button
             variant="primary"
             size="sm"
-            onClick={handleScanJira}
+            onClick={handleScan}
             disabled={scanning}
           >
-            {scanning ? 'Scanning…' : 'Scan Jira'}
+            {scanning ? 'Scanning…' : 'Scan'}
           </Button>
         </div>
       </div>

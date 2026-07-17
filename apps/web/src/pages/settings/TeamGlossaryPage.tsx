@@ -418,7 +418,7 @@ export function TeamGlossaryPage() {
           ) : rows.length === 0 ? (
             <EmptyState
               title="No identifiers yet"
-              description="They're learned automatically after your first Jira sprint import. Onboarding will trigger the scan."
+              description="They're learned automatically from your project activity."
             />
           ) : (
             <Table

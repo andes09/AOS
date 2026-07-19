@@ -1,0 +1,371 @@
+"""
+Unit tests for services/roadmap_generator — Claude calls are mocked, the DB is
+an in-memory sqlite scoped to just the tables this feature touches (the shared
+tmp_db fixture pulls in models whose bare-JSONB columns break on sqlite).
+"""
+
+import uuid
+from datetime import date
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import pytest_asyncio
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from src.database import Base
+import src.models  # noqa: F401 — registers all models so relationship() string refs resolve
+from src.models.organization import Organization
+from src.models.team import Team
+from src.models.onboarding_session import OnboardingSession
+from src.models.project import Project
+from src.models.milestone import Milestone
+from src.models.task import Task
+from src.services import roadmap_generator
+from src.services.idea_interview import _PURPOSE_GUIDANCE
+
+_REQUIRED_TABLES = [
+    Organization.__table__,
+    Team.__table__,
+    OnboardingSession.__table__,
+    Project.__table__,
+    Milestone.__table__,
+    Task.__table__,
+]
+
+_BRIEF = {"projectName": "Brief Name", "problemStatement": "Founders lack plans"}
+
+
+@pytest_asyncio.fixture
+async def roadmap_db():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(
+            sync_conn, tables=_REQUIRED_TABLES
+        ))
+
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    yield Session
+
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda sync_conn: Base.metadata.drop_all(
+            sync_conn, tables=_REQUIRED_TABLES
+        ))
+    await engine.dispose()
+
+
+async def _seed(Session, purpose="hobby"):
+    """Org + team + completed onboarding session with a brief. Returns ids."""
+    org_id, team_id, session_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    async with Session() as db:
+        db.add_all([
+            Organization(id=org_id, clerk_org_id="org_x", name="Org X", slug="org-x"),
+            Team(id=team_id, organization_id=org_id, name="Team X"),
+            OnboardingSession(
+                id=session_id,
+                organization_id=org_id,
+                status="completed",
+                project_brief=_BRIEF,
+                project_purpose=purpose,
+            ),
+        ])
+        await db.commit()
+    return team_id, session_id
+
+
+# ─── Claude fakes ──────────────────────────────────────────────────────────────
+
+class _FakeToolBlock:
+    type = "tool_use"
+
+    def __init__(self, name, payload):
+        self.name = name
+        self.input = payload
+
+
+class _FakeTextBlock:
+    type = "text"
+    text = "I refuse to use the tool."
+
+
+def _fake_anthropic(payload=None, tool_name="build_roadmap", blocks=None):
+    """Fake AsyncAnthropic whose messages.create returns the given tool output."""
+    if blocks is None:
+        blocks = [_FakeToolBlock(tool_name, payload)]
+    response = SimpleNamespace(
+        content=blocks,
+        usage=SimpleNamespace(
+            input_tokens=100, output_tokens=200,
+            cache_creation_input_tokens=0, cache_read_input_tokens=0,
+        ),
+    )
+    return SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(return_value=response)))
+
+
+def _patch_claude(fake):
+    return patch(
+        "src.services.roadmap_generator.anthropic.AsyncAnthropic", return_value=fake
+    )
+
+
+_ROADMAP_PAYLOAD = {
+    "projectName": "Trail Buddy",
+    "summary": "Two weeks to a hikeable MVP.",
+    "milestones": [
+        {
+            "title": "Foundations",
+            "description": "Set up the skeleton",
+            "tasks": [
+                {"title": "Init repo", "dayOffset": 0},
+                {"title": "Pick stack", "description": "Keep it boring", "dayOffset": 1},
+            ],
+        },
+        {
+            "title": "Core loop",
+            "tasks": [{"title": "Build map view", "dayOffset": 3}],
+        },
+    ],
+}
+
+
+# ─── generate_roadmap ──────────────────────────────────────────────────────────
+
+async def test_generate_roadmap_happy_path(roadmap_db):
+    team_id, session_id = await _seed(roadmap_db, purpose="hobby")
+    fake = _fake_anthropic(_ROADMAP_PAYLOAD)
+
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_claude(fake):
+            project = await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
+
+    # Forced-tool call with purpose steering in the system prompt.
+    call = fake.messages.create.await_args.kwargs
+    assert call["tool_choice"] == {"type": "tool", "name": "build_roadmap"}
+    assert _PURPOSE_GUIDANCE["hobby"] in call["system"]
+    assert "Brief Name" in call["messages"][0]["content"]
+
+    async with roadmap_db() as db:
+        saved = await db.get(Project, project.id)
+        assert saved.name == "Trail Buddy"
+        assert saved.summary == "Two weeks to a hikeable MVP."
+        assert saved.purpose == "hobby"
+        assert saved.onboarding_session_id == session_id
+
+        milestones = (await db.execute(
+            select(Milestone).where(Milestone.project_id == saved.id).order_by(Milestone.sort_order)
+        )).scalars().all()
+        assert [m.title for m in milestones] == ["Foundations", "Core loop"]
+        assert [m.sort_order for m in milestones] == [0, 1]
+
+        tasks = (await db.execute(
+            select(Task).where(Task.milestone_id == milestones[0].id).order_by(Task.sort_order)
+        )).scalars().all()
+        assert [t.title for t in tasks] == ["Init repo", "Pick stack"]
+        assert [t.sort_order for t in tasks] == [0, 1]
+        for t in tasks:
+            assert t.scheduled_date is not None
+            assert t.scheduled_date.weekday() < 5  # only weekdays
+            assert t.scheduled_date >= date.today()
+
+
+async def test_generate_roadmap_no_tool_block_persists_nothing(roadmap_db):
+    team_id, session_id = await _seed(roadmap_db)
+    fake = _fake_anthropic(blocks=[_FakeTextBlock()])
+
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_claude(fake):
+            try:
+                await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
+                raise AssertionError("expected RuntimeError")
+            except RuntimeError as exc:
+                assert "did not return a roadmap" in str(exc)
+
+    async with roadmap_db() as db:
+        assert (await db.execute(select(Project))).scalars().all() == []
+
+
+async def test_generate_roadmap_empty_milestones_persists_nothing(roadmap_db):
+    team_id, session_id = await _seed(roadmap_db)
+    fake = _fake_anthropic({"projectName": "X", "milestones": []})
+
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_claude(fake):
+            try:
+                await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
+                raise AssertionError("expected RuntimeError")
+            except RuntimeError as exc:
+                assert "empty roadmap" in str(exc)
+
+    async with roadmap_db() as db:
+        assert (await db.execute(select(Project))).scalars().all() == []
+        assert (await db.execute(select(Milestone))).scalars().all() == []
+
+
+async def test_generate_roadmap_clamps_and_defaults(roadmap_db):
+    team_id, session_id = await _seed(roadmap_db)
+    payload = {
+        "milestones": [{
+            "title": "",  # falls back to Phase 1
+            "tasks": [
+                {"title": "Way out", "dayOffset": 999},   # clamped to _MAX_DAY_OFFSET
+                {"title": "Bad offset", "dayOffset": "nope"},  # coerced to 0
+            ],
+        }],
+    }
+    fake = _fake_anthropic(payload)
+
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_claude(fake):
+            project = await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
+
+    async with roadmap_db() as db:
+        saved = await db.get(Project, project.id)
+        assert saved.name == "Brief Name"  # projectName fallback from the brief
+        milestone = (await db.execute(
+            select(Milestone).where(Milestone.project_id == saved.id)
+        )).scalar_one()
+        assert milestone.title == "Phase 1"
+        tasks = (await db.execute(
+            select(Task).where(Task.milestone_id == milestone.id).order_by(Task.sort_order)
+        )).scalars().all()
+        far, near = tasks[0].scheduled_date, tasks[1].scheduled_date
+        assert far == roadmap_generator._weekday_after(
+            date.today(), roadmap_generator._MAX_DAY_OFFSET
+        )
+        assert near == roadmap_generator._weekday_after(date.today(), 0)
+
+
+# ─── regenerate_roadmap ────────────────────────────────────────────────────────
+
+async def test_regenerate_roadmap_keeps_project_id_and_replaces_content(roadmap_db):
+    team_id, session_id = await _seed(roadmap_db)
+    fake = _fake_anthropic(_ROADMAP_PAYLOAD)
+
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_claude(fake):
+            first = await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
+
+    regen_payload = {
+        "projectName": "Trail Buddy 2",
+        "milestones": [{"title": "Restart", "tasks": [{"title": "Redo it", "dayOffset": 0}]}],
+    }
+    fake2 = _fake_anthropic(regen_payload)
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_claude(fake2):
+            second = await roadmap_generator.regenerate_roadmap(session, team, "sk-key", db)
+
+    assert second.id == first.id  # Project row preserved
+
+    async with roadmap_db() as db:
+        saved = await db.get(Project, first.id)
+        assert saved.name == "Trail Buddy 2"
+        milestones = (await db.execute(
+            select(Milestone).where(Milestone.project_id == saved.id)
+        )).scalars().all()
+        assert [m.title for m in milestones] == ["Restart"]
+        # No orphaned tasks from the first generation.
+        all_tasks = (await db.execute(select(Task))).scalars().all()
+        assert [t.title for t in all_tasks] == ["Redo it"]
+
+
+# ─── regenerate_milestone ──────────────────────────────────────────────────────
+
+async def _seed_roadmap(Session, session_id, team_id):
+    """Persist a 3-milestone roadmap directly. Returns (project_id, milestone_ids)."""
+    project_id = uuid.uuid4()
+    milestone_ids = [uuid.uuid4() for _ in range(3)]
+    async with Session() as db:
+        db.add(Project(
+            id=project_id, team_id=team_id, onboarding_session_id=session_id,
+            name="Seeded", purpose="hobby",
+        ))
+        await db.flush()
+        for i, mid in enumerate(milestone_ids):
+            db.add(Milestone(id=mid, project_id=project_id, title=f"M{i}", sort_order=i))
+            await db.flush()
+            db.add(Task(milestone_id=mid, title=f"M{i} task", sort_order=0))
+        await db.commit()
+    return project_id, milestone_ids
+
+
+async def test_regenerate_milestone_touches_only_the_target(roadmap_db):
+    team_id, session_id = await _seed(roadmap_db)
+    project_id, milestone_ids = await _seed_roadmap(roadmap_db, session_id, team_id)
+
+    payload = {
+        "title": "M1 rebuilt",
+        "description": "Sharper phase",
+        "tasks": [
+            {"title": "New task A", "dayOffset": 0},
+            {"title": "New task B", "dayOffset": 1},
+        ],
+    }
+    fake = _fake_anthropic(payload, tool_name="rebuild_milestone")
+
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        target = await db.get(Milestone, milestone_ids[1])
+        with _patch_claude(fake):
+            result = await roadmap_generator.regenerate_milestone(target, session, "sk-key", db)
+
+    # The prompt carried the full outline with the target marked.
+    call = fake.messages.create.await_args.kwargs
+    assert call["tool_choice"] == {"type": "tool", "name": "rebuild_milestone"}
+    assert '"isTarget": true' in call["messages"][0]["content"]
+
+    assert result.id == milestone_ids[1]
+    async with roadmap_db() as db:
+        target = await db.get(Milestone, milestone_ids[1])
+        assert target.title == "M1 rebuilt"
+        assert target.description == "Sharper phase"
+        assert target.sort_order == 1  # position kept
+        new_tasks = (await db.execute(
+            select(Task).where(Task.milestone_id == target.id).order_by(Task.sort_order)
+        )).scalars().all()
+        assert [t.title for t in new_tasks] == ["New task A", "New task B"]
+
+        # Siblings byte-identical.
+        for i in (0, 2):
+            sibling = await db.get(Milestone, milestone_ids[i])
+            assert sibling.title == f"M{i}"
+            tasks = (await db.execute(
+                select(Task).where(Task.milestone_id == sibling.id)
+            )).scalars().all()
+            assert [t.title for t in tasks] == [f"M{i} task"]
+
+
+async def test_regenerate_milestone_failure_leaves_everything_untouched(roadmap_db):
+    team_id, session_id = await _seed(roadmap_db)
+    project_id, milestone_ids = await _seed_roadmap(roadmap_db, session_id, team_id)
+
+    fake = _fake_anthropic(blocks=[_FakeTextBlock()])  # no tool block → RuntimeError
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        target = await db.get(Milestone, milestone_ids[1])
+        with _patch_claude(fake):
+            try:
+                await roadmap_generator.regenerate_milestone(target, session, "sk-key", db)
+                raise AssertionError("expected RuntimeError")
+            except RuntimeError:
+                pass
+
+    async with roadmap_db() as db:
+        for i in range(3):
+            milestone = await db.get(Milestone, milestone_ids[i])
+            assert milestone.title == f"M{i}"
+            tasks = (await db.execute(
+                select(Task).where(Task.milestone_id == milestone.id)
+            )).scalars().all()
+            assert [t.title for t in tasks] == [f"M{i} task"]

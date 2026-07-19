@@ -15,7 +15,7 @@ import logging
 import uuid
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -140,12 +140,7 @@ async def generate(
     if existing is not None:
         return _project_json(existing)
 
-    api_key = roadmap_generator.resolve_groq_key()
-    if not api_key:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="No Groq API key configured for planning. Set GROQ_API_KEY.",
-        )
+    api_key = await roadmap_generator.resolve_api_key(clerk_org_id, db)
 
     team = await db.scalar(
         select(Team).where(Team.organization_id == org.id).order_by(Team.created_at)

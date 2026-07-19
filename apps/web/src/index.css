@@ -4,6 +4,9 @@
 /* ── Design system tokens ──────────────────────────────────── */
 @import './styles/tokens.css';
 
+/* ── Planner pseudo-selectors / keyframes ──────────────────── */
+@import './styles/planner.css';
+
 /* ── Reset ─────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
 

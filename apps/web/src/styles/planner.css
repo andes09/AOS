@@ -1,0 +1,90 @@
+/* ============================================================
+   Planner — pseudo-selector and animation rules ONLY.
+
+   The app styles components with inline `style={{}}` objects over
+   CSS custom properties. That handles everything static, but it
+   cannot express :hover, :focus-visible, ::-webkit-scrollbar, or
+   @keyframes. Those four live here, keyed off stable `pl-` class
+   names, and nothing else does.
+
+   If you are reaching for this file to set a static value, put it
+   inline on the component instead — keeping the split sharp is
+   what stops the codebase drifting into two competing idioms.
+   ============================================================ */
+
+/* ── Task cards ────────────────────────────────────────────── */
+.pl-task-card {
+  transition: box-shadow 0.12s ease, transform 0.12s ease, opacity 0.12s ease;
+}
+.pl-task-card:hover {
+  box-shadow: var(--shadow-sm);
+}
+.pl-task-card:focus-visible,
+.pl-lane-row:focus-visible,
+.pl-icon-btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Reveal row actions (delete, drag handle) only on hover/focus, so the
+   default state stays calm at planner density. They remain reachable by
+   keyboard because :focus-within counts. */
+.pl-task-card .pl-task-actions {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.pl-task-card:hover .pl-task-actions,
+.pl-task-card:focus-within .pl-task-actions {
+  opacity: 1;
+}
+
+/* ── Sidebar lanes ─────────────────────────────────────────── */
+.pl-lane-row {
+  transition: background 0.12s ease;
+}
+.pl-lane-row:hover {
+  background: var(--color-bg-tertiary);
+}
+
+.pl-icon-btn {
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.pl-icon-btn:hover {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+/* ── Drag and drop ─────────────────────────────────────────── */
+.pl-drop-zone {
+  transition: background 0.1s ease, box-shadow 0.1s ease;
+}
+.pl-drop-zone--over {
+  background: var(--color-accent-subtle);
+  box-shadow: inset 0 0 0 2px var(--color-accent);
+}
+.pl-dragging {
+  opacity: 0.4;
+}
+
+/* ── Time grid ─────────────────────────────────────────────── */
+.pl-now-line::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-danger);
+}
+
+/* ── Motion preferences ────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .pl-task-card,
+  .pl-lane-row,
+  .pl-icon-btn,
+  .pl-drop-zone,
+  .pl-task-card .pl-task-actions {
+    transition: none;
+  }
+}

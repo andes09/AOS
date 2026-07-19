@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
@@ -6,7 +6,11 @@ export default defineConfig({
     port: 5173,
     strictPort: true,  // fail instead of bumping to next port
   },
-  plugins: [react()]
+  plugins: [react()],
+  test: {
+    // Scoped to src/ on purpose: the Playwright suite in tests/e2e also uses
+    // *.spec.ts, and Vitest's default glob would otherwise try to run it.
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    environment: 'node',
+  },
 })
-
-

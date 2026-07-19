@@ -14,6 +14,7 @@
   /* Borders */
   --color-border:        #dfe1e6;
   --color-border-subtle: #ebecf0;
+  --color-border-strong: #c1c7d0;
 
   /* Text */
   --color-text-primary:   #172b4d;
@@ -32,6 +33,27 @@
   --color-warning-bg:    #FFF7D6;
   --color-danger:        #AE2A19;
   --color-danger-subtle: #FFECEB;
+
+  /* ── Lane palette (assignee colors) ────────────────────────
+     10 hues ordered for maximum pairwise separation and to stay
+     distinguishable under deuteranopia (blue/orange/violet/teal
+     alternation; never adjacent red↔green).
+     `solid` ≥3:1 on the page background, `text` ≥4.5:1 on `bg`. */
+  --lane-0-solid: #2563eb;  --lane-0-bg: #eff6ff;  --lane-0-text: #1e40af;  /* blue    */
+  --lane-1-solid: #d97706;  --lane-1-bg: #fffbeb;  --lane-1-text: #92400e;  /* amber   */
+  --lane-2-solid: #7c3aed;  --lane-2-bg: #f5f3ff;  --lane-2-text: #5b21b6;  /* violet  */
+  --lane-3-solid: #0d9488;  --lane-3-bg: #f0fdfa;  --lane-3-text: #115e59;  /* teal    */
+  --lane-4-solid: #e11d48;  --lane-4-bg: #fff1f2;  --lane-4-text: #9f1239;  /* rose    */
+  --lane-5-solid: #65a30d;  --lane-5-bg: #f7fee7;  --lane-5-text: #3f6212;  /* lime    */
+  --lane-6-solid: #0891b2;  --lane-6-bg: #ecfeff;  --lane-6-text: #155e75;  /* cyan    */
+  --lane-7-solid: #ea580c;  --lane-7-bg: #fff7ed;  --lane-7-text: #9a3412;  /* orange  */
+  --lane-8-solid: #4f46e5;  --lane-8-bg: #eef2ff;  --lane-8-text: #3730a3;  /* indigo  */
+  --lane-9-solid: #059669;  --lane-9-bg: #ecfdf5;  --lane-9-text: #065f46;  /* emerald */
+
+  /* Unassigned — deliberately neutral so owned work reads as colored */
+  --lane-none-solid: #97a0af;
+  --lane-none-bg:    #f4f5f7;
+  --lane-none-text:  #5e6c84;
 
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(9, 30, 66, 0.08), 0 0 0 1px rgba(9, 30, 66, 0.04);
@@ -52,6 +74,7 @@
   /* Borders — low-contrast grey so panels read softly */
   --color-border:        #3a3a3a;
   --color-border-subtle: #2b2b2b;
+  --color-border-strong: #4e4e4e;
 
   /* Text — off-white, not pure white, to cut glare */
   --color-text-primary:   #ececec;
@@ -71,6 +94,27 @@
   --color-danger:        #f0736a;
   --color-danger-subtle: #2c1a18;
 
+  /* ── Lane palette (assignee colors) ────────────────────────
+     Same hue order as light. Solids are lightened/desaturated to
+     ~400 so they carry ≥3:1 against #212121/#2a2a2a, and fills are
+     near-black hue-tinted rather than pale — a light tint would
+     glare and swamp the text sitting on it. */
+  --lane-0-solid: #60a5fa;  --lane-0-bg: #1a2437;  --lane-0-text: #bfdbfe;  /* blue    */
+  --lane-1-solid: #fbbf24;  --lane-1-bg: #2e2413;  --lane-1-text: #fde68a;  /* amber   */
+  --lane-2-solid: #a78bfa;  --lane-2-bg: #241f3a;  --lane-2-text: #ddd6fe;  /* violet  */
+  --lane-3-solid: #2dd4bf;  --lane-3-bg: #12302e;  --lane-3-text: #99f6e4;  /* teal    */
+  --lane-4-solid: #fb7185;  --lane-4-bg: #331a20;  --lane-4-text: #fecdd3;  /* rose    */
+  --lane-5-solid: #a3e635;  --lane-5-bg: #23300f;  --lane-5-text: #d9f99d;  /* lime    */
+  --lane-6-solid: #22d3ee;  --lane-6-bg: #123038;  --lane-6-text: #a5f3fc;  /* cyan    */
+  --lane-7-solid: #fb923c;  --lane-7-bg: #33220f;  --lane-7-text: #fed7aa;  /* orange  */
+  --lane-8-solid: #818cf8;  --lane-8-bg: #1e2141;  --lane-8-text: #c7d2fe;  /* indigo  */
+  --lane-9-solid: #34d399;  --lane-9-bg: #122e22;  --lane-9-text: #a7f3d0;  /* emerald */
+
+  /* Unassigned — deliberately neutral so owned work reads as colored */
+  --lane-none-solid: #6b6b6b;
+  --lane-none-bg:    #262626;
+  --lane-none-text:  #b4b4b4;
+
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.03);
   --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.55), 0 0 1px rgba(255, 255, 255, 0.05);
@@ -84,6 +128,31 @@
   --radius-sm: 3px;
   --radius-md: 6px;
   --radius-lg: 8px;
+}
+
+/* ── Spacing ──────────────────────────────────────────────────
+   New code should use these instead of hardcoded pixel gaps.
+   Existing hardcoded values are not being migrated wholesale. */
+:root {
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+}
+
+/* ── Z-index ──────────────────────────────────────────────────
+   One ordered scale so stacking stays reasoned about rather than
+   escalating into competing `zIndex: 9999` declarations. */
+:root {
+  --z-sticky:        10;
+  --z-dropdown:     100;
+  --z-drag-overlay: 500;
+  --z-modal:       1000;
+  --z-toast:       1100;
 }
 
 /* ── Typography ───────────────────────────────────────────── */

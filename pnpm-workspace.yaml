@@ -1,3 +1,12 @@
 packages:
   - 'apps/*'
   - 'LandingPage'
+
+# Mirrors the "pnpm.overrides" block in the root package.json, which pnpm 11
+# stopped reading (it warns about the ignored key on every install). Without
+# this, @types/react@19 leaks into apps/web — which runs React 18 — and every
+# lucide-react and react-router element fails with "cannot be used as a JSX
+# component". Keep the two copies in sync until the repo drops pnpm <11.
+overrides:
+  '@types/react': '^18.3.23'
+  '@types/react-dom': '^18.3.7'

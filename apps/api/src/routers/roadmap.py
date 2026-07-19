@@ -5,10 +5,13 @@ One roadmap (Project → Milestones → Tasks) per org, generated from the
 onboarding brief via services/roadmap_generator. Tasks carry a scheduled_date
 (calendar day) and a status the user flips to check things off, plus delete.
 
-GET    /api/roadmap                    → the org's roadmap, or null
-POST   /api/roadmap/generate           → generate + persist from the brief
-PATCH  /api/roadmap/tasks/{task_id}    → update status / title / scheduled_date
-DELETE /api/roadmap/tasks/{task_id}    → delete a task
+GET    /api/roadmap                              → the org's roadmap, or null
+POST   /api/roadmap/generate                     → generate + persist from the brief
+POST   /api/roadmap/regenerate                   → replan the whole roadmap
+POST   /api/roadmap/milestones/{id}/regenerate   → replan one milestone
+PATCH  /api/roadmap/tasks/{task_id}              → update status / title / description /
+                                                    scheduled_date / sort order
+DELETE /api/roadmap/tasks/{task_id}              → delete a task
 """
 
 import logging
@@ -50,22 +53,23 @@ def _task_json(task: Task) -> dict:
     }
 
 
+def _milestone_json(m: Milestone) -> dict:
+    return {
+        "id": str(m.id),
+        "title": m.title,
+        "description": m.description,
+        "sortOrder": m.sort_order,
+        "tasks": [_task_json(t) for t in m.tasks],
+    }
+
+
 def _project_json(project: Project) -> dict:
     return {
         "id": str(project.id),
         "name": project.name,
         "summary": project.summary,
         "purpose": project.purpose,
-        "milestones": [
-            {
-                "id": str(m.id),
-                "title": m.title,
-                "description": m.description,
-                "sortOrder": m.sort_order,
-                "tasks": [_task_json(t) for t in m.tasks],
-            }
-            for m in project.milestones
-        ],
+        "milestones": [_milestone_json(m) for m in project.milestones],
     }
 
 
@@ -104,6 +108,40 @@ async def _owned_task(task_id: str, org: Organization, db: AsyncSession) -> Task
     return task
 
 
+async def _owned_milestone(milestone_id: str, org: Organization, db: AsyncSession) -> Milestone:
+    """Load a milestone (with tasks), ensuring it belongs to the caller's org. 404 otherwise."""
+    try:
+        mid = uuid.UUID(milestone_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="milestone_not_found")
+    milestone = await db.scalar(
+        select(Milestone)
+        .join(Project, Milestone.project_id == Project.id)
+        .join(Team, Project.team_id == Team.id)
+        .where(Milestone.id == mid, Team.organization_id == org.id)
+        .options(selectinload(Milestone.tasks))
+    )
+    if milestone is None:
+        raise HTTPException(status_code=404, detail="milestone_not_found")
+    return milestone
+
+
+async def _session_and_brief(
+    clerk_org_id: str, db: AsyncSession
+) -> tuple[Organization, OnboardingSession]:
+    """The caller's org + its onboarding session, 409 if there's no completed brief yet."""
+    org = await _get_org(clerk_org_id, db)
+    session = await db.scalar(
+        select(OnboardingSession).where(OnboardingSession.organization_id == org.id)
+    )
+    if session is None or not session.project_brief:
+        raise HTTPException(
+            status_code=409,
+            detail="Finish the onboarding interview first — there's no project brief to plan from yet.",
+        )
+    return org, session
+
+
 # ─── endpoints ──────────────────────────────────────────────────────────────────
 @router.get("")
 async def get_roadmap(
@@ -125,15 +163,7 @@ async def generate(
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
-    org = await _get_org(clerk_org_id, db)
-    session = await db.scalar(
-        select(OnboardingSession).where(OnboardingSession.organization_id == org.id)
-    )
-    if session is None or not session.project_brief:
-        raise HTTPException(
-            status_code=409,
-            detail="Finish the onboarding interview first — there's no project brief to plan from yet.",
-        )
+    org, session = await _session_and_brief(clerk_org_id, db)
 
     # Idempotent: return the existing roadmap rather than generating a second one.
     existing = await _load_project(session.id, db)
@@ -159,10 +189,59 @@ async def generate(
     return _project_json(project)
 
 
+@router.post("/regenerate")
+async def regenerate(
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    org, session = await _session_and_brief(clerk_org_id, db)
+
+    team = await db.scalar(
+        select(Team).where(Team.organization_id == org.id).order_by(Team.created_at)
+    )
+    if team is None:
+        raise HTTPException(status_code=409, detail="no_team_for_org")
+
+    api_key = await roadmap_generator.resolve_api_key(clerk_org_id, db)
+
+    try:
+        await roadmap_generator.regenerate_roadmap(session, team, api_key, db)
+    except ValueError as exc:  # bad key
+        raise HTTPException(status_code=402, detail=str(exc))
+    except RuntimeError as exc:  # upstream / model failure
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    project = await _load_project(session.id, db)
+    return _project_json(project)
+
+
+@router.post("/milestones/{milestone_id}/regenerate")
+async def regenerate_milestone_endpoint(
+    milestone_id: str,
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    org, session = await _session_and_brief(clerk_org_id, db)
+    milestone = await _owned_milestone(milestone_id, org, db)
+
+    api_key = await roadmap_generator.resolve_api_key(clerk_org_id, db)
+
+    try:
+        milestone = await roadmap_generator.regenerate_milestone(milestone, session, api_key, db)
+    except ValueError as exc:  # bad key
+        raise HTTPException(status_code=402, detail=str(exc))
+    except RuntimeError as exc:  # upstream / model failure
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    return _milestone_json(milestone)
+
+
 class TaskUpdateRequest(BaseModel):
     status: str | None = None
     title: str | None = None
+    description: str | None = None
     scheduledDate: date | None = None
+    sortOrder: int | None = None
 
     @field_validator("status")
     @classmethod
@@ -181,6 +260,21 @@ class TaskUpdateRequest(BaseModel):
         return v
 
 
+async def _reorder_task(task: Task, new_order: int, db: AsyncSession) -> None:
+    """Move `task` to `new_order` within its milestone, shifting siblings to fill the gap."""
+    siblings = list(
+        await db.scalars(
+            select(Task).where(Task.milestone_id == task.milestone_id).order_by(Task.sort_order)
+        )
+    )
+    if not (0 <= new_order < len(siblings)):
+        raise HTTPException(status_code=422, detail="sort_order_out_of_bounds")
+    siblings.remove(task)
+    siblings.insert(new_order, task)
+    for idx, sibling in enumerate(siblings):
+        sibling.sort_order = idx
+
+
 @router.patch("/tasks/{task_id}")
 async def update_task(
     task_id: str,
@@ -195,8 +289,12 @@ async def update_task(
         task.status = body.status
     if body.title is not None:
         task.title = body.title
+    if "description" in body.model_fields_set:
+        task.description = body.description
     if "scheduledDate" in body.model_fields_set:
         task.scheduled_date = body.scheduledDate
+    if body.sortOrder is not None:
+        await _reorder_task(task, body.sortOrder, db)
 
     await db.commit()
     await db.refresh(task)

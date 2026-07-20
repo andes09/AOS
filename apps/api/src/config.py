@@ -20,10 +20,6 @@ class Settings(BaseSettings):
     clerk_publishable_key: str
     clerk_webhook_secret: str = ""
 
-    jira_client_id: str = ""
-    jira_client_secret: str = ""
-    jira_redirect_uri: str = "http://localhost:8000/api/integrations/jira/callback"
-
     github_client_id: str = ""
     github_client_secret: str = ""
     github_redirect_uri: str = "http://localhost:8000/api/integrations/github/callback"

@@ -38,26 +38,34 @@ from src.services.idea_interview import _PURPOSE_GUIDANCE
 logger = logging.getLogger(__name__)
 
 _MODEL = "claude-sonnet-4-6"
-_MAX_TOKENS = 4096
+# 8192, not 4096: a full plan is up to 8 milestones × 10 tasks, each carrying a
+# 3-6 sentence technical description. At 4096 the tool call gets truncated and
+# the roadmap comes back short.
+_MAX_TOKENS = 8192
 # Guardrails so a runaway model can't create an enormous plan. The point is a
 # short-term, finishable roadmap, not an exhaustive backlog.
 _MAX_MILESTONES = 8
-_MAX_TASKS_PER_MILESTONE = 8
+_MAX_TASKS_PER_MILESTONE = 10
 _MAX_DAY_OFFSET = 30
 
-_SYSTEM_PROMPT = """You are Omada's project planner. Given a founder's project brief, produce a \
-SHORT-TERM, day-by-day plan they can actually finish — think the next couple of weeks of \
-weekdays, not an exhaustive backlog.
+_SYSTEM_PROMPT = """You are Omada's technical project planner. Given a founder's project brief, \
+produce a SHORT-TERM, day-by-day plan a developer can actually execute — think the next couple \
+of weeks of weekdays, not an exhaustive backlog.
 
-Rules:
+Make it genuinely DETAILED and TECHNICAL:
 - Break the work into a handful of ordered milestones (phases).
-- Under each milestone, list small, concrete tasks — each doable in part of a day.
+- Under each milestone, list concrete engineering tasks — each doable in part of a day.
+- For EVERY task, write a detailed, technical `description` (3-6 sentences). Name the specific \
+approach, technologies/libraries/frameworks, the files or modules to create, data models or \
+schema, API endpoints, and key commands — and end with a crisp acceptance criterion for "done". \
+Write for a technical reader; be concrete, never generic filler.
 - Give every task a `dayOffset`: a 0-based index of WEEKDAYS from the start (0 = the first \
 working day). Spread tasks so each day has only a few; keep the whole plan within ~2 weeks \
 of weekdays where possible.
-- Order milestones and tasks the way they should actually be tackled.
-- Be specific to THIS project. Never invent facts the brief doesn't support; when unsure, \
-keep tasks general but actionable."""
+- Order milestones and tasks the way they should actually be tackled (dependencies first).
+- Ground everything in THIS project and its stated stack/constraints. Never invent facts the \
+brief doesn't support; where the brief is silent, make a sensible, clearly-reasonable technical \
+choice and state it."""
 
 
 def _system_prompt(purpose: str | None) -> str:

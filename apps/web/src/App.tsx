@@ -4,7 +4,7 @@ import { DashboardLayout } from './layouts/DashboardLayout'
 import { OrgProvider } from './components/OrgProvider'
 import { RequireFeature } from './components/RequireFeature'
 import { RoadmapPage } from './pages/roadmap/RoadmapPage'
-import { PlannerCalendarPage } from './pages/planner/PlannerCalendarPage'
+import { PlannerPage } from './pages/planner/PlannerPage'
 import { VelocityMirrorPage } from './pages/VelocityMirrorPage'
 import { ExecDashboardPage } from './pages/ExecDashboardPage'
 import { DependencyRadarPage } from './pages/DependencyRadarPage'
@@ -49,7 +49,7 @@ export default function App() {
       }>
         <Route index element={<Navigate to="roadmap" replace />} />
         <Route path="roadmap" element={<RoadmapPage />} />
-        <Route path="sprint-planner" element={<PlannerCalendarPage />} />
+        <Route path="sprint-planner" element={<PlannerPage />} />
         <Route path="velocity-mirror" element={<VelocityMirrorPage />} />
         <Route path="exec-dashboard" element={
           <RequireFeature flag="exec_dashboard"><ExecDashboardPage /></RequireFeature>

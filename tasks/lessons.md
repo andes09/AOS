@@ -386,6 +386,51 @@ This is a band-aid. It will re-corrupt the moment `migrate.py` runs again.
 
 ---
 
+## A model change and its migration ship together — "I'll run the DB later" is not a valid split
+
+**Pattern:** Added `color_index`/`avatar_url` to the `Developer` model and `assignee_id`/`scheduled_time`/`duration_minutes` to `Task`, wrote migration `0031`, but did not run it — the user had said they'd handle the database later. Minutes later `GET /api/teams` 500'd with `column developers.color_index does not exist`, from `services/multi_team.py` — a code path with nothing to do with the planner.
+
+**Root cause:** I treated "write the model" and "apply the migration" as separately shippable. They are not. SQLAlchemy expands `select(Developer)` into an explicit column list, so the instant the model declares a column, **every query against that table** names it. The blast radius of an unrun migration is the whole table, not the new feature.
+
+**Why the existing lesson didn't save me:** the entry above ("Any column added to a SQLAlchemy model must exist in production Postgres before the code deploys") is framed around *deploys*. This failure happened in local dev, so I didn't match the pattern. The rule is about model/schema coupling, not about environments.
+
+**Rules:**
+1. If a change adds a column to a SQLAlchemy model and a database is reachable, run `alembic upgrade head` **in the same working session**. Never leave a model ahead of its schema, in any environment.
+2. If the DB genuinely can't be migrated yet, then don't merge the model change either — write the migration, leave the model alone, and say so explicitly. A model change is a schema change.
+3. When a user defers "the database work", clarify what that covers. They usually mean the *verification* (round-trip, backfill checks), not "ship a model that breaks every existing query."
+4. Reach for `SELECT version_num FROM alembic_version` and compare `alembic current` vs `alembic heads` the moment any `column ... does not exist` appears. It is a 5-second check that names the cause exactly.
+
+---
+
+## Check which package manager the repo uses before running an install
+
+**Pattern:** Ran `npm install` in `apps/web` to add a devDependency. This repo is a **pnpm workspace** (`pnpm-workspace.yaml`, `node_modules/.pnpm`). npm chewed through the tree, hit EPERM on locked directories, and finally died on a `husky` postinstall that only exists in the pnpm context.
+
+**Root cause:** Assumed npm because `package.json` was present. Never looked for a lockfile or workspace manifest first. Confusingly, this repo has BOTH `package-lock.json` (tracked, stale) and `pnpm-lock.yaml` — the presence of a `package-lock.json` is not evidence that npm is the right tool.
+
+**Rules:**
+1. Before ANY install, check for `pnpm-lock.yaml` / `yarn.lock` / `bun.lockb` / `pnpm-workspace.yaml`. Use the manager that owns the lockfile — and in a monorepo, prefer the workspace root with `--filter <pkg>` over `cd`-ing into a package.
+2. Don't infer the manager from `package.json` alone, and don't trust a stale `package-lock.json` in a repo that also has a pnpm lockfile.
+3. After any accidental cross-manager install, run `git status` and check whether the *correct* lockfile got modified. Restore it with `git checkout -- <lockfile>` and re-install with the right tool before continuing.
+
+---
+
+## pnpm 11 silently ignores `pnpm.overrides` in package.json — it moved to pnpm-workspace.yaml
+
+**Pattern:** `apps/web` had 85 `TS2786: 'X' cannot be used as a JSX component` errors on every lucide-react and react-router element. Since `build` is `tsc && vite build`, the web build was broken on main and nobody had noticed.
+
+**Root cause:** Root `package.json` pinned `@types/react` to `^18.3.23` under a `"pnpm": {"overrides": {...}}` key. **pnpm 11 stopped reading that field** — it prints `[WARN] The "pnpm" field in package.json is no longer read by pnpm` on every install, which is easy to scroll past. With the pin inert, `@types/react@19` (pulled in by `LandingPage`, which genuinely runs React 19) leaked into `apps/web`, which runs React 18. Two React type versions in one program produce exactly the "cannot be used as a JSX component" / "`bigint` is not assignable to `ReactNode`" signature.
+
+**Why this was nearly mis-fixed:** the obvious read is "LandingPage wants 19, apps/web wants 18, so a global override is wrong." But the repo's *original intent* was a global 18 pin, and LandingPage's build script is `vite build` with no `tsc`, so pinning it to 18 costs nothing today. Verified empirically — both packages typecheck at 0 errors under the global override — rather than reasoning about it.
+
+**Rules:**
+1. Read pnpm's install warnings. `[WARN] ... no longer read by pnpm` means a config block is silently inert, and inert dependency pins fail far from their cause.
+2. In pnpm ≥11, `overrides` belong in `pnpm-workspace.yaml`. If `engines` still permits pnpm <11, keep BOTH copies in sync — older pnpm reads only the package.json one.
+3. When a monorepo has packages on different React majors, `@types/react` duplication is the first hypothesis for any `TS2786`. Confirm with `pnpm why @types/react` and by checking `node_modules/.pnpm` for multiple `@types+react@*` directories.
+4. Establish the baseline before claiming you broke something (or that you didn't): `git stash` your changes, re-run the check, count the errors. I nearly attributed 85 pre-existing errors to my own work.
+
+---
+
 ## Non-trivial tasks require plan mode + tasks/todo.md — no exceptions
 
 **Pattern:** Was asked to remove the old onboarding flow (multi-step: identify files, remove frontend, clean backend routes, clean tests, clean imports, fix routing). Did it inline without entering plan mode or writing to `tasks/todo.md`. Also pushed to main without running backend tests (`pytest`).

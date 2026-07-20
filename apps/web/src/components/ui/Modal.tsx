@@ -38,7 +38,7 @@ export function Modal({ open, onClose, title, children, width = 920 }: ModalProp
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 1000,
+        zIndex: 'var(--z-modal)' as never,
         background: 'rgba(9, 12, 20, 0.6)',
         display: 'flex',
         alignItems: 'flex-start',

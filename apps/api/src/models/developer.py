@@ -1,7 +1,7 @@
 import enum
 import uuid
 from datetime import datetime
-from sqlalchemy import Enum as SAEnum, String, DateTime, ForeignKey, Boolean, Integer, JSON
+from sqlalchemy import Enum as SAEnum, String, DateTime, ForeignKey, Boolean, Integer, SmallInteger, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from src.database import Base
@@ -40,6 +40,14 @@ class Developer(Base):
     domain_strengths: Mapped[str | None] = mapped_column(String, nullable=True)
     skill_ratings: Mapped[dict | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=True)
     meeting_hours_bucket: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Planner lane color. Stores identity ("you are person 3"), not appearance —
+    # the hex values live in apps/web/src/styles/tokens.css as --lane-N-*, so
+    # retuning the palette for contrast is a CSS change, never a data migration.
+    # Assigned sequentially per team; wraps at the palette size.
+    color_index: Mapped[int] = mapped_column(
+        SmallInteger, default=0, nullable=False, server_default="0"
+    )
+    avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     team: Mapped["Team"] = relationship(back_populates="developers")

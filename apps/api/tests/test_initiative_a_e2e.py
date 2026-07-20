@@ -7,7 +7,6 @@ runs end-to-end in production.
 Pipeline covered:
   ticket text → identifier_extraction → identifier_classifier → team_identifiers
               → compute_intensity (per ticket) → TicketSkillAnalysis
-              → Sprint Brain prompt includes skill_vector + skill_ratings
               → Scope Cop accepts matched_identifier_count
               → SprintPlanOverride captures reassignments
               → override_analyzer → recalibration proposals
@@ -22,7 +21,6 @@ import pytest
 from src.services.identifier_extraction import extract_tokens, count_tokens, normalize_token
 from src.services.identifier_classifier import classify_identifiers, ClassifiedIdentifier
 from src.services.skill_intensity import compute_intensity
-from src.services import sprint_brain as sb
 from src.services.scope_cop import _SCOPE_COP_TOOL
 from src.services.override_analyzer import detect_patterns
 
@@ -107,14 +105,6 @@ def test_step3_intensity_uses_team_identifiers_to_score_a_ticket():
     assert set(result.matched_identifiers) == {"dbo.tile_metrics", "ms-service"}
 
 
-def test_step4_sprint_brain_tool_schema_requires_skill_match_reasoning():
-    """The plan tool schema added skill_match_reasoning during Wave 2."""
-    assignment_props = sb._SPRINT_PLAN_TOOL["input_schema"]["properties"]["assignments"]["items"]["properties"]
-    assert "skill_match_reasoning" in assignment_props
-    required = sb._SPRINT_PLAN_TOOL["input_schema"]["properties"]["assignments"]["items"]["required"]
-    assert "skill_match_reasoning" in required
-
-
 def test_step5_scope_cop_tool_includes_stack_alignment():
     """The Scope Cop tool schema added stack_alignment during Wave 2."""
     # The schema may wrap results in a top-level 'results' array. Inspect both shapes.
@@ -136,14 +126,3 @@ async def test_step6_override_analyzer_skips_when_below_threshold():
     )
     proposals = await detect_patterns(team_id=str(uuid.uuid4()), db=mock_db, lookback_days=90, threshold=3)
     assert proposals == []
-
-
-def test_step7_sprint_brain_carries_overrides_section_kwarg():
-    """Wave 5 added an overrides_section kwarg to _build_assignment_message
-    so previous-sprint reassignment context can be threaded into the prompt.
-    Detailed assembly is covered by TestOverrideContextInjection in test_sprint_brain.py.
-    """
-    import inspect
-    sig = inspect.signature(sb._build_assignment_message)
-    assert "overrides_section" in sig.parameters
-    assert sig.parameters["overrides_section"].default == ""

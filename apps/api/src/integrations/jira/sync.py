@@ -323,11 +323,8 @@ def sync_jira_team(self, team_id: str):
                 eta_str,
             )
 
-        # Sync backlog issues (not in any sprint). SprintBrain's candidate
-        # query in _get_candidate_tickets returns Tickets with sprint_id IS
-        # NULL or in completed sprints, so without this step a fresh team
-        # board (one that's never had a completed sprint) yields an empty
-        # candidate pool and /api/sprint-brain/plan 422s.
+        # Sync backlog issues (not in any sprint) so the Ticket table stays
+        # complete for tickets with sprint_id IS NULL or in completed sprints.
         if backlog_issues:
             logger.info("[sync] team=%s upserting %d backlog tickets...", team_id, len(backlog_issues))
             _upsert_backlog_issues(db, team, backlog_issues, member_map)
@@ -347,13 +344,6 @@ def sync_jira_team(self, team_id: str):
         logger.info("[sync] team=%s complete in %.1fs", team_id, time.monotonic() - t0)
         _write_sync_status(db, team_id, state="complete", finished_at=datetime.utcnow(),
                            tickets_synced=_n_tickets, members_synced=_n_members)
-
-        # Warm ticket complexity cache in the background so the next plan
-        # generation skips the Claude complexity call entirely.
-        try:
-            prewarm_ticket_complexity.delay(team_id)
-        except Exception:
-            pass  # never block sync completion
 
         # Initiative A: fire sprint-close hooks for any sprint that transitioned
         # to COMPLETED in this sync. Hooks are best-effort — failures are logged
@@ -643,10 +633,8 @@ def _upsert_backlog_issues(db: Session, team, jira_issues: list[dict], member_ma
     """Upsert backlog tickets (sprint_id = None) into Ticket.
 
     Same field extraction as _upsert_issues but for issues that are NOT in any
-    sprint. These rows become candidates for /api/sprint-brain/plan via
-    _get_candidate_tickets, which looks for sprint_id IS NULL OR sprint in
-    completed sprints. A ticket that previously lived in a sprint and is now
-    in backlog (spillover) gets its sprint_id nulled out by this path.
+    sprint. A ticket that previously lived in a sprint and is now in backlog
+    (spillover) gets its sprint_id nulled out by this path.
     """
     from src.models.ticket import Ticket, TicketStatus
     from src.models.developer import Developer
@@ -779,16 +767,3 @@ def incremental_sync_all_teams():
                     sync_jira_sprint.delay(str(team.id), active_sprint.jira_sprint_id)
     finally:
         db.close()
-
-
-@celery_app.task
-def prewarm_ticket_complexity(team_id: str) -> None:
-    """Warm the ticket complexity cache after a sync so plan generation skips Claude's complexity call."""
-    from src.database import AsyncSessionLocal
-    from src.services.sprint_brain import _prewarm_complexity
-
-    async def _run():
-        async with AsyncSessionLocal() as db:
-            await _prewarm_complexity(team_id, db)
-
-    _get_or_create_event_loop().run_until_complete(_run())

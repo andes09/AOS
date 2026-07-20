@@ -229,10 +229,9 @@ async def seed_tickets(
     """Bulk-insert backlog Ticket rows for a team without going through
     Jira sync.
 
-    The simulator uses this to populate the candidate pool when
+    The simulator uses this to populate the backlog when
     `sync_jira_team` can't run (stale OAuth scopes, no Celery worker, etc).
-    Tickets are inserted with sprint_id=None so SprintBrain's
-    `_get_candidate_tickets` query picks them up.
+    Tickets are inserted with sprint_id=None.
 
     Idempotent on jira_issue_id: existing rows have sprint_id reset to NULL
     and core fields refreshed (so spillover semantics from a prior run don't

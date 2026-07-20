@@ -13,7 +13,6 @@ if _sentry_dsn:
     import sentry_sdk
     sentry_sdk.init(dsn=_sentry_dsn, traces_sample_rate=0.1, environment=_os.getenv("ENVIRONMENT", "development"))
 
-from src.routers import sprint_brain as sprint_brain_router
 from src.routers import sprints as sprints_router
 from src.routers import alerts as alerts_router
 from src.routers import organizations as organizations_router
@@ -71,7 +70,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     return response
 
 
-app.include_router(sprint_brain_router.router)
 app.include_router(sprints_router.router)
 app.include_router(alerts_router.router)
 app.include_router(organizations_router.router)

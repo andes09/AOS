@@ -2,80 +2,6 @@
 
 ---
 
-## 🚀 ACTIVE — Remove pre-pivot (legacy Jira) onboarding path
-
-Branch: `chore/remove-legacy-onboarding` (off origin/main). Safe to merge: the
-roadmap landing page (A6) is on main (`630d587`).
-
-Note: OnboardingPage.tsx (1,365 lines), useJiraOAuth, and the three Jira wizard
-step components were already deleted on main (commit `9c96866`). OnboardingEntry
-no longer exists — App.tsx renders OnboardingV2Page unconditionally at
-`/onboarding/*` with no flag check and no `/onboarding/legacy` route. Remaining
-work is backend endpoints, dead flags, dead types, and test cleanup.
-
-- [x] Backend: strip legacy onboarding endpoints (status, complete,
-      import-history, import-status, confirm-team, reset) + helpers from
-      `routers/onboarding.py`; keep invitations endpoints → rename file to
-      `routers/invitations.py`; update main.py
-- [x] Backend: delete `services/onboarding.py` (only consumer was the legacy router)
-- [x] Backend: fix stale /import-history reference in identifier_scan_service.py docstring
-- [x] Flags: remove dead `onboarding` / `onboarding_v2` flags from
-      `config/features/*.yaml` and web FeatureFlags type (nothing gates on them)
-- [x] Web: delete unused legacy `types/onboarding.ts` and `components/onboarding/EmptyStateCard.tsx`
-- [x] Web: drop legacy `aos_onboarding_step` + `aos_team_setup_step` localStorage cleanup in OrgProvider (second key had no remaining writer either)
-- [x] Tests: delete `test_onboarding_flow_e2e.py`, `test_onboarding_reset.py`
-- [x] Tests: remove the two legacy-endpoint tests from `test_identifier_scan_service.py`
-- [x] Tests: drop `onboarding` flag assertions in `test_features.py`
-- [x] E2E: delete legacy `apps/web/tests/e2e/onboarding.spec.ts`; keep `onboarding-v2.spec.ts`
-- [x] Verify: api pytest green (vs. main baseline), web typecheck/build green, v2 Playwright spec run
-
-### Review (2026-07-20)
-
-**Shipped, not yet committed** (working tree on `chore/remove-legacy-onboarding`, awaiting user go-ahead to commit/push).
-
-Scope note: `OnboardingPage.tsx`, `useJiraOAuth`, and the three Jira wizard step
-components named in the request were **already deleted on main** (commit
-`9c96866`, prior session) — `App.tsx` already renders `OnboardingV2Page`
-unconditionally with no `/onboarding/legacy` route and no `OnboardingEntry`
-flag switch. This branch finished the remaining cleanup that was never done:
-dead backend endpoints, dead services module, dead feature flags, dead types,
-and stale test coverage that all still assumed the legacy wizard existed.
-
-- `routers/onboarding.py` deleted; its invitations endpoints (unrelated to the
-  Jira wizard — used by the current team-invite flow) moved verbatim into new
-  `routers/invitations.py`. `services/onboarding.py` deleted (its only caller
-  was the deleted router).
-- `onboarding` / `onboarding_v2` feature flags removed from both YAML files
-  and the web `FeatureFlags` type — nothing read them once the legacy route
-  and OnboardingEntry switch were already gone from main.
-- `identifier_scan_service.py` docstring no longer claims a second caller in
-  `routers/onboarding.py` that doesn't exist anymore.
-- Two `test_identifier_scan_service.py` tests that posted to
-  `/api/onboarding/import-history` deleted along with their now-unused
-  imports (`ASGITransport`, `AsyncClient`, auth dep overrides).
-- `OrgProvider.tsx` no longer clears `aos_onboarding_step` / `aos_team_setup_step`
-  — grepped and neither key has a writer left in the codebase.
-
-**Verification:**
-- Backend: `pytest tests -q` → 32 failed / 362 passed, and the failure set is
-  **byte-identical** to a fresh `origin/main` checkout run the same way (diffed
-  the sorted `FAILED` lines). All 32 are pre-existing infra-dependent failures
-  (Postgres/asyncpg, live Jira/Anthropic calls), none touch onboarding.
-- Frontend: `tsc --noEmit` clean, `vite build` succeeds, Vitest 82/82 green.
-- Playwright: `onboarding-v2.spec.ts` — 1 of 2 tests failed on a stale
-  locator (`getByRole('button', { name: /A startup/ })` against a
-  `PurposeStep` that now renders `role="radio"`). Confirmed via
-  `git diff origin/main` that both the spec and `PurposeStep.tsx` are
-  **byte-identical to main** — this branch didn't touch either file, so the
-  failure predates this change and is out of scope here. Worth a follow-up
-  ticket to fix the locator.
-
-**Not done (explicitly out of scope):** did not touch `onboarding-v2` itself,
-`OnboardingV2Page.tsx`, invitations *behavior* (only moved the file), or the
-pre-existing `PurposeStep` Playwright locator bug found during verification.
-
----
-
 ## 🚀 ACTIVE — Planner Revamp (team lanes, time blocking, design system)
 
 Rebuild the planner from a bare Mon–Fri checkbox grid into a dense, color-coded
@@ -149,31 +75,19 @@ Two things found along the way that were *not* in the plan:
 
 ---
 
-## 🚀 ACTIVE — Pivot: Onboarding v2 (project roadmap AI)
+## 🐛 Known issues / small follow-ups
 
-Pivot: Omada becomes an interactive project-roadmap AI. This work replaces the Jira onboarding entry path (old wizard kept behind flag) with: GitHub connect → name+phone → LLM idea interview. Deliverable = backend API + headless hooks layer (partner builds the real UI). Full plan: `~/.claude/plans/we-are-pivoting-abd-sorted-sparrow.md`.
-
-- [x] 1. Migration `0027_onboarding_v2` + models: `developers.phone`, `github_connections`, `onboarding_sessions`, `onboarding_messages`
-- [x] 2. Config (`github_client_id/secret/redirect_uri`, `anthropic_api_key`) + `onboarding_v2` flag (local true, prod false) + `featureFlags.ts`
-- [x] 3. GitHub OAuth integration (`integrations/github/`, mirrors Jira): /connect /callback /status /disconnect /repos + tests
-- [x] 4. Onboarding v2 router: GET /state (derived), POST /github/skip, PUT /profile, POST /complete + tests
-- [x] 5. Idea interview: `services/idea_interview.py` (stream reply + tool-choice brief extraction, 40-msg cap, cost tracking); chat endpoints incl. SSE /chat/message + tests
-- [x] 6. Headless layer `apps/web/src/features/onboarding-v2/` (types, api, hooks, barrel — no styling)
-- [x] 7. Reference UI `OnboardingV2Page.tsx` + App.tsx flag-switched routing (`/onboarding/legacy` = old wizard, `/onboarding/v2` = explicit new flow)
-- [x] 8. Playwright e2e (SSE mocked) + full verification (pytest, tsc, build, legacy spec green)
-- [x] 9. Project purpose classification (hobby/startup/learning) — new explicit step, steers the idea interview's system prompt
-- [x] 10. Partner frontend-integration doc (`docs/onboarding-v2-frontend-integration.md`)
-- [ ] Ops (external): GitHub OAuth apps per env (callback `/api/integrations/github/callback`), Clerk GitHub social provider, `GITHUB_*` + `ANTHROPIC_API_KEY` in Railway
-
-### Review (2026-07-13)
-
-**Shipped.** 45 backend tests (36 original + 9 for purpose) + 3 Playwright tests, all green; `tsc` and prod build clean. Full pytest suite has 24 failures that are byte-identical on a clean tree (pre-existing: they need a local Postgres). Migrations not yet applied to a real DB — run `alembic upgrade head` when one is up (offline SQL compile verified for both 0027 and 0028).
-
-Flow is now: `github_connect → profile → purpose → idea_chat → done`. Purpose (hobby/startup/learning) is collected as an explicit 3-way choice — not chat-extracted — because it deterministically selects one of three system-prompt variants in `services/idea_interview.py` (`_PURPOSE_GUIDANCE`), each prioritizing different things: hobby → fun/free-time/small scope; startup → market/MVP/timeline pressure; learning → skill goals/depth vs breadth. The opening chat message is also purpose-flavored. `chat/start` and `chat/message` now 409 with `purpose_not_set` if called before `PUT /purpose`.
-
-Notes for the partner (UI): see `docs/onboarding-v2-frontend-integration.md` — full hook usage, flow diagram, local setup, and rules of the road. Short version: build against `apps/web/src/features/onboarding-v2/index.ts`, never call `fetch` directly, render off `state.currentStep` rather than hardcoding step order.
-
-Deviations from plan: added `brief_complete` column to `onboarding_sessions` (LLM "enough" judgment is distinct from user override); added explicit `/onboarding/v2` route; made Playwright port overridable via `E2E_PORT` (local 5174 is taken by the LandingPage dev server); fixed a strict-mode-ambiguous locator in the legacy onboarding spec; added the purpose step (not in the original plan — requested afterward, ships as migration 0028).
+- [ ] `apps/web/tests/e2e/onboarding-v2.spec.ts` — the purpose-step test uses a
+      stale locator: `getByRole('button', { name: /A startup/ })`, but
+      `PurposeStep.tsx` renders the three purpose choices as `role="radio"`
+      (a `radiogroup`, not buttons). Update the locator to `getByRole('radio', ...)`.
+      Found 2026-07-20 while verifying the legacy-onboarding-removal branch;
+      confirmed via `git diff origin/main` that neither file was touched by
+      that change, so it predates it and is a pure test-locator bug.
+- [ ] Onboarding v2 — Ops (external, not code): GitHub OAuth apps per env
+      (callback `/api/integrations/github/callback`), Clerk GitHub social
+      provider, `GITHUB_*` + `ANTHROPIC_API_KEY` in Railway. Blocks
+      onboarding v2 going live in production (flag is currently off there).
 
 ---
 
@@ -266,8 +180,10 @@ Deviations from plan: added `brief_complete` column to `onboarding_sessions` (LL
 
 ## ✅ Done (archived)
 
+- **Remove pre-pivot (legacy Jira) onboarding path** — merged to main 2026-07-20 (`e242bf8`). `OnboardingPage.tsx`/`useJiraOAuth`/Jira wizard step components were already deleted in a prior pass (`9c96866`); this pass removed what was left over — `routers/onboarding.py` + `services/onboarding.py` (invitations endpoints moved to new `routers/invitations.py`), dead `onboarding`/`onboarding_v2` feature flags, dead `types/onboarding.ts` + `EmptyStateCard.tsx`, stale tests (`test_onboarding_flow_e2e.py`, `test_onboarding_reset.py`, legacy `onboarding.spec.ts`), and dead localStorage cleanup in `OrgProvider`. Verified backend failure set identical to a clean main checkout; web tsc/build/vitest all green. Surfaced the Playwright `PurposeStep` locator bug tracked above.
+- **Pivot: Onboarding v2 (project roadmap AI)** — shipped 2026-07-13. Replaced the Jira onboarding entry with GitHub connect → profile → purpose classification (hobby/startup/learning) → LLM idea interview (`services/idea_interview.py`, SSE streaming, 40-msg cap). Headless hooks layer at `features/onboarding-v2/` + reference UI `OnboardingV2Page.tsx`. 45 backend tests + 3 Playwright green; partner integration doc at `docs/onboarding-v2-frontend-integration.md`. Outstanding: GitHub OAuth ops config, tracked above.
 - **Beta Onboarding Hardening (6 streams + boards-fallback footgun)** — shipped 2026-06-17 (commit `e2e4440`). Stream E (sync.py warn-on-date-parse + router.py 502 on Jira auth error), Stream B (SyncStatus model + migration 0026 + /sync-status endpoint + Sentry), Stream D (POST /onboarding/reset + tests), Stream A (test_onboarding_flow_e2e.py — 6 tests + reset tests), Stream C (frontend polling + reset button + Sentry React + Playwright smoke), Stream F (CI workflow). Boards-fallback footgun resolved by `0a98162` (drop project-* synthetic IDs, pick-project-then-board flow) plus OAuth scope fixes (`e713a1e`, `62d6ef9`, `b17a573`).
-- **Onboarding Design Rebuild + Boards Fix** — full rewrite of `OnboardingPage.tsx` to match design (WelcomeStep, ConnectFlow, ConfirmTeam, Review, Done); real Jira boards via `/integrations/jira/boards` (B1); team-members endpoint (B2); confirm-team endpoint (B3).
+- **Onboarding Design Rebuild + Boards Fix** — full rewrite of `OnboardingPage.tsx` to match design (WelcomeStep, ConnectFlow, ConfirmTeam, Review, Done); real Jira boards via `/integrations/jira/boards` (B1); team-members endpoint (B2); confirm-team endpoint (B3). *(`OnboardingPage.tsx` itself removed 2026-07-19/20 — see above.)*
 - **Stage 2 Simulator (M1–M6)** — multi-team matrix, all archetypes, parallel execution, HTML report. 89 tests passing. Simulator retired and removed from main (2026-07-17); final state preserved at tag `archive/omada-simulator-final`.
 - **Stage 2 Bug fixes (2026-05-20)** — omada_team_id clobber (A), push 409s (B), missing audit logs (C), backlog sync gap (D), Celery worker (E). Large/omada flipped 33% → 50% after Fix A.
 - **Initiative A — Identifier Associations** — merged. Team glossary, skill-intensity vectors, Sprint Brain routing, Scope Cop 5th criterion, override capture + recalibration loop, sprint-close refresh hooks.
@@ -310,7 +226,7 @@ All code is written and committed. Nothing to build yet — just configuration t
 
 ## 📋 Up next
 
-Nothing active — both major initiatives are shipped. Next work items are billing (configure + launch) and whatever comes after.
+Nothing active beyond what's tracked above. Next work items are billing (configure + launch) and whatever comes after.
 
 ### Infra — split Celery workers by queue
 
@@ -446,4 +362,3 @@ Phase 1 shipped — see archived. Phases 2–4 paused pending GDPR/CCPA research
 - Per-stage timing on the existing cost_tracker logs (nice-to-have, defer)
 - Parallelizing Scope Cop's Jira fetches (separate quick win)
 - Decomposing the assignment monolith (architectural — separate plan)
-

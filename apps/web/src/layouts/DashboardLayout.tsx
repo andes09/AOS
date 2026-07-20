@@ -2,14 +2,12 @@ import { CSSProperties, useState } from 'react'
 import { Outlet, NavLink } from 'react-router-dom'
 import { UserButton } from '@clerk/clerk-react'
 import { Settings } from 'lucide-react'
-import { useAppRole } from '../hooks/useAppRole'
 import { RoleSwitcher } from '../components/RoleSwitcher'
 import { TeamProvider } from '../contexts/TeamContext'
 import { TeamSwitcher } from '../components/TeamSwitcher'
 import { ThemeToggle } from '../components/ui/ThemeToggle'
 import { Modal } from '../components/ui/Modal'
 import { SettingsPage } from '../pages/SettingsPage'
-import { useFeature } from '../featureFlags'
 
 function navItemStyle(isActive: boolean): CSSProperties {
   return {
@@ -31,24 +29,8 @@ function navItemStyle(isActive: boolean): CSSProperties {
   }
 }
 
-const sectionLabel: CSSProperties = {
-  marginTop: 12,
-  padding: '0 10px 4px',
-  fontSize: 'var(--text-xs)',
-  fontFamily: 'var(--font-sans)',
-  fontWeight: 'var(--font-weight-semibold)' as CSSProperties['fontWeight'],
-  textTransform: 'uppercase',
-  letterSpacing: '0.05em',
-  color: 'var(--color-text-muted)',
-}
-
 export function DashboardLayout() {
-  const { appRole } = useAppRole()
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const canSeeLead = appRole === 'lead' || appRole === 'exec' || appRole === 'admin'
-  const canSeeExec = appRole === 'exec' || appRole === 'admin'
-  const showMultiTeam = useFeature('multi_team_dashboard')
-  const showExecDashboard = useFeature('exec_dashboard')
 
   return (
     <TeamProvider>
@@ -98,35 +80,6 @@ export function DashboardLayout() {
                 Planner
               </NavLink>
             </li>
-
-            {canSeeLead && (
-              <>
-                <li style={sectionLabel}>Intelligence</li>
-                <li>
-                  <NavLink to="/app/retrospective" style={({ isActive }) => navItemStyle(isActive)}>
-                    Retro Prep
-                  </NavLink>
-                </li>
-                {showMultiTeam && (
-                  <li>
-                    <NavLink to="/app/multi-team" style={({ isActive }) => navItemStyle(isActive)}>
-                      Multi-Team
-                    </NavLink>
-                  </li>
-                )}
-              </>
-            )}
-
-            {canSeeExec && showExecDashboard && (
-              <>
-                <li style={sectionLabel}>Executive</li>
-                <li>
-                  <NavLink to="/app/exec-dashboard" style={({ isActive }) => navItemStyle(isActive)}>
-                    Exec Dashboard
-                  </NavLink>
-                </li>
-              </>
-            )}
           </ul>
 
           {/* Profile + settings gear, bottom-left */}

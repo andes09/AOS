@@ -45,7 +45,6 @@ interface InvitationItem {
 
 export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
   const showSlackAlerts = useFeature('slack_alerts')
-  const showGlossary = useFeature('skill_based_assignment')
   const [anthropicKey, setAnthropicKey] = useState('')
   const [anthropicConfigured, setAnthropicConfigured] = useState<boolean | null>(null)
   const [anthropicSaving, setAnthropicSaving] = useState(false)
@@ -369,35 +368,6 @@ export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
                 </div>
               </div>
             )}
-          </CardBody>
-        </Card>
-      )}
-
-      {/* Team Glossary */}
-      {isLead && showGlossary && (
-        <Card style={sectionGap}>
-          <CardHeader>
-            <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
-              Team Glossary
-            </span>
-          </CardHeader>
-          <CardBody>
-            <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: '0 0 12px' }}>
-              Identifiers your team has used in past tickets, mapped to skills.
-            </p>
-            <Link
-              to="/app/settings/glossary"
-              onClick={onClose}
-              style={{
-                color: 'var(--color-accent)',
-                fontFamily: 'var(--font-sans)',
-                fontSize: 'var(--text-sm)',
-                fontWeight: 500,
-                textDecoration: 'none',
-              }}
-            >
-              Manage glossary →
-            </Link>
           </CardBody>
         </Card>
       )}

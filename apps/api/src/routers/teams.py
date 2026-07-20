@@ -4,7 +4,6 @@ Multi-team management API router.
 Endpoints
 ---------
 GET    /api/teams
-GET    /api/teams/multi-dashboard
 POST   /api/teams/{team_id}/access
 DELETE /api/teams/{team_id}/access/{developer_id}
 """
@@ -24,7 +23,7 @@ from src.models.developer import Developer
 from src.models.organization import Organization
 from src.models.team import Team
 from src.models.team_access import TeamAccessGrant
-from src.services.multi_team import get_accessible_teams, get_multi_team_summary
+from src.services.multi_team import get_accessible_teams
 
 teams_router = APIRouter(tags=["teams"])
 
@@ -43,23 +42,6 @@ class TeamListItem(BaseModel):
 class TeamsListResponse(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
     teams: list[TeamListItem]
-
-
-class TeamDashboardItem(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-    team_id: str
-    team_name: str
-    health_score: int
-    active_sprint_name: str | None
-    completion_rate: float
-    active_deps_count: int
-    last_retro_date: str | None
-    rag_status: str
-
-
-class MultiDashboardResponse(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-    teams: list[TeamDashboardItem]
 
 
 class GrantAccessRequest(BaseModel):
@@ -147,36 +129,6 @@ async def list_teams(
         for t in teams
     ]
     return TeamsListResponse(teams=items)
-
-
-@teams_router.get("/multi-dashboard", response_model=MultiDashboardResponse)
-async def multi_dashboard(
-    user_id: str = Depends(get_current_user_id),
-    clerk_org_id: str = Depends(get_current_org_id),
-    _role: str = Depends(require_role("lead")),
-    db: AsyncSession = Depends(get_db),
-):
-    if not settings.is_feature_enabled("multi_team_dashboard"):
-        raise HTTPException(status_code=404, detail="Feature not available")
-    teams = await get_accessible_teams(user_id, clerk_org_id, db)
-    if not teams:
-        return MultiDashboardResponse(teams=[])
-
-    summaries = await get_multi_team_summary([t.id for t in teams], db)
-    items = [
-        TeamDashboardItem(
-            team_id=s["teamId"],
-            team_name=s["teamName"],
-            health_score=s["healthScore"],
-            active_sprint_name=s["activeSprintName"],
-            completion_rate=s["completionRate"],
-            active_deps_count=s["activeDepsCount"],
-            last_retro_date=s["lastRetroDate"],
-            rag_status=s["ragStatus"],
-        )
-        for s in summaries
-    ]
-    return MultiDashboardResponse(teams=items)
 
 
 @teams_router.post("", response_model=CreateTeamResponse)
@@ -277,10 +229,9 @@ async def seed_tickets(
     """Bulk-insert backlog Ticket rows for a team without going through
     Jira sync.
 
-    The simulator uses this to populate the candidate pool when
+    The simulator uses this to populate the backlog when
     `sync_jira_team` can't run (stale OAuth scopes, no Celery worker, etc).
-    Tickets are inserted with sprint_id=None so SprintBrain's
-    `_get_candidate_tickets` query picks them up.
+    Tickets are inserted with sprint_id=None.
 
     Idempotent on jira_issue_id: existing rows have sprint_id reset to NULL
     and core fields refreshed (so spillover semantics from a prior run don't

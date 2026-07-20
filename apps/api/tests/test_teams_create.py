@@ -1,4 +1,4 @@
-"""Tests for POST /api/teams and the team_id-aware PUT /api/integrations/jira/board.
+"""Tests for POST /api/teams.
 
 Covers the M5 "per-team Jira project + Omada team management" contract used
 by the omada-simulator stage-2 matrix.
@@ -6,12 +6,12 @@ by the omada-simulator stage-2 matrix.
 We deliberately do NOT reuse the shared ``tmp_db`` fixture from
 ``tests/conftest.py``: it creates every table in ``Base.metadata`` which
 fails under SQLite because several unrelated tables use Postgres-specific
-``JSONB`` columns. These tests only need 5 simple tables, so we build a
+``JSONB`` columns. These tests only need 4 simple tables, so we build a
 local async-SQLite engine that creates exactly those.
 """
 import uuid
 from contextlib import contextmanager
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -24,7 +24,6 @@ from src.config import settings
 from src.database import Base, get_db
 from src.main import app
 from src.models.developer import Developer
-from src.models.jira_connection import JiraConnection
 from src.models.organization import Organization
 from src.models.team import Team
 from src.models.team_access import TeamAccessGrant
@@ -35,7 +34,6 @@ _REQUIRED_TABLES = [
     Organization.__table__,
     Team.__table__,
     Developer.__table__,
-    JiraConnection.__table__,
     TeamAccessGrant.__table__,
 ]
 
@@ -218,125 +216,3 @@ async def test_create_team_idempotent_on_developer_names(teams_db):
     first_dev_ids = sorted(d["developerId"] for d in first.json()["developers"])
     second_dev_ids = sorted(d["developerId"] for d in second.json()["developers"])
     assert first_dev_ids == second_dev_ids
-
-
-# ---------------------------------------------------------------------------
-# PUT /api/integrations/jira/board (team_id-aware)
-# ---------------------------------------------------------------------------
-
-async def _seed_org_team_connection(
-    clerk_org_id: str,
-    team_name: str = "Primary Team",
-) -> tuple[uuid.UUID, uuid.UUID]:
-    org_id = uuid.uuid4()
-    team_id = uuid.uuid4()
-    conn_id = uuid.uuid4()
-    async for db in app.dependency_overrides[get_db]():
-        db.add_all([
-            Organization(
-                id=org_id,
-                clerk_org_id=clerk_org_id,
-                name=f"Org {clerk_org_id}",
-                slug=clerk_org_id,
-                use_managed_key=False,
-            ),
-            Team(id=team_id, organization_id=org_id, name=team_name, sprint_length_days=14),
-            JiraConnection(
-                id=conn_id,
-                organization_id=org_id,
-                jira_cloud_id=f"cloud_{clerk_org_id}",
-                jira_cloud_url=f"https://{clerk_org_id}.atlassian.net",
-                encrypted_access_token="enc_at",
-                encrypted_refresh_token="enc_rt",
-                is_active=True,
-            ),
-        ])
-        await db.commit()
-        break
-    return org_id, team_id
-
-
-@pytest.mark.asyncio
-async def test_switch_board_without_team_id_uses_org_default(teams_db):
-    """Stage-1 backward compatibility: omitting team_id picks the org's team."""
-    _, primary_id = await _seed_org_team_connection("org_sw1")
-
-    with _as_user(org_id="org_sw1"), \
-            patch("src.integrations.jira.sync.sync_jira_team") as mock_task:
-        mock_task.delay = MagicMock()
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            resp = await client.put(
-                "/api/integrations/jira/board",
-                json={"board_id": 99, "project_key": "DEF"},
-                headers={"Authorization": "Bearer tok"},
-            )
-    assert resp.status_code == 200
-    assert resp.json()["team_id"] == str(primary_id)
-
-    async for db in app.dependency_overrides[get_db]():
-        t = await db.get(Team, primary_id)
-        assert t.jira_board_id == "99"
-        assert t.jira_project_key == "DEF"
-        break
-
-
-@pytest.mark.asyncio
-async def test_switch_board_with_team_id_targets_that_team(teams_db):
-    """Passing team_id targets that specific team."""
-    org_id, primary_id = await _seed_org_team_connection("org_sw2")
-
-    # Add a second team under the same org.
-    second_id = uuid.uuid4()
-    async for db in app.dependency_overrides[get_db]():
-        db.add(Team(id=second_id, organization_id=org_id, name="Second", sprint_length_days=14))
-        await db.commit()
-        break
-
-    with _as_user(org_id="org_sw2"), \
-            patch("src.integrations.jira.sync.sync_jira_team") as mock_task:
-        mock_task.delay = MagicMock()
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            resp = await client.put(
-                "/api/integrations/jira/board",
-                json={"board_id": 7, "project_key": "SEC", "team_id": str(second_id)},
-                headers={"Authorization": "Bearer tok"},
-            )
-    assert resp.status_code == 200
-    assert resp.json()["team_id"] == str(second_id)
-
-    async for db in app.dependency_overrides[get_db]():
-        secondary = await db.get(Team, second_id)
-        primary = await db.get(Team, primary_id)
-        assert secondary.jira_board_id == "7"
-        assert secondary.jira_project_key == "SEC"
-        # Primary must be untouched.
-        assert primary.jira_board_id is None
-        assert primary.jira_project_key is None
-        break
-
-
-@pytest.mark.asyncio
-async def test_switch_board_with_foreign_team_id_returns_404(teams_db):
-    """team_id from a different org → 404, no mutation."""
-    _, caller_team_id = await _seed_org_team_connection("org_caller")
-    _, foreign_team_id = await _seed_org_team_connection("org_foreign")
-
-    with _as_user(org_id="org_caller"), \
-            patch("src.integrations.jira.sync.sync_jira_team") as mock_task:
-        mock_task.delay = MagicMock()
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            resp = await client.put(
-                "/api/integrations/jira/board",
-                json={"board_id": 1, "project_key": "NOPE", "team_id": str(foreign_team_id)},
-                headers={"Authorization": "Bearer tok"},
-            )
-    assert resp.status_code == 404
-
-    async for db in app.dependency_overrides[get_db]():
-        foreign = await db.get(Team, foreign_team_id)
-        caller = await db.get(Team, caller_team_id)
-        assert foreign.jira_board_id is None
-        assert foreign.jira_project_key is None
-        assert caller.jira_board_id is None
-        assert caller.jira_project_key is None
-        break

@@ -89,6 +89,11 @@ export function DashboardLayout() {
 
           <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
             <li>
+              <NavLink to="/app/roadmap" style={({ isActive }) => navItemStyle(isActive)}>
+                Roadmap
+              </NavLink>
+            </li>
+            <li>
               <NavLink to="/app/sprint-planner" style={({ isActive }) => navItemStyle(isActive)}>
                 Planner
               </NavLink>

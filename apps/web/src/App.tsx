@@ -3,6 +3,7 @@ import { SignedIn, SignedOut, RedirectToSignIn, SignIn } from '@clerk/clerk-reac
 import { DashboardLayout } from './layouts/DashboardLayout'
 import { OrgProvider } from './components/OrgProvider'
 import { RequireFeature } from './components/RequireFeature'
+import { RoadmapPage } from './pages/roadmap/RoadmapPage'
 import { PlannerPage } from './pages/planner/PlannerPage'
 import { VelocityMirrorPage } from './pages/VelocityMirrorPage'
 import { ExecDashboardPage } from './pages/ExecDashboardPage'
@@ -30,19 +31,24 @@ export default function App() {
       <Route path="/onboarding/*" element={
         testMode ? <OnboardingV2Page /> : <SignedIn><OnboardingV2Page /></SignedIn>
       } />
+      {/* In test mode Playwright has no Clerk session, so skip the auth/org
+          gates (mirrors the /onboarding route above). */}
       <Route path="/app" element={
-        <>
-          <SignedIn>
-            <OrgProvider>
-              <DashboardLayout />
-            </OrgProvider>
-          </SignedIn>
-          <SignedOut>
-            <RedirectToSignIn />
-          </SignedOut>
-        </>
+        testMode ? <DashboardLayout /> : (
+          <>
+            <SignedIn>
+              <OrgProvider>
+                <DashboardLayout />
+              </OrgProvider>
+            </SignedIn>
+            <SignedOut>
+              <RedirectToSignIn />
+            </SignedOut>
+          </>
+        )
       }>
-        <Route index element={<Navigate to="sprint-planner" replace />} />
+        <Route index element={<Navigate to="roadmap" replace />} />
+        <Route path="roadmap" element={<RoadmapPage />} />
         <Route path="sprint-planner" element={<PlannerPage />} />
         <Route path="velocity-mirror" element={<VelocityMirrorPage />} />
         <Route path="exec-dashboard" element={

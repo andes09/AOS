@@ -2,6 +2,80 @@
 
 ---
 
+## 🚀 ACTIVE — Remove pre-pivot (legacy Jira) onboarding path
+
+Branch: `chore/remove-legacy-onboarding` (off origin/main). Safe to merge: the
+roadmap landing page (A6) is on main (`630d587`).
+
+Note: OnboardingPage.tsx (1,365 lines), useJiraOAuth, and the three Jira wizard
+step components were already deleted on main (commit `9c96866`). OnboardingEntry
+no longer exists — App.tsx renders OnboardingV2Page unconditionally at
+`/onboarding/*` with no flag check and no `/onboarding/legacy` route. Remaining
+work is backend endpoints, dead flags, dead types, and test cleanup.
+
+- [x] Backend: strip legacy onboarding endpoints (status, complete,
+      import-history, import-status, confirm-team, reset) + helpers from
+      `routers/onboarding.py`; keep invitations endpoints → rename file to
+      `routers/invitations.py`; update main.py
+- [x] Backend: delete `services/onboarding.py` (only consumer was the legacy router)
+- [x] Backend: fix stale /import-history reference in identifier_scan_service.py docstring
+- [x] Flags: remove dead `onboarding` / `onboarding_v2` flags from
+      `config/features/*.yaml` and web FeatureFlags type (nothing gates on them)
+- [x] Web: delete unused legacy `types/onboarding.ts` and `components/onboarding/EmptyStateCard.tsx`
+- [x] Web: drop legacy `aos_onboarding_step` + `aos_team_setup_step` localStorage cleanup in OrgProvider (second key had no remaining writer either)
+- [x] Tests: delete `test_onboarding_flow_e2e.py`, `test_onboarding_reset.py`
+- [x] Tests: remove the two legacy-endpoint tests from `test_identifier_scan_service.py`
+- [x] Tests: drop `onboarding` flag assertions in `test_features.py`
+- [x] E2E: delete legacy `apps/web/tests/e2e/onboarding.spec.ts`; keep `onboarding-v2.spec.ts`
+- [x] Verify: api pytest green (vs. main baseline), web typecheck/build green, v2 Playwright spec run
+
+### Review (2026-07-20)
+
+**Shipped, not yet committed** (working tree on `chore/remove-legacy-onboarding`, awaiting user go-ahead to commit/push).
+
+Scope note: `OnboardingPage.tsx`, `useJiraOAuth`, and the three Jira wizard step
+components named in the request were **already deleted on main** (commit
+`9c96866`, prior session) — `App.tsx` already renders `OnboardingV2Page`
+unconditionally with no `/onboarding/legacy` route and no `OnboardingEntry`
+flag switch. This branch finished the remaining cleanup that was never done:
+dead backend endpoints, dead services module, dead feature flags, dead types,
+and stale test coverage that all still assumed the legacy wizard existed.
+
+- `routers/onboarding.py` deleted; its invitations endpoints (unrelated to the
+  Jira wizard — used by the current team-invite flow) moved verbatim into new
+  `routers/invitations.py`. `services/onboarding.py` deleted (its only caller
+  was the deleted router).
+- `onboarding` / `onboarding_v2` feature flags removed from both YAML files
+  and the web `FeatureFlags` type — nothing read them once the legacy route
+  and OnboardingEntry switch were already gone from main.
+- `identifier_scan_service.py` docstring no longer claims a second caller in
+  `routers/onboarding.py` that doesn't exist anymore.
+- Two `test_identifier_scan_service.py` tests that posted to
+  `/api/onboarding/import-history` deleted along with their now-unused
+  imports (`ASGITransport`, `AsyncClient`, auth dep overrides).
+- `OrgProvider.tsx` no longer clears `aos_onboarding_step` / `aos_team_setup_step`
+  — grepped and neither key has a writer left in the codebase.
+
+**Verification:**
+- Backend: `pytest tests -q` → 32 failed / 362 passed, and the failure set is
+  **byte-identical** to a fresh `origin/main` checkout run the same way (diffed
+  the sorted `FAILED` lines). All 32 are pre-existing infra-dependent failures
+  (Postgres/asyncpg, live Jira/Anthropic calls), none touch onboarding.
+- Frontend: `tsc --noEmit` clean, `vite build` succeeds, Vitest 82/82 green.
+- Playwright: `onboarding-v2.spec.ts` — 1 of 2 tests failed on a stale
+  locator (`getByRole('button', { name: /A startup/ })` against a
+  `PurposeStep` that now renders `role="radio"`). Confirmed via
+  `git diff origin/main` that both the spec and `PurposeStep.tsx` are
+  **byte-identical to main** — this branch didn't touch either file, so the
+  failure predates this change and is out of scope here. Worth a follow-up
+  ticket to fix the locator.
+
+**Not done (explicitly out of scope):** did not touch `onboarding-v2` itself,
+`OnboardingV2Page.tsx`, invitations *behavior* (only moved the file), or the
+pre-existing `PurposeStep` Playwright locator bug found during verification.
+
+---
+
 ## 🚀 ACTIVE — Planner Revamp (team lanes, time blocking, design system)
 
 Rebuild the planner from a bare Mon–Fri checkbox grid into a dense, color-coded

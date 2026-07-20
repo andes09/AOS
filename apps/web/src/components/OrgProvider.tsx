@@ -19,8 +19,6 @@ export function OrgProvider({ children }: Props) {
 
   useEffect(() => {
     if (provisioned && !onboardingCompleted) {
-      localStorage.removeItem('aos_team_setup_step')
-      localStorage.removeItem('aos_onboarding_step')
       navigate('/onboarding', { replace: true })
     }
   }, [provisioned, onboardingCompleted])

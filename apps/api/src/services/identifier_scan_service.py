@@ -4,13 +4,8 @@ Identifier bootstrap scan service (Initiative A, Wave 3).
 Single source of truth for the bootstrap-scan pipeline:
 corpus → tokenize → top-N cap → classify → upsert.
 
-Two callers:
-1. ``POST /api/identifiers/scan`` (routers/identifiers.py) — the interactive
-   endpoint (thin wrapper around ``run_team_scan``).
-2. The onboarding ``/import-history`` background task (routers/onboarding.py) —
-   auto-triggers the same scan once Jira sprint history import completes, so
-   the team's identifier glossary is ready by the time the lead lands on the
-   Settings → Team Glossary page (SA-10).
+Called from ``POST /api/identifiers/scan`` (routers/identifiers.py) — the
+interactive endpoint (thin wrapper around ``run_team_scan``).
 
 The function is **idempotent**: re-running upserts (occurrence_count is
 incremented for tokens that already exist, classification is refreshed).

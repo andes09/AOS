@@ -14,7 +14,6 @@ def test_local_yaml_loads():
     assert flags["skill_based_assignment"] is True
     assert flags["slack_alerts"] is True
     assert flags["dependency_radar"] is True
-    assert flags["onboarding"] is True
 
 
 def test_production_yaml_loads():
@@ -26,7 +25,6 @@ def test_production_yaml_loads():
     assert flags["retro_pattern_detection"] is False
     assert flags["slack_alerts"] is False
     assert flags["dependency_radar"] is False
-    assert flags["onboarding"] is False
 
 
 def test_missing_flag_defaults_to_false():

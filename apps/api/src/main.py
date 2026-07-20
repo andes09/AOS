@@ -28,7 +28,7 @@ from src.routers.scope_cop import scope_cop_router
 from src.routers.scope_cop_revisions import scope_cop_revisions_router
 from src.routers.dependency_radar import dependency_radar_router
 from src.routers.retro import retro_router
-from src.routers.onboarding import onboarding_router, invitations_router
+from src.routers.invitations import invitations_router
 from src.routers.onboarding_v2 import router as onboarding_v2_router
 from src.routers.roadmap import router as roadmap_router
 from src.routers.capacity import capacity_router
@@ -91,7 +91,6 @@ app.include_router(scope_cop_router, prefix="/api/scope-cop")
 app.include_router(scope_cop_revisions_router, prefix="/api/scope-cop")
 app.include_router(dependency_radar_router, prefix="/api/dependency-radar")
 app.include_router(retro_router, prefix="/api/retro")
-app.include_router(onboarding_router, prefix="/api/onboarding")
 app.include_router(onboarding_v2_router)
 app.include_router(roadmap_router)
 app.include_router(invitations_router, prefix="/api/invitations")

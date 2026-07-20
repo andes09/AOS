@@ -5,21 +5,16 @@ Covers:
 - Empty corpus → zero-count summary, no DB writes
 - Idempotent re-scan increments occurrence_count, refreshes label
 - Low-confidence classifications counted in summary
-- /import-history schedules the background scan (BackgroundTasks.add_task)
-- Background scan swallows exceptions (does not propagate)
 """
 from __future__ import annotations
 
 import json
 import uuid
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
-from httpx import ASGITransport, AsyncClient
 
-from src.auth import get_current_org_id, get_current_user_id
-from src.main import app
 from src.models.identifier import TeamIdentifier
 from src.services.identifier_classifier import ClassifiedIdentifier
 
@@ -239,102 +234,3 @@ async def test_run_team_scan_low_confidence_counted(monkeypatch):
     assert result["identifiers_persisted"] == 1
 
 
-# ---------------------------------------------------------------------------
-# /import-history schedules the background scan
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_import_history_schedules_identifier_scan_bg(monkeypatch):
-    """The endpoint must enqueue the scan via BackgroundTasks and NOT block on it.
-
-    We mock everything heavy (DB, Jira, import) and assert that
-    BackgroundTasks.add_task was called with our scan helper.
-    """
-    from src.routers import onboarding as onboarding_module
-
-    org_id = uuid.uuid4()
-    team = _make_team(org_id=org_id)
-    org = MagicMock()
-    org.id = org_id
-    org.clerk_org_id = "org_test"
-
-    async def fake_resolve(clerk_org_id, db):
-        return org, team
-
-    async def fake_jira(_org, _db):
-        return object()
-
-    async def fake_import(team, jira_client, sprint_count, db):
-        team.jira_import_status = "complete"
-
-    monkeypatch.setattr(onboarding_module, "_resolve_org_and_team", fake_resolve)
-    monkeypatch.setattr(onboarding_module, "_get_jira_client", fake_jira)
-    monkeypatch.setattr(onboarding_module, "import_jira_sprint_history", fake_import)
-
-    # Track add_task calls.
-    add_task_calls: list = []
-    real_add_task = None  # placeholder
-
-    def spy_add_task(self_obj, func, *args, **kwargs):
-        add_task_calls.append((func, args, kwargs))
-
-    monkeypatch.setattr(
-        "fastapi.BackgroundTasks.add_task", spy_add_task
-    )
-
-    # Override the FastAPI session dep with a no-op session.
-    class _NoopSession:
-        async def commit(self): pass
-        async def flush(self): pass
-        async def rollback(self): pass
-        async def close(self): pass
-
-    async def _get_db_override():
-        yield _NoopSession()
-
-    from src.database import get_db
-    app.dependency_overrides[get_db] = _get_db_override
-    app.dependency_overrides[get_current_org_id] = lambda: "org_test"
-    app.dependency_overrides[get_current_user_id] = lambda: "user_test"
-
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.post("/api/onboarding/import-history", json={"sprintCount": 3})
-    finally:
-        app.dependency_overrides.clear()
-
-    assert r.status_code == 202, r.text
-    assert len(add_task_calls) == 1
-    func, args, _kw = add_task_calls[0]
-    assert func is onboarding_module._run_identifier_scan_bg
-    # args = (team.id, org.id)
-    assert args == (team.id, org.id)
-
-
-# ---------------------------------------------------------------------------
-# Background scan swallows failures
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_background_scan_swallows_exceptions(monkeypatch, caplog):
-    """A failing scan must not propagate — onboarding completion is critical UX."""
-    from src.routers import onboarding as onboarding_module
-
-    team_id = uuid.uuid4()
-    org_id = uuid.uuid4()
-
-    # AsyncSessionLocal returns a context manager whose .scalar() raises.
-    class _BoomSession:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *_): pass
-        async def scalar(self, _q):
-            raise RuntimeError("DB explosion")
-
-    monkeypatch.setattr(onboarding_module, "AsyncSessionLocal", lambda: _BoomSession())
-
-    # Must not raise.
-    await onboarding_module._run_identifier_scan_bg(team_id, org_id)
-    # Should have logged the failure.
-    assert any("identifier_scan_bg: failed" in rec.getMessage() for rec in caplog.records)

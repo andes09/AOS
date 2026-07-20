@@ -119,11 +119,11 @@ async def _wipe_team_data(db: AsyncSession, team_id: uuid.UUID) -> None:
     """Delete every row scoped to a team, in FK-dependency order.
 
     Many team-scoped tables don't have ondelete CASCADE on their FK to teams
-    (sprints, tickets, retros, sprint_alerts, dependencies, ticket_analyses,
-    developer_velocity_profiles), so we have to walk them by hand. Tables that
-    *do* CASCADE (team_access, ticket_revisions, sync_status,
-    recalibration_proposal, invitation, slack_config, team_identifiers) clean
-    up automatically when the team row is dropped at the end.
+    (sprints, tickets, retros, sprint_alerts, developer_velocity_profiles), so
+    we have to walk them by hand. Tables that *do* CASCADE (team_access,
+    ticket_revisions, recalibration_proposal, invitation, slack_config,
+    team_identifiers) clean up automatically when the team row is dropped at
+    the end.
     """
     # Children of sprints first.
     await db.execute(text(
@@ -136,8 +136,6 @@ async def _wipe_team_data(db: AsyncSession, team_id: uuid.UUID) -> None:
     # Tickets reference sprints (no cascade); drop tickets before sprints.
     await db.execute(text("DELETE FROM tickets WHERE team_id = :tid"), {"tid": team_id})
     await db.execute(text("DELETE FROM sprints WHERE team_id = :tid"), {"tid": team_id})
-    await db.execute(text("DELETE FROM dependencies WHERE team_id = :tid"), {"tid": team_id})
-    await db.execute(text("DELETE FROM ticket_analyses WHERE team_id = :tid"), {"tid": team_id})
     await db.execute(text("DELETE FROM developer_velocity_profiles WHERE team_id = :tid"), {"tid": team_id})
     # developers.team_id has no CASCADE — delete all team members before the team row.
     await db.execute(text("DELETE FROM developers WHERE team_id = :tid"), {"tid": team_id})
@@ -209,14 +207,10 @@ async def delete_my_account(
                     select(func.count(Team.id)).where(Team.organization_id == org_id)
                 )
                 if (remaining_teams or 0) == 0:
-                    await db.execute(
-                        text("DELETE FROM jira_connections WHERE organization_id = :oid"),
-                        {"oid": org_id},
-                    )
                     # onboarding_sessions and github_connections FK to organizations.id
-                    # with no ondelete cascade — must delete before the org row, same as
-                    # jira_connections above. (onboarding_messages cascades automatically
-                    # via its own DB-level FK to onboarding_sessions.id.)
+                    # with no ondelete cascade — must delete before the org row.
+                    # (onboarding_messages cascades automatically via its own
+                    # DB-level FK to onboarding_sessions.id.)
                     await db.execute(
                         text("DELETE FROM onboarding_sessions WHERE organization_id = :oid"),
                         {"oid": org_id},

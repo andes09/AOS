@@ -88,10 +88,23 @@ Two things found along the way that were *not* in the plan:
       (callback `/api/integrations/github/callback`), Clerk GitHub social
       provider, `GITHUB_*` + `ANTHROPIC_API_KEY` in Railway. Blocks
       onboarding v2 going live in production (flag is currently off there).
+- [ ] `apps/api/config/features/test.yaml` has never existed in this repo
+      (only `local.yaml`/`production.yaml` do), but `.github/workflows/test.yml`
+      sets `ENVIRONMENT: test` for the backend pytest job. Any test hitting
+      `settings.is_feature_enabled(...)` raises `RuntimeError: Feature flag
+      file not found`. CI's `-x` flag masks this by stopping at the first
+      failure; running locally with `ENVIRONMENT=test` (matching CI exactly)
+      surfaces ~88 failures instead of the real ~11-failure baseline. Found
+      2026-07-20 verifying the B8 migration (pre-existing on `main`, unrelated
+      to that change — worked around locally with `ENVIRONMENT=local` instead).
+      Either add `config/features/test.yaml` (probably a copy of `local.yaml`)
+      or repoint CI's `ENVIRONMENT` to `local`.
 
 ---
 
 ## ✅ Done (archived)
+
+- **B8: drop legacy Jira schema** — 2026-07-20, branch `chore/b8-drop-legacy-jira-schema` (not yet merged), built on top of the now-merged `chore/legacy-teardown-b2-b7` (PR #29, B2–B7). Deferred schema-removal step: migration `0032_drop_legacy_jira_schema.py` drops tables `dependencies`, `ticket_analyses`, `jira_connections`, `sync_status` and columns `teams.jira_board_id`/`jira_project_key`/`jira_import_status`/`jira_import_sprints_imported`, `developers.jira_account_id`/`capacity_hours_per_week`; deletes the 4 corresponding model files, `tawos_importer/`, `seed_sprints.py`. **Scope was narrowed from the original ask** — investigation showed `tickets`, `sprints`, `sprint_tickets`, `developer_velocity_profiles` are still live (alerts/capacity/sprints/teams/developers/users routers) and `developers.skill_ratings`/`domain_strengths` back the live recalibration feature, so none of those were touched. Verified: local Postgres upgrade→downgrade→upgrade round-trip clean; downgrade recreates empty structures only (no data restore, documented in the migration docstring); applied cleanly against an actual production snapshot (prod was on `0026`, 93 `jira_connections` rows + other real data confirmed destroyed as intended, scratch DB discarded after); full backend suite at the pre-existing 163-passed/11-failed baseline (no regressions). **Caught and fixed one real regression along the way**: `routers/users.py`'s account-deletion cleanup had raw-SQL `DELETE FROM dependencies/ticket_analyses/jira_connections` that a class-name-only grep sweep missed — a table-name string sweep in addition to symbol grep is now the standard check for future table-drop migrations. Also found & removed 3 stale `JIRA_CLIENT_*` keys from local `.env`/`apps/api/.env` (gitignored, blocked local app boot after B7 removed those `Settings` fields — pre-existing, unrelated to this migration). Not yet committed — awaiting go-ahead.
 
 - **Pivot: Onboarding v2 (project roadmap AI)** — shipped 2026-07-13. Replaced the Jira onboarding entry with GitHub connect → profile → purpose classification (hobby/startup/learning) → LLM idea interview (`services/idea_interview.py`, SSE streaming, 40-msg cap). Headless hooks layer at `features/onboarding-v2/` + reference UI `OnboardingV2Page.tsx`. 45 backend tests + 3 Playwright green; partner integration doc at `docs/onboarding-v2-frontend-integration.md`. Outstanding: GitHub OAuth ops config, tracked above.
 

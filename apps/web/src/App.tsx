@@ -6,7 +6,6 @@ import { RoadmapPage } from './pages/roadmap/RoadmapPage'
 import { PlannerPage } from './pages/planner/PlannerPage'
 import { OnboardingV2Page } from './pages/OnboardingV2Page'
 import { SettingsPage } from './pages/SettingsPage'
-import { TeamGlossaryPage } from './pages/settings/TeamGlossaryPage'
 import { CalibrationSuggestionsPage } from './pages/settings/CalibrationSuggestionsPage'
 import { InviteAcceptPage } from './pages/InviteAcceptPage'
 
@@ -45,7 +44,6 @@ export default function App() {
         <Route path="roadmap" element={<RoadmapPage />} />
         <Route path="sprint-planner" element={<PlannerPage />} />
         <Route path="settings" element={<SettingsPage />} />
-        <Route path="settings/glossary" element={<TeamGlossaryPage />} />
         <Route path="settings/calibration" element={<CalibrationSuggestionsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/app" replace />} />

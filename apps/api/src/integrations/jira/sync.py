@@ -372,25 +372,15 @@ def _fire_sprint_close_hooks(team_id: str, closed_sprint_ids: list[uuid.UUID]) -
     All exceptions logged and swallowed so sync results stay durable.
     """
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-    from src.services.identifier_refresh_service import refresh_after_sprint_close
     from src.services.plan_quality import persist_plan_quality
 
     loop = _get_or_create_event_loop()
     hook_engine = create_async_engine(settings.database_url)
     HookSession = async_sessionmaker(hook_engine, expire_on_commit=False)
 
-    async def _run_refresh():
-        async with HookSession() as adb:
-            await refresh_after_sprint_close(uuid.UUID(team_id), None, adb)
-
     async def _run_plan_quality(sprint_id: uuid.UUID):
         async with HookSession() as adb:
             await persist_plan_quality(str(sprint_id), adb)
-
-    try:
-        loop.run_until_complete(_run_refresh())
-    except Exception:
-        logger.exception("sprint_close_hook: identifier refresh failed for team %s", team_id)
 
     for sid in closed_sprint_ids:
         try:

@@ -4,12 +4,16 @@ These tests stitch the milestone seams together using mocks (no real DB / Jira /
 Anthropic). They prove the contracts between stages hold, not that the system
 runs end-to-end in production.
 
-Pipeline covered:
-  ticket text → identifier_extraction → identifier_classifier → team_identifiers
-              → compute_intensity (per ticket) → TicketSkillAnalysis
-              → Scope Cop accepts matched_identifier_count
-              → SprintPlanOverride captures reassignments
-              → override_analyzer → recalibration proposals
+Pipeline covered (post skill-based-assignment teardown, B5):
+  Scope Cop accepts matched_identifier_count
+  → SprintPlanOverride captures reassignments
+  → override_analyzer → recalibration proposals
+
+Note: the identifier_extraction → identifier_classifier → compute_intensity
+stages this file used to cover were deleted in B5 (skill-based-assignment
+ticket-matching teardown, Sprint Brain's only consumer). Those steps'
+tests were removed here rather than dropping the whole file, since the
+remaining steps below still exercise live code (scope_cop, override_analyzer).
 """
 import uuid
 from datetime import datetime, timedelta
@@ -18,9 +22,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.services.identifier_extraction import extract_tokens, count_tokens, normalize_token
-from src.services.identifier_classifier import classify_identifiers, ClassifiedIdentifier
-from src.services.skill_intensity import compute_intensity
 from src.services.scope_cop import _SCOPE_COP_TOOL
 from src.services.override_analyzer import detect_patterns
 
@@ -29,80 +30,6 @@ SAMPLE_TICKET_TEXT = (
     "Optimize dbo.tile_metrics rollup query and update ms-service "
     "to read from the new schema. Refactor OrderService to call the new endpoint."
 )
-
-
-def test_step1_tokenizer_extracts_punctuation_and_camelcase_identifiers():
-    """The regex tokenizer surfaces dotted, kebab, and ≥2-segment CamelCase tokens."""
-    tokens = extract_tokens(SAMPLE_TICKET_TEXT, source="ticket_description")
-    normalized = {t.normalized for t in tokens}
-    assert "dbo.tile_metrics" in normalized
-    assert "ms-service" in normalized
-    assert "orderservice" in normalized
-    # Single-segment CamelCase / stopwords filtered
-    assert "task" not in normalized
-
-
-@pytest.mark.asyncio
-async def test_step2_classifier_returns_one_entry_per_input_token():
-    """The classifier preserves raw token + occurrence_count round-trip."""
-    inputs = [
-        ("dbo.tile_metrics", "dbo.tile_metrics", 5),
-        ("ms-service", "ms-service", 3),
-    ]
-    fake_response = MagicMock()
-    fake_response.content = [
-        SimpleNamespace(
-            type="tool_use",
-            name="classify_identifiers",
-            input={
-                "classifications": [
-                    {"normalized_token": "dbo.tile_metrics", "skill": "SQL", "domain": "data", "confidence": 0.9},
-                    {"normalized_token": "ms-service", "skill": "Java/Spring Boot", "domain": "backend", "confidence": 0.75},
-                ]
-            },
-        )
-    ]
-    fake_client = MagicMock()
-    fake_client.messages.create = AsyncMock(return_value=fake_response)
-
-    import src.services.identifier_classifier as ic
-    orig = ic.anthropic.AsyncAnthropic
-    ic.anthropic.AsyncAnthropic = MagicMock(return_value=fake_client)
-    try:
-        result = await classify_identifiers(
-            tokens=inputs,
-            team_stack=["SQL", "Java/Spring Boot"],
-            anthropic_api_key="fake-key",
-        )
-    finally:
-        ic.anthropic.AsyncAnthropic = orig
-
-    assert len(result) == 2
-    by_token = {c.normalized_token: c for c in result}
-    assert by_token["dbo.tile_metrics"].skill == "SQL"
-    assert by_token["dbo.tile_metrics"].occurrence_count == 5
-    assert by_token["ms-service"].skill == "Java/Spring Boot"
-
-
-def test_step3_intensity_uses_team_identifiers_to_score_a_ticket():
-    """compute_intensity matches normalized tokens and produces normalized vectors."""
-    team_identifiers = [
-        SimpleNamespace(normalized_token="dbo.tile_metrics", skill="SQL", domain="data", confidence=0.9),
-        SimpleNamespace(normalized_token="ms-service", skill="Java", domain="backend", confidence=0.8),
-    ]
-    result = compute_intensity(
-        ticket_title="Optimize dbo.tile_metrics rollup",
-        ticket_description="Update ms-service to read from the new schema",
-        ticket_labels=[],
-        ticket_components=[],
-        team_identifiers=team_identifiers,
-        effort_multiplier=1.0,
-    )
-    # At least one of the two skills is normalized to 1.0; both should appear.
-    assert "SQL" in result.skill_vector
-    assert "Java" in result.skill_vector
-    assert max(result.skill_vector.values()) == pytest.approx(1.0)
-    assert set(result.matched_identifiers) == {"dbo.tile_metrics", "ms-service"}
 
 
 def test_step5_scope_cop_tool_includes_stack_alignment():

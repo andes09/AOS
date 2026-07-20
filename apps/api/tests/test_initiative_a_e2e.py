@@ -4,16 +4,17 @@ These tests stitch the milestone seams together using mocks (no real DB / Jira /
 Anthropic). They prove the contracts between stages hold, not that the system
 runs end-to-end in production.
 
-Pipeline covered (post skill-based-assignment teardown, B5):
-  Scope Cop accepts matched_identifier_count
-  → SprintPlanOverride captures reassignments
+Pipeline covered (post skill-based-assignment teardown B5, Scope Cop
+backend teardown B6):
+  SprintPlanOverride captures reassignments
   → override_analyzer → recalibration proposals
 
 Note: the identifier_extraction → identifier_classifier → compute_intensity
 stages this file used to cover were deleted in B5 (skill-based-assignment
-ticket-matching teardown, Sprint Brain's only consumer). Those steps'
+ticket-matching teardown, Sprint Brain's only consumer). The Scope Cop
+stage's test was removed in B6 (Scope Cop backend teardown). Those steps'
 tests were removed here rather than dropping the whole file, since the
-remaining steps below still exercise live code (scope_cop, override_analyzer).
+remaining step below still exercises live code (override_analyzer).
 """
 import uuid
 from datetime import datetime, timedelta
@@ -22,7 +23,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.services.scope_cop import _SCOPE_COP_TOOL
 from src.services.override_analyzer import detect_patterns
 
 
@@ -30,14 +30,6 @@ SAMPLE_TICKET_TEXT = (
     "Optimize dbo.tile_metrics rollup query and update ms-service "
     "to read from the new schema. Refactor OrderService to call the new endpoint."
 )
-
-
-def test_step5_scope_cop_tool_includes_stack_alignment():
-    """The Scope Cop tool schema added stack_alignment during Wave 2."""
-    # The schema may wrap results in a top-level 'results' array. Inspect both shapes.
-    schema_text = repr(_SCOPE_COP_TOOL)
-    assert "stack_alignment" in schema_text
-    assert "matched_identifier_count" in schema_text
 
 
 @pytest.mark.asyncio

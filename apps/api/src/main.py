@@ -21,8 +21,6 @@ from src.integrations.jira import router as jira_router
 from src.integrations.github import router as github_router
 from src.routers import developers as developers_router
 from src.routers.users import users_router
-from src.routers.scope_cop import scope_cop_router
-from src.routers.scope_cop_revisions import scope_cop_revisions_router
 from src.routers.invitations import invitations_router
 from src.routers.onboarding_v2 import router as onboarding_v2_router
 from src.routers.roadmap import router as roadmap_router
@@ -77,8 +75,6 @@ app.include_router(jira_router.router)
 app.include_router(github_router.router)
 app.include_router(users_router, prefix="/api/users")
 app.include_router(developers_router.router)
-app.include_router(scope_cop_router, prefix="/api/scope-cop")
-app.include_router(scope_cop_revisions_router, prefix="/api/scope-cop")
 app.include_router(onboarding_v2_router)
 app.include_router(roadmap_router)
 app.include_router(invitations_router, prefix="/api/invitations")

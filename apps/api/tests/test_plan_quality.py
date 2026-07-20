@@ -10,21 +10,20 @@ Covers:
    null reason_code → "unspecified"
 4. persist_plan_quality writes both Sprint columns and commits
 5. get_trailing_override_rates returns oldest→newest and limits to N
-6. GET /api/exec/plan-quality/{team_id} returns the trailing list
-7. Foreign-org team_id → 404
+
+Note: the former items 6-7 (HTTP tests for GET /api/exec/plan-quality/{team_id})
+were removed when the Exec Dashboard router (src/routers/exec.py) was deleted;
+this file now only exercises the plan_quality service, which is still used by
+src/integrations/jira/sync.py.
 """
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date
 from unittest.mock import MagicMock
 
 import pytest
-from httpx import AsyncClient, ASGITransport
 
-from src.auth import get_current_org_id, get_current_user_id
-from src.auth_roles import get_current_app_role
-from src.main import app
 from src.services.plan_quality import (
     compute_sprint_override_rate,
     get_trailing_override_rates,
@@ -32,11 +31,7 @@ from src.services.plan_quality import (
 )
 
 
-ORG_CLERK_ID = "org_pq_test"
-ORG_ID = uuid.uuid4()
 TEAM_ID = uuid.uuid4()
-OTHER_ORG_ID = uuid.uuid4()
-OTHER_TEAM_ID = uuid.uuid4()
 SPRINT_ID = uuid.uuid4()
 
 
@@ -71,21 +66,6 @@ def _make_sprint(*, id_=None, name="Sprint 1", end_date=None,
     return s
 
 
-def _make_team(team_id=TEAM_ID, org_id=ORG_ID):
-    t = MagicMock(spec=["id", "organization_id", "name"])
-    t.id = team_id
-    t.organization_id = org_id
-    t.name = "Team A"
-    return t
-
-
-def _make_org(clerk_id=ORG_CLERK_ID, id_=ORG_ID):
-    o = MagicMock(spec=["id", "clerk_org_id"])
-    o.id = id_
-    o.clerk_org_id = clerk_id
-    return o
-
-
 class _FakeSession:
     """Lightweight AsyncSession stand-in returning canned values in order."""
 
@@ -115,26 +95,6 @@ class _FakeSession:
 
     async def refresh(self, _obj):
         pass
-
-
-def _override_auth(role: str = "lead", clerk_org_id: str = ORG_CLERK_ID):
-    async def _org(): return clerk_org_id
-    async def _user(): return "user_test"
-    async def _role(): return role
-    app.dependency_overrides[get_current_org_id] = _org
-    app.dependency_overrides[get_current_user_id] = _user
-    app.dependency_overrides[get_current_app_role] = _role
-
-
-def _override_db(session):
-    from src.database import get_db
-    async def _gen():
-        yield session
-    app.dependency_overrides[get_db] = _gen
-
-
-def _clear():
-    app.dependency_overrides.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -278,70 +238,3 @@ async def test_trailing_rates_returns_oldest_to_newest():
     assert [r["sprint_name"] for r in rows] == ["Sprint 1", "Sprint 2", "Sprint 3"]
     assert [r["override_rate"] for r in rows] == [0.1, 0.2, 0.4]
     assert rows[0]["overrides_by_reason"] == {"pto": 1}
-
-
-# ---------------------------------------------------------------------------
-# 6. GET /api/exec/plan-quality/{team_id}
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_get_plan_quality_endpoint_returns_trailing_list():
-    team = _make_team()
-    org = _make_org()
-    sprint_a = _make_sprint(
-        name="S1", end_date=date(2026, 1, 1),
-        plan_override_rate=0.25,
-        plan_overrides_by_reason={"capacity": 1, "unspecified": 1},
-    )
-    sprint_b = _make_sprint(
-        name="S2", end_date=date(2026, 2, 1),
-        plan_override_rate=0.6,
-        plan_overrides_by_reason={"skill_fit": 3},
-    )
-    # Endpoint flow:
-    #   _resolve_team_in_org → scalar(Team), scalar(Organization)
-    #   get_trailing_override_rates → scalars(Sprint) returning newest-first
-    session = _FakeSession(
-        scalar_results=[team, org],
-        scalars_results=[[sprint_b, sprint_a]],
-    )
-    _override_auth("lead"); _override_db(session)
-
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.get(f"/api/exec/plan-quality/{TEAM_ID}")
-    finally:
-        _clear()
-
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert isinstance(body, list)
-    assert len(body) == 2
-    # Oldest first
-    assert body[0]["sprintName"] == "S1"
-    assert body[0]["overrideRate"] == 0.25
-    assert body[1]["sprintName"] == "S2"
-    assert body[1]["overrideRate"] == 0.6
-    assert body[1]["overridesByReason"] == {"skill_fit": 3}
-
-
-# ---------------------------------------------------------------------------
-# 7. Foreign-org team → 404
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_get_plan_quality_foreign_org_returns_404():
-    team = _make_team(team_id=OTHER_TEAM_ID, org_id=OTHER_ORG_ID)
-    other_org = _make_org(clerk_id="org_other", id_=OTHER_ORG_ID)
-    session = _FakeSession(scalar_results=[team, other_org])
-    _override_auth("lead", clerk_org_id=ORG_CLERK_ID); _override_db(session)
-
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.get(f"/api/exec/plan-quality/{OTHER_TEAM_ID}")
-    finally:
-        _clear()
-
-    assert r.status_code == 404

@@ -1,14 +1,10 @@
 features:
   clerk_auth: true
-  push_to_jira: true
-  scope_check_v2: true
-  multi_team_dashboard: false
-  exec_dashboard: false
-  data_collection_phase: false
-  retro_pattern_detection: false
-  skill_based_assignment: true
   slack_alerts: false
-  dependency_radar: false
-  omada_simulator: false
   allow_team_creation_via_api: false
   cost_tracking: true
+  roadmap_generation: true
+  planner: true
+  roadmap_chat: false
+  experimental:
+    enabled: false

@@ -87,8 +87,19 @@ class Settings(BaseSettings):
         return data.get("features", {})
 
     def is_feature_enabled(self, flag_name: str) -> bool:
-        """Return True if the named flag is enabled in the current environment."""
-        return self.feature_flags.get(flag_name, False)
+        """Return True if the named flag is enabled in the current environment.
+
+        Grouped flags (e.g. `experimental`) are nested dicts in the yaml; use
+        "parent.child" (e.g. "experimental.roadmap_v2") to read a sub-flag,
+        or the bare parent name to read its own `enabled` key.
+        """
+        flags = self.feature_flags
+        if "." in flag_name:
+            parent_name, child_name = flag_name.split(".", 1)
+            parent = flags.get(parent_name)
+            return bool(parent.get(child_name, False)) if isinstance(parent, dict) else False
+        value = flags.get(flag_name, False)
+        return bool(value.get("enabled", False)) if isinstance(value, dict) else bool(value)
 
     @field_validator("database_url")
     @classmethod

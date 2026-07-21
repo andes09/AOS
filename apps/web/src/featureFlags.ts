@@ -4,21 +4,32 @@ import { useQuery } from '@tanstack/react-query'
 import { useApi } from './lib/api'
 
 export type FeatureFlags = {
-  push_to_jira: boolean
-  scope_check_v2: boolean
-  multi_team_dashboard: boolean
-  exec_dashboard: boolean
-  data_collection_phase: boolean
-  retro_pattern_detection: boolean
-  skill_based_assignment: boolean
   slack_alerts: boolean
-  dependency_radar: boolean
-  omada_simulator: boolean
+  roadmap_generation: boolean
+  planner: boolean
+  roadmap_chat: boolean
+  experimental: {
+    enabled: boolean
+  }
 }
 
 type FeaturesResponse = {
   environment: string
   features: FeatureFlags
+}
+
+type FlatFlag = Exclude<keyof FeatureFlags, 'experimental'>
+type ExperimentalFlag = keyof FeatureFlags['experimental']
+
+/** "flag_name" for a top-level flag, or "experimental.sub_flag" for a grouped one. */
+export type FlagPath = FlatFlag | `experimental.${ExperimentalFlag}`
+
+function readFlag(data: FeatureFlags, path: FlagPath): boolean {
+  if (path.startsWith('experimental.')) {
+    const key = path.slice('experimental.'.length) as ExperimentalFlag
+    return data.experimental[key] ?? false
+  }
+  return data[path as FlatFlag] ?? false
 }
 
 export function useFeatureFlags() {
@@ -36,7 +47,7 @@ export function useFeatureFlags() {
   })
 }
 
-export function useFeature(flagName: keyof FeatureFlags): boolean {
+export function useFeature(flag: FlagPath): boolean {
   const { data } = useFeatureFlags()
-  return data?.[flagName] ?? false
+  return data ? readFlag(data, flag) : false
 }

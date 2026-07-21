@@ -9,27 +9,38 @@ from src.main import app
 def test_local_yaml_loads():
     settings = Settings(environment="local")
     flags = settings.feature_flags
-    assert flags["push_to_jira"] is True
-    assert flags["retro_pattern_detection"] is True
-    assert flags["skill_based_assignment"] is True
-    assert flags["slack_alerts"] is True
-    assert flags["dependency_radar"] is True
+    assert flags["slack_alerts"] is False
+    assert flags["roadmap_generation"] is True
+    assert flags["planner"] is True
+    assert flags["roadmap_chat"] is True
+    assert flags["experimental"] == {"enabled": True}
 
 
 def test_production_yaml_loads():
     settings = Settings(environment="production")
     flags = settings.feature_flags
-    assert flags["push_to_jira"] is False
-    assert flags["multi_team_dashboard"] is False
-    assert flags["exec_dashboard"] is False
-    assert flags["retro_pattern_detection"] is False
     assert flags["slack_alerts"] is False
-    assert flags["dependency_radar"] is False
+    assert flags["roadmap_generation"] is True
+    assert flags["planner"] is True
+    assert flags["roadmap_chat"] is False
+    assert flags["experimental"] == {"enabled": False}
+
+
+def test_is_feature_enabled_supports_dotted_path_for_grouped_flags():
+    local = Settings(environment="local")
+    assert local.is_feature_enabled("experimental") is True
+    assert local.is_feature_enabled("experimental.enabled") is True
+    assert local.is_feature_enabled("experimental.nonexistent_sub_flag") is False
+
+    production = Settings(environment="production")
+    assert production.is_feature_enabled("experimental") is False
+    assert production.is_feature_enabled("experimental.enabled") is False
 
 
 def test_missing_flag_defaults_to_false():
     settings = Settings(environment="local")
     assert settings.is_feature_enabled("nonexistent_flag") is False
+    assert settings.is_feature_enabled("nonexistent_parent.child") is False
 
 
 def test_unknown_environment_raises():
@@ -70,4 +81,4 @@ async def test_features_endpoint_returns_environment_and_flags():
     assert "environment" in body
     assert "features" in body
     assert isinstance(body["features"], dict)
-    assert "push_to_jira" in body["features"]
+    assert "cost_tracking" in body["features"]

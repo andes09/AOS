@@ -6,6 +6,7 @@
 // Task color comes strictly from the assignee — see lib/laneColors.ts.
 
 import { useMemo, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import {
   DndContext,
   DragOverlay,
@@ -20,15 +21,18 @@ import { ApiError } from '../../lib/api'
 import { Alert } from '../../components/ui/Alert'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
-import { addDays, mondayOf, parseISO } from '../../lib/date'
+import { addDays, mondayOf, parseISO, toISO } from '../../lib/date'
 import { PlannerSidebar } from '../../components/planner/PlannerSidebar'
-import { PlannerToolbar, type PlannerView } from '../../components/planner/PlannerToolbar'
+import { PlannerToolbar } from '../../components/planner/PlannerToolbar'
+import type { PlannerOutletContext } from '../../components/planner/plannerViews'
 import { CalendarGrid } from '../../components/planner/CalendarGrid'
+import { DayAgenda } from '../../components/planner/DayAgenda'
 import { ListView } from '../../components/planner/ListView'
 import { BoardView } from '../../components/planner/BoardView'
 import { UnscheduledTray } from '../../components/planner/UnscheduledTray'
 import { TaskCard } from '../../components/planner/TaskCard'
 import { TaskDetailModal } from '../../components/planner/TaskDetailModal'
+import { AssistantChat } from '../../components/planner/AssistantChat'
 import { usePlannerData, type FlatTask } from './usePlannerData'
 import { usePlannerMutations, type TaskPatch } from './usePlannerMutations'
 import { EMPTY_FILTERS, toggleInSet, UNASSIGNED, type PlannerFilters } from './plannerFilters'
@@ -37,20 +41,35 @@ import { EMPTY_FILTERS, toggleInSet, UNASSIGNED, type PlannerFilters } from './p
 const START_HOUR = 7
 const END_HOUR = 20
 
+/** Persisted collapse state for the member-lane panel. '0' = collapsed. */
+const LANES_KEY = 'aos_planner_lanes'
+
 export function PlannerPage() {
+  // `view` lives in the layout so the top-bar switcher and this page share it.
+  // The page only reads it; the top bar owns the setter.
+  const { view } = useOutletContext<PlannerOutletContext>()
+
   const [filters, setFilters] = useState<PlannerFilters>(EMPTY_FILTERS)
-  const [view, setView] = useState<PlannerView>('week')
   const [anchorOverride, setAnchorOverride] = useState<Date | null>(null)
   const [collapsedLanes, setCollapsedLanes] = useState<Set<string>>(new Set())
+  const [lanesHidden, setLanesHidden] = useState(() => localStorage.getItem(LANES_KEY) === '0')
   const [trayCollapsed, setTrayCollapsed] = useState(false)
   const [openTaskId, setOpenTaskId] = useState<string | null>(null)
   const [draggingTask, setDraggingTask] = useState<FlatTask | null>(null)
+
+  const toggleLanesPanel = () =>
+    setLanesHidden(prev => {
+      const next = !prev
+      localStorage.setItem(LANES_KEY, next ? '0' : '1')
+      return next
+    })
 
   const data = usePlannerData(filters)
   // `rescheduleTasks` is intentionally not destructured here — a single drag is
   // one task, so it goes through updateTask. The bulk endpoint is wired up in
   // the hook and waits for multi-select.
-  const { generate, updateTask, deleteTask, createTask, toggleDone } = usePlannerMutations()
+  const { generate, regenerate, adjust, updateTask, deleteTask, createTask, toggleDone } =
+    usePlannerMutations()
 
   // Require a real drag before starting one, or the checkbox and delete button
   // on each card stop being clickable.
@@ -157,8 +176,6 @@ export function PlannerPage() {
           title={data.roadmap.name}
           rangeStart={anchor}
           rangeEnd={rangeEnd}
-          view={view}
-          onViewChange={setView}
           onPrev={() => setAnchorOverride(addDays(anchor, -dayCount))}
           onNext={() => setAnchorOverride(addDays(anchor, dayCount))}
           onToday={() => setAnchorOverride(view === 'day' ? new Date() : mondayOf(new Date()))}
@@ -166,29 +183,34 @@ export function PlannerPage() {
           total={data.stats.total}
           pct={data.stats.pct}
           showDateNav={isCalendar}
+          lanesCollapsed={lanesHidden}
+          onToggleLanes={toggleLanesPanel}
         />
 
         <div style={{ display: 'flex', gap: 'var(--space-4)', alignItems: 'flex-start' }}>
-          <PlannerSidebar
-            members={data.members}
-            byAssignee={data.byAssignee}
-            collapsedIds={collapsedLanes}
-            selectedIds={filters.assigneeIds}
-            onToggleCollapse={toggleLane}
-            onToggleSelect={selectLane}
-            onAddTask={handleAddTask}
-            renderTask={t => (
-              <TaskCard
-                key={t.id}
-                task={t}
-                colorIndex={colorOf(t)}
-                showMilestone={false}
-                onToggle={() => toggleDone(t)}
-                onDelete={() => deleteTask.mutate(t.id)}
-                onOpen={() => setOpenTaskId(t.id)}
-              />
-            )}
-          />
+          {!lanesHidden && (
+            <PlannerSidebar
+              members={data.members}
+              byAssignee={data.byAssignee}
+              collapsedIds={collapsedLanes}
+              selectedIds={filters.assigneeIds}
+              onToggleCollapse={toggleLane}
+              onToggleSelect={selectLane}
+              onCollapsePanel={toggleLanesPanel}
+              onAddTask={handleAddTask}
+              renderTask={t => (
+                <TaskCard
+                  key={t.id}
+                  task={t}
+                  colorIndex={colorOf(t)}
+                  showMilestone={false}
+                  onToggle={() => toggleDone(t)}
+                  onDelete={() => deleteTask.mutate(t.id)}
+                  onOpen={() => setOpenTaskId(t.id)}
+                />
+              )}
+            />
+          )}
 
           <main style={{ flex: 1, minWidth: 0 }}>
             <div style={{ marginBottom: 'var(--space-3)', maxWidth: 280, position: 'relative' }}>
@@ -212,7 +234,28 @@ export function PlannerPage() {
               />
             </div>
 
-            {isCalendar && (
+            {view === 'day' && (
+              <DayAgenda
+                iso={toISO(anchor)}
+                tasks={data.byDate.get(toISO(anchor)) ?? []}
+                membersById={data.membersById}
+                colorOf={colorOf}
+                onStatus={(t, status) => updateTask.mutate({ id: t.id, patch: { status } })}
+                onFeedback={(t, feedback) => updateTask.mutate({ id: t.id, patch: { feedback } })}
+                onDelete={t => deleteTask.mutate(t.id)}
+                onOpen={t => setOpenTaskId(t.id)}
+                onAdjust={() => adjust.mutate()}
+                isAdjusting={adjust.isPending}
+                adjustError={
+                  adjust.isError
+                    ? adjust.error instanceof Error
+                      ? adjust.error.message
+                      : 'Could not update the plan.'
+                    : null
+                }
+              />
+            )}
+            {view === 'week' && (
               <CalendarGrid
                 anchor={anchor}
                 dayCount={dayCount}
@@ -282,6 +325,18 @@ export function PlannerPage() {
         onClose={() => setOpenTaskId(null)}
         onSave={patch => openTask && updateTask.mutate({ id: openTask.id, patch })}
         onDelete={() => openTask && deleteTask.mutate(openTask.id)}
+      />
+
+      <AssistantChat
+        onRegenerate={() => regenerate.mutate()}
+        isRegenerating={regenerate.isPending}
+        regenerateError={
+          regenerate.isError
+            ? regenerate.error instanceof Error
+              ? regenerate.error.message
+              : 'Could not rebuild the plan.'
+            : null
+        }
       />
     </Shell>
   )

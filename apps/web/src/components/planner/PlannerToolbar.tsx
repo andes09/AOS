@@ -1,24 +1,13 @@
 import { CSSProperties } from 'react'
-import { CalendarDays, ChevronLeft, ChevronRight, Columns3, List, Rows3 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { Button } from '../ui/Button'
-import { SegmentedControl, type SegmentedOption } from '../ui/SegmentedControl'
+import { IconButton } from '../ui/IconButton'
 import { MONTHS } from '../../lib/date'
-
-export type PlannerView = 'week' | 'day' | 'list' | 'board'
-
-const VIEW_OPTIONS: readonly SegmentedOption<PlannerView>[] = [
-  { value: 'week', label: 'Week view', icon: <CalendarDays size={13} /> },
-  { value: 'day', label: 'Day view', icon: <Rows3 size={13} /> },
-  { value: 'list', label: 'List view', icon: <List size={13} /> },
-  { value: 'board', label: 'Board view', icon: <Columns3 size={13} /> },
-]
 
 interface PlannerToolbarProps {
   title: string
   rangeStart: Date
   rangeEnd: Date
-  view: PlannerView
-  onViewChange: (v: PlannerView) => void
   onPrev: () => void
   onNext: () => void
   onToday: () => void
@@ -27,14 +16,18 @@ interface PlannerToolbarProps {
   pct: number
   /** Hidden for list/board, which aren't anchored to a date range. */
   showDateNav: boolean
+  lanesCollapsed: boolean
+  onToggleLanes: () => void
 }
 
+/**
+ * The row above the calendar: a toggle for the member-lane panel, date
+ * navigation, and progress. The view switcher lives in the top bar now.
+ */
 export function PlannerToolbar({
   title,
   rangeStart,
   rangeEnd,
-  view,
-  onViewChange,
   onPrev,
   onNext,
   onToday,
@@ -42,6 +35,8 @@ export function PlannerToolbar({
   total,
   pct,
   showDateNav,
+  lanesCollapsed,
+  onToggleLanes,
 }: PlannerToolbarProps) {
   const sameMonth = rangeStart.getMonth() === rangeEnd.getMonth()
   const range = sameMonth
@@ -81,40 +76,39 @@ export function PlannerToolbar({
         </div>
       </div>
 
-      <div style={rowStyle}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-          {showDateNav && (
-            <>
-              <Button variant="ghost" size="sm" onClick={onPrev} aria-label="Previous">
-                <ChevronLeft size={15} />
-              </Button>
-              <span
-                style={{
-                  fontSize: 'var(--text-sm)',
-                  fontWeight: 'var(--font-weight-medium)' as CSSProperties['fontWeight'],
-                  color: 'var(--color-text-primary)',
-                  minWidth: 150,
-                  textAlign: 'center',
-                }}
-              >
-                {range}
-              </span>
-              <Button variant="ghost" size="sm" onClick={onNext} aria-label="Next">
-                <ChevronRight size={15} />
-              </Button>
-              <Button variant="ghost" size="sm" onClick={onToday}>
-                Today
-              </Button>
-            </>
-          )}
-        </div>
-        <SegmentedControl
-          ariaLabel="Calendar view"
-          options={VIEW_OPTIONS}
-          value={view}
-          onChange={onViewChange}
-          size="sm"
-        />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+        <IconButton
+          label={lanesCollapsed ? 'Show people panel' : 'Hide people panel'}
+          onClick={onToggleLanes}
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          {lanesCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+        </IconButton>
+
+        {showDateNav && (
+          <>
+            <Button variant="ghost" size="sm" onClick={onPrev} aria-label="Previous">
+              <ChevronLeft size={15} />
+            </Button>
+            <span
+              style={{
+                fontSize: 'var(--text-sm)',
+                fontWeight: 'var(--font-weight-medium)' as CSSProperties['fontWeight'],
+                color: 'var(--color-text-primary)',
+                minWidth: 150,
+                textAlign: 'center',
+              }}
+            >
+              {range}
+            </span>
+            <Button variant="ghost" size="sm" onClick={onNext} aria-label="Next">
+              <ChevronRight size={15} />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onToday}>
+              Today
+            </Button>
+          </>
+        )}
       </div>
     </div>
   )

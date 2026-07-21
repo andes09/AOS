@@ -2,11 +2,8 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { SignedIn, SignedOut, RedirectToSignIn, SignIn } from '@clerk/clerk-react'
 import { DashboardLayout } from './layouts/DashboardLayout'
 import { OrgProvider } from './components/OrgProvider'
-import { RoadmapPage } from './pages/roadmap/RoadmapPage'
 import { PlannerPage } from './pages/planner/PlannerPage'
 import { OnboardingV2Page } from './pages/OnboardingV2Page'
-import { SettingsPage } from './pages/SettingsPage'
-import { CalibrationSuggestionsPage } from './pages/settings/CalibrationSuggestionsPage'
 import { InviteAcceptPage } from './pages/InviteAcceptPage'
 
 function SignInPage() {
@@ -40,11 +37,9 @@ export default function App() {
           </>
         )
       }>
-        <Route index element={<Navigate to="roadmap" replace />} />
-        <Route path="roadmap" element={<RoadmapPage />} />
-        <Route path="sprint-planner" element={<PlannerPage />} />
-        <Route path="settings" element={<SettingsPage />} />
-        <Route path="settings/calibration" element={<CalibrationSuggestionsPage />} />
+        {/* The planner is the whole app now. Settings is a modal opened from
+            the top bar, not a route. */}
+        <Route index element={<PlannerPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/app" replace />} />
     </Routes>

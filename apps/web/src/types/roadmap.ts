@@ -20,6 +20,8 @@ export interface RoadmapTask {
   durationMinutes: number | null
   /** Owning developer. Null renders in the neutral unassigned lane. */
   assigneeId: string | null
+  /** The user's latest progress note, written in the day agenda. */
+  feedback: string | null
 }
 
 /** A person in the org — one sidebar lane. GET /api/roadmap/members. */

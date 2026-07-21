@@ -39,7 +39,7 @@ from src.models.organization import Organization
 from src.models.project import Project
 from src.models.task import Task, TaskStatus
 from src.models.team import Team
-from src.services import idea_interview, roadmap_generator
+from src.services import idea_interview, roadmap_adjuster, roadmap_generator
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,7 @@ def _task_json(task: Task) -> dict:
         "scheduledTime": task.scheduled_time.strftime("%H:%M") if task.scheduled_time else None,
         "durationMinutes": task.duration_minutes,
         "assigneeId": str(task.assignee_id) if task.assignee_id else None,
+        "feedback": task.feedback,
     }
 
 
@@ -379,6 +380,35 @@ async def regenerate(
     return _project_json(project)
 
 
+@router.post("/adjust")
+async def adjust(
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Re-plan the roadmap's upcoming tasks from the user's per-task feedback.
+
+    Runs on Groq and is non-destructive: done/in-progress tasks are preserved,
+    only `todo` tasks are re-planned. See services/roadmap_adjuster.
+    """
+    org, session = await _session_and_brief(clerk_org_id, db)
+    project = await _load_project(session.id, db)
+    if project is None:
+        raise HTTPException(status_code=409, detail="no_roadmap")
+
+    api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
+
+    try:
+        await roadmap_adjuster.adjust_roadmap(project, api_key, db)
+    except ValueError as exc:  # bad key
+        raise HTTPException(status_code=402, detail=str(exc))
+    except RuntimeError as exc:  # upstream / model failure
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    project = await _load_project(session.id, db)
+    return _project_json(project)
+
+
 @router.post("/milestones/{milestone_id}/regenerate")
 async def regenerate_milestone_endpoint(
     milestone_id: str,
@@ -416,6 +446,7 @@ class TaskUpdateRequest(BaseModel):
     durationMinutes: int | None = None
     assigneeId: uuid.UUID | None = None
     sortOrder: int | None = None
+    feedback: str | None = None
 
     @field_validator("status")
     @classmethod
@@ -474,6 +505,8 @@ async def update_task(
         if body.assigneeId is not None:
             await _owned_developer(body.assigneeId, org, db)  # cross-tenant guard
         task.assignee_id = body.assigneeId
+    if "feedback" in body.model_fields_set:
+        task.feedback = body.feedback
     # Reorder last: it renumbers every sibling, so it must run after this task's
     # own fields are settled.
     if body.sortOrder is not None:

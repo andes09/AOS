@@ -44,6 +44,10 @@ class Task(Base):
     # NULL means "no explicit duration" — the card renders compact rather than
     # claiming a default block of grid space.
     duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The user's latest progress note on this task, written in the day agenda.
+    # Fed to the Groq adjuster so it can re-plan upcoming work around blockers
+    # and slippage the user reports here.
+    feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Who owns this task. Drives both the sidebar lane and the card color.
     # SET NULL on developer delete: losing a person must not lose their work.
     assignee_id: Mapped[uuid.UUID | None] = mapped_column(

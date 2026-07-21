@@ -70,7 +70,7 @@ export function InviteAcceptPage() {
               You've joined as <strong style={{ color: '#a5b4fc' }}>{result.role}</strong>
             </p>
             <button
-              onClick={() => navigate('/app/sprint-planner')}
+              onClick={() => navigate('/app')}
               style={{
                 background: '#6366f1',
                 color: '#fff',

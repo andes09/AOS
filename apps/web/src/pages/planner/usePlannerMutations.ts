@@ -22,6 +22,7 @@ export interface TaskPatch {
   scheduledTime?: string | null
   durationMinutes?: number | null
   assigneeId?: string | null
+  feedback?: string | null
 }
 
 export interface TaskCreateInput extends TaskPatch {
@@ -61,6 +62,23 @@ export function usePlannerMutations() {
     onSettled: settleBoth,
   })
 
+  // Rebuild the whole plan from the (possibly refined) brief. Destructive: the
+  // server replans milestones/tasks, so assignee + time customizations on the
+  // current tasks are lost. Gated behind an explicit user action in the UI.
+  const regenerate = useMutation({
+    mutationFn: () => post<Roadmap>('/api/roadmap/regenerate', {}),
+    onSuccess: data => qc.setQueryData(ROADMAP_KEY, data),
+    onSettled: settleBoth,
+  })
+
+  // Non-destructive re-plan from per-task feedback (Groq). Preserves done and
+  // in-progress tasks; only upcoming todo tasks change.
+  const adjust = useMutation({
+    mutationFn: () => post<Roadmap>('/api/roadmap/adjust', {}),
+    onSuccess: data => qc.setQueryData(ROADMAP_KEY, data),
+    onSettled: settleBoth,
+  })
+
   const updateTask = useMutation({
     mutationFn: ({ id, patch: body }: { id: string; patch: TaskPatch }) =>
       patch<RoadmapTask>(`/api/roadmap/tasks/${id}`, body),
@@ -92,6 +110,7 @@ export function usePlannerMutations() {
         scheduledTime: input.scheduledTime ?? null,
         durationMinutes: input.durationMinutes ?? null,
         assigneeId: input.assigneeId ?? null,
+        feedback: null,
       }
       return optimistic(rm => addTask(rm, optimisticTask, input.milestoneId))
     },
@@ -115,5 +134,5 @@ export function usePlannerMutations() {
     })
   }
 
-  return { generate, updateTask, deleteTask, createTask, rescheduleTasks, toggleDone }
+  return { generate, regenerate, adjust, updateTask, deleteTask, createTask, rescheduleTasks, toggleDone }
 }

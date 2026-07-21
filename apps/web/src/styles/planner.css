@@ -78,13 +78,36 @@
   background: var(--color-danger);
 }
 
+/* ── Assistant FAB (the clear "?" button) ──────────────────── */
+.pl-fab {
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+.pl-fab:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+.pl-fab:active {
+  transform: translateY(0);
+}
+.pl-fab:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+.pl-assistant-panel {
+  animation: fadeUp 0.16s ease;
+}
+
 /* ── Motion preferences ────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   .pl-task-card,
   .pl-lane-row,
   .pl-icon-btn,
   .pl-drop-zone,
+  .pl-fab,
   .pl-task-card .pl-task-actions {
     transition: none;
+  }
+  .pl-assistant-panel {
+    animation: none;
   }
 }

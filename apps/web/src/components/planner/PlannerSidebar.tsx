@@ -1,6 +1,7 @@
 import { CSSProperties } from 'react'
-import { Users } from 'lucide-react'
+import { PanelLeftClose, Users } from 'lucide-react'
 import { MemberLane } from './MemberLane'
+import { IconButton } from '../ui/IconButton'
 import type { RoadmapMember } from '../../types/roadmap'
 import type { FlatTask } from '../../pages/planner/usePlannerData'
 
@@ -11,6 +12,8 @@ interface PlannerSidebarProps {
   selectedIds: Set<string>
   onToggleCollapse: (key: string) => void
   onToggleSelect: (key: string) => void
+  /** Hide the whole panel — the calendar goes full-width. */
+  onCollapsePanel: () => void
   onAddTask: (assigneeId: string | null) => void
   renderTask: (task: FlatTask) => React.ReactNode
 }
@@ -32,6 +35,7 @@ export function PlannerSidebar({
   selectedIds,
   onToggleCollapse,
   onToggleSelect,
+  onCollapsePanel,
   onAddTask,
   renderTask,
 }: PlannerSidebarProps) {
@@ -51,8 +55,13 @@ export function PlannerSidebar({
       }}
     >
       <div style={headerStyle}>
-        <Users size={13} />
-        By person
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Users size={13} />
+          By person
+        </span>
+        <IconButton label="Hide people panel" size={20} onClick={onCollapsePanel}>
+          <PanelLeftClose size={14} />
+        </IconButton>
       </div>
 
       {members.length === 0 && unassigned.length === 0 && (
@@ -104,7 +113,7 @@ export function PlannerSidebar({
 const headerStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 6,
+  justifyContent: 'space-between',
   fontSize: 'var(--text-xs)',
   fontWeight: 'var(--font-weight-semibold)' as CSSProperties['fontWeight'],
   color: 'var(--color-text-muted)',

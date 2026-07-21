@@ -45,7 +45,8 @@ Full plan: `~/.claude/plans/iridescent-soaring-hippo.md`.
 - [ ] Bulk "assign selected → person" (needs multi-select; `rescheduleTasks` mutation is already wired for it)
 
 **Phase 7 — Polish**
-- [ ] Wire `useProjectChat` to a chat panel; keyboard nav; Playwright specs (assign → reload → color persists; drag → reload → time persists)
+- [x] Wire `useProjectChat` to a chat panel (the assistant FAB — see review below)
+- [ ] Keyboard nav; Playwright specs (assign → reload → color persists; drag → reload → time persists)
 
 ### Review — Phase 1 (2026-07-19)
 
@@ -72,6 +73,42 @@ Two things found along the way that were *not* in the plan:
 - Single-task drags go through `updateTask`, not `rescheduleTasks`. The bulk mutation is wired and tested but waits for multi-select.
 
 **Known gaps:** no Playwright coverage for the planner yet; bulk assign needs multi-select; `useProjectChat` is still unconsumed.
+
+### Review — Immersive shell (2026-07-21)
+
+**Shipped.** Restructured the app into a single immersive planner surface. `tsc --noEmit` clean, 82 Vitest tests green, prod build succeeds.
+
+- **Removed the left app-sidebar.** `DashboardLayout` is now a top bar (`components/layout/TopBar.tsx`) over a full-height content area. The top bar carries the Omada wordmark + `TeamSwitcher`, the **Week/Day/List/Board switcher promoted to primary nav**, and utilities (theme, settings gear→modal, user).
+- **View state lifted to the layout** and shared with the planner via React Router `useOutletContext` (`PlannerOutletContext` in `components/planner/plannerViews.tsx`) — the top-bar tabs and the planner now read/write one `view`. The switcher was removed from `PlannerToolbar`.
+- **Member-lane panel is collapsible** — a `PanelLeftClose/Open` toggle in the toolbar (and a chevron in the panel header) hides/shows it; state persists in `localStorage['aos_planner_lanes']`. When hidden, the calendar goes full-width.
+- **Planner is the only `/app` route** (`<Route index element={<PlannerPage/>}>`); `roadmap`, `sprint-planner`, `settings`, `settings/calibration` routes deleted. Settings is modal-only now.
+- **Deleted:** `pages/roadmap/RoadmapPage.tsx`, the orphaned `features/roadmap/` barrel (sole consumer was RoadmapPage), `pages/settings/CalibrationSuggestionsPage.tsx` + the dead "Calibration Suggestions" settings section (referenced the removed Sprint Brain), and `tests/e2e/roadmap.spec.ts` (tested the deleted page — asserted `/app/roadmap`, "No roadmap yet", "Generate roadmap"). Fixed `InviteAcceptPage`'s stale `/app/sprint-planner` → `/app`.
+
+**Left intentionally:** `docs/roadmap-frontend-integration.md` documents the now-deleted `features/roadmap` barrel — stale, flagged but not deleted (docs, not code). `TeamSwitcher` still has off-brand hardcoded dark colors and self-hides for single-team orgs; it renders nothing today, worth a restyle when multi-team returns.
+
+**Not a merge issue but surfaced during this work:** roadmap generation needs `ANTHROPIC_API_KEY` in `apps/api/.env` (the generator moved Groq→Anthropic in the merge). The app starts and everything but "Generate my plan" works without it.
+
+### Review — Plan assistant FAB (2026-07-21)
+
+**Shipped.** A clear (translucent, backdrop-blurred) circular "?" button floating bottom-right — TikTok-Tako style — that opens a Groq-backed chat for refining the plan. `tsc` clean, 82 Vitest tests green, build succeeds.
+
+- **`components/planner/AssistantChat.tsx`** — the FAB + a floating chat card. Consumes the previously-unused **`useProjectChat`** hook (SSE streaming from `POST /api/roadmap/chat/message`, transcript from `GET /api/roadmap/chat`). Both endpoints run on **Groq** via `idea_interview.resolve_api_key` — verified they survived the merge.
+- **Glassy styling** via `color-mix(... transparent)` + `backdrop-filter: blur()`, so it's theme-aware automatically; hover/focus in `.pl-fab` (styles/planner.css). Sits at `--z-dropdown` (below the settings modal).
+- **"Rebuild plan with this info"** footer action → new `regenerate` mutation in `usePlannerMutations` (`POST /api/roadmap/regenerate`). Gated behind an explicit click with a visible warning that it **replaces current tasks and their assignments** (regenerate is destructive — it replans milestones/tasks, losing assignee/time customizations). Errors (e.g. missing `ANTHROPIC_API_KEY`, since regenerate uses Anthropic) surface inline in the panel.
+- Rendered only in the roadmap-exists view, not the empty state (which already has its own generate flow).
+
+**Placement note:** bottom-right corner (conventional FAB spot, satisfies "right-hand side"). Easy to move to mid-right if a more literal Tako position is wanted.
+
+### Review — Daily agenda + Groq feedback loop (2026-07-21)
+
+**Shipped.** Each day is now its own detailed page with per-task feedback boxes, and Groq re-plans upcoming tasks from that feedback non-destructively. Backend: migration `0033` applied to local Postgres (`tasks.feedback`, single-row `alembic_version`), 5 new tests green (20/20 in `test_roadmap_planner.py`), full suite 172 passed / 8 failed — the **same 8 pre-existing failures** (verified by stashing `apps/api/src`: identical 8, all in `test_idea_interview`/`test_project_brief`/`test_sprints_router`, none touched). Frontend: `tsc` clean, 82 Vitest green, build succeeds.
+
+- **Timestamps now real** — the generator (`roadmap_generator.py`) gained `startTime`/`durationMinutes` in its tool schema + prompt, and sets `scheduled_time`/`duration_minutes` in `_add_tasks`. Every freshly generated/regenerated plan is timed. (Pre-existing plans stay `null` → render "Anytime" until regenerated or adjusted.)
+- **New Groq adjuster** — `src/services/roadmap_adjuster.py`, `POST /api/roadmap/adjust`. Mirrors `idea_interview`'s Groq client + forced-tool pattern (not the Anthropic generator). **Non-destructive:** preserves `done`/`in_progress` tasks (status + assignee), replaces only `todo` tasks, and only within milestones the model returns. Empty/malformed model output is a no-op, never a wipe. Normalizes the `TaskStatus` SAEnum via `_status_str` (loaded rows return the enum member, not a string — that bit both JSON serialization and status comparisons; tests caught it).
+- **Per-task feedback** — `tasks.feedback` column; `feedback` added to `TaskUpdateRequest` (via `model_fields_set`) and `_task_json`. Saving a note is a plain `PATCH /tasks/{id}`.
+- **Frontend** — default view flipped to **day** (`DashboardLayout`); Week retained. New `components/planner/DayAgenda.tsx`: vertical chronological agenda, each task = time rail + title + full description + 3-state status + feedback textarea (saves **on blur** when changed). "Update my plan from feedback" button → new `adjust` mutation. `RoadmapTask.feedback` + `TaskPatch.feedback` added.
+
+**Carried-forward tradeoff (unchanged):** re-planned tasks are new rows, so they come back unassigned; done/in-progress keep their assignee. Fine at current scale.
 
 ---
 

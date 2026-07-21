@@ -18,7 +18,8 @@ milestones/tasks replaced) and a single milestone (siblings untouched).
 
 import json
 import logging
-from datetime import date, timedelta
+import re
+from datetime import date, time, timedelta
 
 import anthropic
 from fastapi import HTTPException, status
@@ -62,6 +63,9 @@ Write for a technical reader; be concrete, never generic filler.
 - Give every task a `dayOffset`: a 0-based index of WEEKDAYS from the start (0 = the first \
 working day). Spread tasks so each day has only a few; keep the whole plan within ~2 weeks \
 of weekdays where possible.
+- Lay out each day as a realistic schedule: give every task a `startTime` (24h "HH:MM", \
+between 09:00 and 18:00) and a `durationMinutes` (15–240). Order tasks within a day by time \
+and don't overlap them — a developer should be able to follow the day top to bottom.
 - Order milestones and tasks the way they should actually be tackled (dependencies first).
 - Ground everything in THIS project and its stated stack/constraints. Never invent facts the \
 brief doesn't support; where the brief is silent, make a sensible, clearly-reasonable technical \
@@ -90,6 +94,14 @@ _MILESTONE_SCHEMA = {
                     "dayOffset": {
                         "type": "integer",
                         "description": "0-based weekday index from the start date",
+                    },
+                    "startTime": {
+                        "type": "string",
+                        "description": "24h start time, HH:MM (e.g. 09:30), between 09:00 and 18:00",
+                    },
+                    "durationMinutes": {
+                        "type": "integer",
+                        "description": "How long the task should take, 15-240 minutes",
                     },
                 },
                 "required": ["title", "dayOffset"],
@@ -211,6 +223,31 @@ async def _call_planner(api_key: str, system: str, user_content: str, tool: dict
     return block.input, response.usage
 
 
+_MIN_DURATION = 15
+_MAX_DURATION = 240
+
+
+def _parse_hhmm(raw) -> time | None:
+    """Parse a model-supplied 'HH:MM' into a naive time, or None if unusable."""
+    if not isinstance(raw, str):
+        return None
+    m = re.match(r"^\s*(\d{1,2}):(\d{2})", raw)
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    if 0 <= h <= 23 and 0 <= mi <= 59:
+        return time(hour=h, minute=mi)
+    return None
+
+
+def _clamp_duration(raw) -> int | None:
+    try:
+        d = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return min(max(d, _MIN_DURATION), _MAX_DURATION)
+
+
 # ─── tool-output validation (always runs before any DB write) ──────────────────
 def _validated_task(raw: dict) -> dict:
     try:
@@ -221,6 +258,8 @@ def _validated_task(raw: dict) -> dict:
         "title": str(raw.get("title") or "Untitled task")[:255],
         "description": raw.get("description"),
         "day_offset": min(max(offset, 0), _MAX_DAY_OFFSET),
+        "start_time": _parse_hhmm(raw.get("startTime")),
+        "duration_minutes": _clamp_duration(raw.get("durationMinutes")),
     }
 
 
@@ -251,6 +290,8 @@ def _add_tasks(milestone_id, tasks: list[dict], start: date, db: AsyncSession) -
                 description=t["description"],
                 sort_order=t_idx,
                 scheduled_date=_weekday_after(start, t["day_offset"]),
+                scheduled_time=t.get("start_time"),
+                duration_minutes=t.get("duration_minutes"),
             )
         )
 

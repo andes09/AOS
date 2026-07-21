@@ -33,7 +33,11 @@ def _client():
 
 
 async def _seed(clerk_org_id=ORG, *, developers=(), with_project=True):
-    """Seed an org → team → (developers, onboarding session, project/milestone)."""
+    """Seed an org → team → (developers, onboarding session, project/milestone).
+
+    The session carries a minimal `project_brief` so brief-gated endpoints
+    (generate/regenerate/adjust) don't 409.
+    """
     from src.database import get_db
     from src.models.developer import Developer
     from src.models.milestone import Milestone
@@ -66,12 +70,17 @@ async def _seed(clerk_org_id=ORG, *, developers=(), with_project=True):
             dev_ids.append(dev.id)
 
         milestone_id = None
+        session_id = None
         if with_project:
             session = OnboardingSession(
-                id=uuid.uuid4(), organization_id=org.id, status="in_progress"
+                id=uuid.uuid4(),
+                organization_id=org.id,
+                status="in_progress",
+                project_brief={"projectName": "Test Project"},
             )
             db.add(session)
             await db.flush()
+            session_id = session.id
             project = Project(
                 id=uuid.uuid4(),
                 team_id=team.id,
@@ -87,7 +96,13 @@ async def _seed(clerk_org_id=ORG, *, developers=(), with_project=True):
             milestone_id = milestone.id
 
         await db.commit()
-        return {"org_id": org.id, "team_id": team.id, "dev_ids": dev_ids, "milestone_id": milestone_id}
+        return {
+            "org_id": org.id,
+            "team_id": team.id,
+            "dev_ids": dev_ids,
+            "milestone_id": milestone_id,
+            "session_id": session_id,
+        }
 
 
 async def _create_task(client, **body):
@@ -384,3 +399,124 @@ async def test_reschedule_rejects_empty_batch(tmp_db):
                 "/api/roadmap/tasks/reschedule", json={"updates": []}, headers=AUTH
             )
     assert resp.status_code == 422
+
+
+# ─── per-task feedback (migration 0033) ─────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_feedback_persists_and_round_trips(tmp_db):
+    await _seed()
+    with _patch_clerk():
+        async with _client() as client:
+            task_id = (await _create_task(client, title="Ship auth")).json()["id"]
+
+            patched = await client.patch(
+                f"/api/roadmap/tasks/{task_id}",
+                json={"feedback": "RLS policies were fiddly, took 2x longer"},
+                headers=AUTH,
+            )
+            roadmap = await client.get("/api/roadmap", headers=AUTH)
+
+    assert patched.json()["feedback"] == "RLS policies were fiddly, took 2x longer"
+    # Survives a reload (it's really on the row, not just echoed back).
+    tasks = roadmap.json()["milestones"][0]["tasks"]
+    assert tasks[0]["feedback"] == "RLS policies were fiddly, took 2x longer"
+
+
+@pytest.mark.asyncio
+async def test_feedback_can_be_cleared(tmp_db):
+    await _seed()
+    with _patch_clerk():
+        async with _client() as client:
+            task_id = (await _create_task(client)).json()["id"]
+            await client.patch(f"/api/roadmap/tasks/{task_id}", json={"feedback": "note"}, headers=AUTH)
+            cleared = await client.patch(
+                f"/api/roadmap/tasks/{task_id}", json={"feedback": None}, headers=AUTH
+            )
+    assert cleared.json()["feedback"] is None
+
+
+# ─── POST /adjust (Groq feedback loop) ──────────────────────────────────────────
+async def _add_task_row(milestone_id, *, title, status, sort_order):
+    """Insert a task directly so we can control its status for adjust tests."""
+    from src.database import get_db
+    from src.models.task import Task
+
+    async for db in app.dependency_overrides[get_db]():
+        t = Task(id=uuid.uuid4(), milestone_id=milestone_id, title=title, status=status, sort_order=sort_order)
+        db.add(t)
+        await db.commit()
+        return t.id
+
+
+# What the mocked Groq call returns: one existing milestone ("M1") replanned.
+_ADJUST_OUTPUT = (
+    {
+        "milestones": [
+            {
+                "title": "M1",
+                "tasks": [
+                    {
+                        "title": "Rework auth after feedback",
+                        "description": "Revised task",
+                        "dayOffset": 1,
+                        "startTime": "10:00",
+                        "durationMinutes": 60,
+                    }
+                ],
+            }
+        ]
+    },
+    None,  # usage
+)
+
+
+@pytest.mark.asyncio
+async def test_adjust_preserves_done_and_replans_todo(tmp_db):
+    seeded = await _seed()
+    mid = seeded["milestone_id"]
+    await _add_task_row(mid, title="Done work", status="done", sort_order=0)
+    await _add_task_row(mid, title="Stale todo", status="todo", sort_order=1)
+
+    with _patch_clerk(), \
+        patch("src.services.roadmap_adjuster._call_adjuster", new=AsyncMock(return_value=_ADJUST_OUTPUT)), \
+        patch("src.services.roadmap_adjuster.record_generation_cost"):
+        async with _client() as client:
+            resp = await client.post("/api/roadmap/adjust", json={}, headers=AUTH)
+
+    assert resp.status_code == 200
+    tasks = resp.json()["milestones"][0]["tasks"]
+    titles = [t["title"] for t in tasks]
+    # Done task preserved; stale todo gone; new todo added with a time.
+    assert "Done work" in titles
+    assert "Stale todo" not in titles
+    assert "Rework auth after feedback" in titles
+    new_task = next(t for t in tasks if t["title"] == "Rework auth after feedback")
+    assert new_task["scheduledTime"] == "10:00"
+    assert new_task["durationMinutes"] == 60
+
+
+@pytest.mark.asyncio
+async def test_adjust_empty_output_is_a_noop(tmp_db):
+    """A malformed/empty model result must not wipe the existing todo tasks."""
+    seeded = await _seed()
+    await _add_task_row(seeded["milestone_id"], title="Keep me", status="todo", sort_order=0)
+
+    with _patch_clerk(), \
+        patch("src.services.roadmap_adjuster._call_adjuster", new=AsyncMock(return_value=({"milestones": []}, None))), \
+        patch("src.services.roadmap_adjuster.record_generation_cost"):
+        async with _client() as client:
+            resp = await client.post("/api/roadmap/adjust", json={}, headers=AUTH)
+
+    assert resp.status_code == 200
+    titles = [t["title"] for t in resp.json()["milestones"][0]["tasks"]]
+    assert titles == ["Keep me"]
+
+
+@pytest.mark.asyncio
+async def test_adjust_409_without_a_roadmap(tmp_db):
+    await _seed(with_project=False)
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.post("/api/roadmap/adjust", json={}, headers=AUTH)
+    # No session/brief → the brief gate fires first.
+    assert resp.status_code == 409

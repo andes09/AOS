@@ -173,7 +173,6 @@ export function PlannerPage() {
     <Shell>
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
         <PlannerToolbar
-          title={data.roadmap.name}
           rangeStart={anchor}
           rangeEnd={rangeEnd}
           onPrev={() => setAnchorOverride(addDays(anchor, -dayCount))}

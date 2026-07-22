@@ -5,7 +5,6 @@ import { IconButton } from '../ui/IconButton'
 import { MONTHS } from '../../lib/date'
 
 interface PlannerToolbarProps {
-  title: string
   rangeStart: Date
   rangeEnd: Date
   onPrev: () => void
@@ -25,7 +24,6 @@ interface PlannerToolbarProps {
  * navigation, and progress. The view switcher lives in the top bar now.
  */
 export function PlannerToolbar({
-  title,
   rangeStart,
   rangeEnd,
   onPrev,
@@ -46,21 +44,7 @@ export function PlannerToolbar({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
       <div style={rowStyle}>
-        <h1
-          style={{
-            margin: 0,
-            fontSize: 'var(--text-xl)',
-            fontWeight: 700,
-            color: 'var(--color-text-primary)',
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {title}
-        </h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexShrink: 0, marginRight: 'auto' }}>
           <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>
             {done}/{total} done
           </span>
@@ -69,7 +53,7 @@ export function PlannerToolbar({
             aria-valuenow={pct}
             aria-valuemin={0}
             aria-valuemax={100}
-            style={{ width: 110, height: 6, borderRadius: 999, background: 'var(--color-bg-tertiary)', overflow: 'hidden' }}
+            style={{ width: 180, height: 8, borderRadius: 999, background: 'var(--color-bg-tertiary)', border: '1px solid var(--color-border)', overflow: 'hidden' }}
           >
             <div style={{ width: `${pct}%`, height: '100%', background: 'var(--color-success)', transition: 'width 0.2s' }} />
           </div>

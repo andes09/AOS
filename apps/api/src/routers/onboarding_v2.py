@@ -111,7 +111,8 @@ async def _build_state(
     session = await _get_session(org, db)
 
     github_skipped = bool(session and session.github_skipped_at)
-    github_done = bool(connection) or github_skipped
+    needs_reconnect = bool(connection) and connection.installation_id is None
+    github_done = (bool(connection) and connection.installation_id is not None) or github_skipped
     profile_done = _profile_complete(developer)
     purpose_done = bool(session and session.project_purpose)
     chat_done = bool(session and session.status == "completed")
@@ -154,6 +155,7 @@ async def _build_state(
             "connected": bool(connection),
             "login": connection.github_login if connection else None,
             "skipped": github_skipped,
+            "needsReconnect": needs_reconnect,
         },
         "profile": {
             # Auto-provisioned rows carry name == clerk_user_id; never echo that.

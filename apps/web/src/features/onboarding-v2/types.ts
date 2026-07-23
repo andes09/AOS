@@ -42,6 +42,7 @@ export type OnboardingState = {
     connected: boolean
     login: string | null
     skipped: boolean
+    needsReconnect: boolean
   }
   profile: {
     name: string | null

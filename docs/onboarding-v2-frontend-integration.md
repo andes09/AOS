@@ -52,7 +52,7 @@ const { state, isLoading, error, skipGithub, saveProfile, savePurpose, complete 
     { id: 'purpose',        status: ..., skippable: false },
     { id: 'idea_chat',      status: ..., skippable: false },
   ],
-  github:   { connected: boolean, login: string | null, skipped: boolean },
+  github:   { connected: boolean, login: string | null, skipped: boolean, needsReconnect: boolean },
   profile:  { name: string | null, phone: string | null, complete: boolean },
   purpose:  { value: 'hobby' | 'startup' | 'learning' | null, complete: boolean },
   ideaChat: { sessionId, status, messageCount, brief, briefComplete },

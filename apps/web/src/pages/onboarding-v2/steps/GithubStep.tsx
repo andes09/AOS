@@ -1,7 +1,7 @@
 /**
  * Step 1 — connect GitHub (skippable). Wires the `useGithubConnect` hook:
- * `connect.mutate()` sends the browser to GitHub's consent screen, and the
- * OAuth redirect result (?github=connected|error) is surfaced on mount.
+ * `connect.mutate()` sends the browser to the GitHub App install flow, and
+ * the install redirect result (?github=connected|error) is surfaced on mount.
  */
 import { useGithubConnect } from '../../../features/onboarding-v2'
 import { Btn, C, GithubMark, OmadaMark, Spinner, WARM } from '../theme'
@@ -12,14 +12,20 @@ const SCOPES: [string, string][] = [
   ['Read-only access', 'Omada never writes to your repos, and you can revoke anytime'],
 ]
 
-export function GithubStep({ onSkip, skipping }: { onSkip: () => void; skipping: boolean }) {
+export function GithubStep({ onSkip, skipping, needsReconnect }: { onSkip: () => void; skipping: boolean; needsReconnect: boolean }) {
   const { connect, redirectResult } = useGithubConnect('/onboarding')
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 22, animation: 'fadeUp 0.22s ease both' }}>
       <div>
-        <h2 style={{ fontSize: 21, fontWeight: 700, color: C.t1, letterSpacing: '-0.3px', marginBottom: 5 }}>Connect your GitHub</h2>
-        <p style={{ fontSize: 14, color: C.t2, lineHeight: 1.55 }}>Connecting GitHub lets the roadmap AI read your repos to plan around what already exists — or skip it and connect later.</p>
+        <h2 style={{ fontSize: 21, fontWeight: 700, color: C.t1, letterSpacing: '-0.3px', marginBottom: 5 }}>
+          {needsReconnect ? 'Reconnect your GitHub' : 'Connect your GitHub'}
+        </h2>
+        <p style={{ fontSize: 14, color: C.t2, lineHeight: 1.55 }}>
+          {needsReconnect
+            ? 'Your GitHub connection was made before we switched to the more secure GitHub App install flow, and needs to be renewed — or skip it and reconnect later.'
+            : 'Connecting GitHub lets the roadmap AI read your repos to plan around what already exists — or skip it and connect later.'}
+        </p>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, padding: '26px 0', background: WARM.surface, border: `1px solid ${C.border}`, borderRadius: 12 }}>
@@ -53,7 +59,7 @@ export function GithubStep({ onSkip, skipping }: { onSkip: () => void; skipping:
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <Btn size="lg" onClick={() => connect.mutate()} disabled={connect.isPending} style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}>
-          {connect.isPending ? <><Spinner size={14} color="rgba(255,255,255,0.85)" /> Redirecting…</> : <>Connect GitHub →</>}
+          {connect.isPending ? <><Spinner size={14} color="rgba(255,255,255,0.85)" /> Redirecting…</> : <>{needsReconnect ? 'Reconnect GitHub →' : 'Connect GitHub →'}</>}
         </Btn>
         <Btn variant="ghost" onClick={onSkip} disabled={skipping}>
           {skipping ? 'Skipping…' : 'Skip for now'}

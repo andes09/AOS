@@ -81,7 +81,11 @@ export function OnboardingV2Page() {
       >
         <div style={{ width: '100%', maxWidth: 580 }}>
           {state.currentStep === 'github_connect' && (
-            <GithubStep onSkip={() => skipGithub.mutate()} skipping={skipGithub.isPending} />
+            <GithubStep
+              onSkip={() => skipGithub.mutate()}
+              skipping={skipGithub.isPending}
+              needsReconnect={state.github.needsReconnect}
+            />
           )}
           {state.currentStep === 'profile' && (
             <ProfileStep

@@ -64,7 +64,7 @@ async def test_state_initial(tmp_db):
     assert body["currentStep"] == "github_connect"
     assert [s["status"] for s in body["steps"]] == ["current", "pending", "pending", "pending"]
     assert [s["id"] for s in body["steps"]] == ["github_connect", "profile", "purpose", "idea_chat"]
-    assert body["github"] == {"connected": False, "login": None, "skipped": False}
+    assert body["github"] == {"connected": False, "login": None, "skipped": False, "needsReconnect": False}
     assert body["profile"] == {"name": None, "phone": None, "complete": False}
     assert body["purpose"] == {"value": None, "complete": False}
     assert body["ideaChat"]["status"] == "not_started"
@@ -94,6 +94,7 @@ async def test_github_connection_completes_step(tmp_db):
     async for db in app.dependency_overrides[get_db]():
         db.add(GithubConnection(
             organization_id=org_id,
+            installation_id="inst_1",
             github_user_id="42",
             github_login="octocat",
             encrypted_access_token=encrypt("tok"),
@@ -108,7 +109,41 @@ async def test_github_connection_completes_step(tmp_db):
     body = resp.json()
     assert body["github"]["connected"] is True
     assert body["github"]["login"] == "octocat"
+    assert body["github"]["needsReconnect"] is False
     assert body["currentStep"] == "profile"
+
+
+@pytest.mark.asyncio
+async def test_github_legacy_connection_needs_reconnect_and_blocks_step(tmp_db):
+    """A pre-GitHub-App-migration connection (no installation_id) must not
+    complete the step — the user has to reconnect through the App install
+    flow before onboarding advances."""
+    org_id, _ = await _seed_org_and_team()
+
+    from src.database import get_db
+    from src.models.github_connection import GithubConnection
+    from src.services.encryption import encrypt
+
+    async for db in app.dependency_overrides[get_db]():
+        db.add(GithubConnection(
+            organization_id=org_id,
+            github_user_id="42",
+            github_login="octocat",
+            encrypted_access_token=encrypt("legacy_oauth_tok"),
+            is_active=True,
+        ))
+        await db.commit()
+        break
+
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.get("/api/onboarding/v2/state", headers=AUTH)
+    body = resp.json()
+    assert body["github"]["connected"] is True
+    assert body["github"]["needsReconnect"] is True
+    assert body["currentStep"] == "github_connect"
+    github_step = next(s for s in body["steps"] if s["id"] == "github_connect")
+    assert github_step["status"] == "current"
 
 
 @pytest.mark.asyncio

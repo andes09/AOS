@@ -8,7 +8,7 @@ import { useOnboardingApi } from './useOnboardingApi'
 
 /**
  * GitHub repo-access connection for onboarding. `connect.mutate()` sends the
- * browser to GitHub's consent screen; GitHub redirects back to `returnTo`
+ * browser to the GitHub App install flow; GitHub redirects back to `returnTo`
  * with ?github=connected|error, surfaced here as `redirectResult`.
  */
 export function useGithubConnect(returnTo: string = '/onboarding') {

@@ -3,12 +3,13 @@ Router tests for /api/roadmap. Follows the test_onboarding_v2.py skeleton
 (tmp_db fixture, _patch_clerk, ASGI test client, manual seeding).
 
 Happy-path generate/regenerate tests exercise the real service with only the
-Anthropic client faked (same approach as test_roadmap_generator.py) so the
+Groq client faked (same approach as test_roadmap_generator.py) so the
 router->service wiring and response shapes are actually verified. Error-
 mapping tests (402/502) mock the service functions directly since that's
 testing the router's own exception translation, not the service's.
 """
 
+import json
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -101,40 +102,31 @@ async def _seed_roadmap(team_id, session_id):
         return project_id, (m0, m1)
 
 
-# ─── Claude fakes (mirrors test_roadmap_generator.py) ──────────────────────────
-class _FakeToolBlock:
-    type = "tool_use"
-
+# ─── Groq fakes (mirrors test_roadmap_generator.py) ─────────────────────────────
+class _FakeToolCall:
     def __init__(self, name, payload):
-        self.name = name
-        self.input = payload
+        self.function = SimpleNamespace(name=name, arguments=json.dumps(payload))
 
 
-class _FakeTextBlock:
-    type = "text"
-    text = "I refuse to use the tool."
-
-
-def _fake_anthropic(payload=None, tool_name="build_roadmap", blocks=None):
-    if blocks is None:
-        blocks = [_FakeToolBlock(tool_name, payload)]
+def _fake_groq(payload=None, tool_name="build_roadmap", tool_calls=None):
+    if tool_calls is None:
+        tool_calls = [_FakeToolCall(tool_name, payload)] if payload is not None else []
+    message = SimpleNamespace(tool_calls=tool_calls or None)
     response = SimpleNamespace(
-        content=blocks,
-        usage=SimpleNamespace(
-            input_tokens=100, output_tokens=200,
-            cache_creation_input_tokens=0, cache_read_input_tokens=0,
-        ),
+        choices=[SimpleNamespace(message=message)],
+        usage=SimpleNamespace(prompt_tokens=100, completion_tokens=200),
     )
-    return SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(return_value=response)))
+    fake_completions = SimpleNamespace(create=AsyncMock(return_value=response))
+    return SimpleNamespace(chat=SimpleNamespace(completions=fake_completions))
 
 
-def _patch_claude(fake):
-    return patch("src.services.roadmap_generator.anthropic.AsyncAnthropic", return_value=fake)
+def _patch_groq(fake):
+    return patch("src.services.roadmap_generator.AsyncOpenAI", return_value=fake)
 
 
 def _patch_api_key():
     return patch(
-        "src.services.roadmap_generator.resolve_api_key", new=AsyncMock(return_value="sk-test")
+        "src.services.idea_interview.resolve_api_key", new=AsyncMock(return_value="sk-test")
     )
 
 
@@ -184,9 +176,9 @@ async def test_generate_no_team_for_org(tmp_db):
 async def test_generate_happy_path_then_idempotent(tmp_db):
     org_id, team_id = await _seed_org()
     await _seed_session(org_id)
-    fake = _fake_anthropic(_ROADMAP_PAYLOAD)
+    fake = _fake_groq(_ROADMAP_PAYLOAD)
 
-    with _patch_clerk(), _patch_api_key(), _patch_claude(fake):
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake):
         async with _client() as client:
             resp = await client.post("/api/roadmap/generate", headers=AUTH)
             assert resp.status_code == 200
@@ -194,19 +186,19 @@ async def test_generate_happy_path_then_idempotent(tmp_db):
             assert body["name"] == "Trail Buddy"
             assert [m["title"] for m in body["milestones"]] == ["Foundations"]
 
-            # Idempotent: second call returns the same roadmap without calling Claude again.
+            # Idempotent: second call returns the same roadmap without calling Groq again.
             resp2 = await client.post("/api/roadmap/generate", headers=AUTH)
     assert resp2.json() == body
-    assert fake.messages.create.await_count == 1
+    assert fake.chat.completions.create.await_count == 1
 
 
 @pytest.mark.asyncio
 async def test_generate_upstream_error_maps_to_502(tmp_db):
     org_id, team_id = await _seed_org()
     await _seed_session(org_id)
-    fake = _fake_anthropic(blocks=[_FakeTextBlock()])
+    fake = _fake_groq(tool_calls=[])
 
-    with _patch_clerk(), _patch_api_key(), _patch_claude(fake):
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake):
         async with _client() as client:
             resp = await client.post("/api/roadmap/generate", headers=AUTH)
     assert resp.status_code == 502
@@ -227,9 +219,9 @@ async def test_regenerate_requires_brief(tmp_db):
 async def test_regenerate_falls_back_to_generate_when_no_project(tmp_db):
     org_id, team_id = await _seed_org()
     await _seed_session(org_id)
-    fake = _fake_anthropic(_ROADMAP_PAYLOAD)
+    fake = _fake_groq(_ROADMAP_PAYLOAD)
 
-    with _patch_clerk(), _patch_api_key(), _patch_claude(fake):
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake):
         async with _client() as client:
             resp = await client.post("/api/roadmap/regenerate", headers=AUTH)
     assert resp.status_code == 200
@@ -246,9 +238,9 @@ async def test_regenerate_replaces_existing_roadmap(tmp_db):
         "projectName": "Trail Buddy 2",
         "milestones": [{"title": "Restart", "tasks": [{"title": "Redo it", "dayOffset": 0}]}],
     }
-    fake = _fake_anthropic(regen_payload)
+    fake = _fake_groq(regen_payload)
 
-    with _patch_clerk(), _patch_api_key(), _patch_claude(fake):
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake):
         async with _client() as client:
             resp = await client.post("/api/roadmap/regenerate", headers=AUTH)
     assert resp.status_code == 200
@@ -265,7 +257,7 @@ async def test_regenerate_bad_key_maps_to_402(tmp_db):
     with _patch_clerk(), _patch_api_key():
         with patch(
             "src.routers.roadmap.roadmap_generator.regenerate_roadmap",
-            new=AsyncMock(side_effect=ValueError("Invalid Anthropic API key.")),
+            new=AsyncMock(side_effect=ValueError("Invalid Groq API key.")),
         ):
             async with _client() as client:
                 resp = await client.post("/api/roadmap/regenerate", headers=AUTH)
@@ -284,9 +276,9 @@ async def test_regenerate_milestone_happy_path(tmp_db):
         "description": "Sharper phase",
         "tasks": [{"title": "New task", "dayOffset": 0}],
     }
-    fake = _fake_anthropic(payload, tool_name="rebuild_milestone")
+    fake = _fake_groq(payload, tool_name="rebuild_milestone")
 
-    with _patch_clerk(), _patch_api_key(), _patch_claude(fake):
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake):
         async with _client() as client:
             resp = await client.post(f"/api/roadmap/milestones/{m1}/regenerate", headers=AUTH)
     assert resp.status_code == 200
@@ -336,9 +328,9 @@ async def test_regenerate_milestone_upstream_error_maps_to_502(tmp_db):
     org_id, team_id = await _seed_org()
     session_id = await _seed_session(org_id)
     _, (m0, _) = await _seed_roadmap(team_id, session_id)
-    fake = _fake_anthropic(blocks=[_FakeTextBlock()])
+    fake = _fake_groq(tool_calls=[])
 
-    with _patch_clerk(), _patch_api_key(), _patch_claude(fake):
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake):
         async with _client() as client:
             resp = await client.post(f"/api/roadmap/milestones/{m0}/regenerate", headers=AUTH)
     assert resp.status_code == 502

@@ -2,15 +2,15 @@
 Roadmap generator — turns an onboarding project brief into a short-term,
 day-by-day plan (project → milestones → tasks) for the calendar view.
 
-One forced-tool Claude call returns an ordered set of milestones, each with
-small daily tasks tagged by weekday offset. The tool output is fully validated
-before anything is written, so a failed or malformed generation never leaves a
-partial roadmap; persistence is a single transaction. Each task is scheduled
-onto a concrete weekday starting today.
+One forced-tool Groq call (OpenAI-compatible) returns an ordered set of
+milestones, each with small daily tasks tagged by weekday offset. The tool
+output is fully validated before anything is written, so a failed or
+malformed generation never leaves a partial roadmap; persistence is a single
+transaction. Each task is scheduled onto a concrete weekday starting today.
 
-Key resolution follows the onboarding convention: the org's own (BYOK)
-Anthropic key wins, with the platform ANTHROPIC_API_KEY as fallback — roadmap
-generation happens right after onboarding, before most orgs have saved a key.
+Key resolution is platform-only Groq (see idea_interview.resolve_api_key) —
+roadmap generation happens right after onboarding, before most orgs have
+saved any BYOK key.
 
 Regeneration comes in two grains: the whole roadmap (Project row kept, its
 milestones/tasks replaced) and a single milestone (siblings untouched).
@@ -21,8 +21,7 @@ import logging
 import re
 from datetime import date, time, timedelta
 
-import anthropic
-from fastapi import HTTPException, status
+from openai import APIError, AsyncOpenAI, AuthenticationError, BadRequestError, RateLimitError
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,13 +31,12 @@ from src.models.onboarding_session import OnboardingSession
 from src.models.project import Project
 from src.models.task import Task
 from src.models.team import Team
-from src.services.ai_client import get_anthropic_key
 from src.services.cost_tracker import record_generation_cost
 from src.services.idea_interview import _PURPOSE_GUIDANCE
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-sonnet-4-6"
+_MODEL = settings.groq_model
 # 8192, not 4096: a full plan is up to 8 milestones × 10 tasks, each carrying a
 # 3-6 sentence technical description. At 4096 the tool call gets truncated and
 # the roadmap comes back short.
@@ -112,46 +110,34 @@ _MILESTONE_SCHEMA = {
 }
 
 _ROADMAP_TOOL = {
-    "name": "build_roadmap",
-    "description": "Produce a short-term, day-by-day roadmap for the project.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "projectName": {"type": "string", "description": "Short name for the project"},
-            "summary": {"type": "string", "description": "One or two sentence summary of the plan"},
-            "milestones": {
-                "type": "array",
-                "description": "Ordered phases of work",
-                "items": _MILESTONE_SCHEMA,
+    "type": "function",
+    "function": {
+        "name": "build_roadmap",
+        "description": "Produce a short-term, day-by-day roadmap for the project.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "projectName": {"type": "string", "description": "Short name for the project"},
+                "summary": {"type": "string", "description": "One or two sentence summary of the plan"},
+                "milestones": {
+                    "type": "array",
+                    "description": "Ordered phases of work",
+                    "items": _MILESTONE_SCHEMA,
+                },
             },
+            "required": ["milestones"],
         },
-        "required": ["milestones"],
     },
 }
 
 _MILESTONE_TOOL = {
-    "name": "rebuild_milestone",
-    "description": "Re-plan a single milestone of the roadmap, leaving the others untouched.",
-    "input_schema": _MILESTONE_SCHEMA,
+    "type": "function",
+    "function": {
+        "name": "rebuild_milestone",
+        "description": "Re-plan a single milestone of the roadmap, leaving the others untouched.",
+        "parameters": _MILESTONE_SCHEMA,
+    },
 }
-
-
-async def resolve_api_key(clerk_org_id: str, db: AsyncSession) -> str:
-    """The Anthropic key for roadmap generation.
-
-    The org's own (BYOK) key wins; the platform key is the fallback so
-    generation works right after onboarding, before the org has saved its own
-    key. 402 when neither exists.
-    """
-    try:
-        return await get_anthropic_key(clerk_org_id, db)
-    except HTTPException:
-        if settings.anthropic_api_key:
-            return settings.anthropic_api_key
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="No Anthropic API key available for roadmap generation.",
-        )
 
 
 def _weekday_after(start: date, weekday_offset: int) -> date:
@@ -193,34 +179,54 @@ def _milestone_prompt(
     )
 
 
-async def _call_planner(api_key: str, system: str, user_content: str, tool: dict):
-    """One forced-tool Claude call. Returns (tool_input dict, usage)."""
-    client = anthropic.AsyncAnthropic(api_key=api_key)
-    try:
-        response = await client.messages.create(
-            model=_MODEL,
-            max_tokens=_MAX_TOKENS,
-            system=system,
-            messages=[{"role": "user", "content": user_content}],
-            tools=[tool],
-            tool_choice={"type": "tool", "name": tool["name"]},
-        )
-    except anthropic.AuthenticationError as exc:
-        raise ValueError("Invalid Anthropic API key.") from exc
-    except anthropic.RateLimitError as exc:
-        raise RuntimeError(
-            "Anthropic API rate limit reached. Please try again in a moment."
-        ) from exc
-    except anthropic.APIError as exc:
-        raise RuntimeError(f"Anthropic API error: {exc.message}") from exc
+# A full multi-milestone roadmap is a large, deeply-nested tool call, and Groq's
+# tool-calling occasionally emits it in a form its own parser rejects
+# (400 tool_use_failed) even though the underlying JSON was well-formed —
+# Groq's own guidance is to retry. A single milestone rarely hits this.
+_MAX_TOOL_RETRIES = 2
 
-    block = next(
-        (b for b in response.content if b.type == "tool_use" and b.name == tool["name"]),
-        None,
-    )
-    if block is None:
+
+async def _call_planner(api_key: str, system: str, user_content: str, tool: dict):
+    """One forced-tool Groq call, retried on tool_use_failed. Returns (tool_input dict, usage)."""
+    tool_name = tool["function"]["name"]
+    client = AsyncOpenAI(api_key=api_key, base_url=settings.groq_base_url)
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_content},
+    ]
+
+    response = None
+    for attempt in range(_MAX_TOOL_RETRIES + 1):
+        try:
+            response = await client.chat.completions.create(
+                model=_MODEL,
+                max_tokens=_MAX_TOKENS,
+                messages=messages,
+                tools=[tool],
+                tool_choice={"type": "function", "function": {"name": tool_name}},
+            )
+            break
+        except AuthenticationError as exc:
+            raise ValueError("Invalid Groq API key.") from exc
+        except RateLimitError as exc:
+            raise RuntimeError(
+                "Groq API rate limit reached. Please try again in a moment."
+            ) from exc
+        except BadRequestError as exc:
+            if getattr(exc, "code", None) == "tool_use_failed" and attempt < _MAX_TOOL_RETRIES:
+                continue
+            raise RuntimeError(f"Groq API error: {exc}") from exc
+        except APIError as exc:
+            raise RuntimeError(f"Groq API error: {exc}") from exc
+
+    tool_calls = response.choices[0].message.tool_calls or []
+    call = next((t for t in tool_calls if t.function.name == tool_name), None)
+    if call is None:
         raise RuntimeError("The planner did not return a roadmap. Please try again.")
-    return block.input, response.usage
+    try:
+        return json.loads(call.function.arguments), response.usage
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("The planner returned malformed output. Please try again.") from exc
 
 
 _MIN_DURATION = 15

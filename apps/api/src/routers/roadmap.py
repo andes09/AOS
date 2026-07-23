@@ -313,7 +313,7 @@ async def generate(
         await db.delete(existing)  # cascades to milestones + tasks
         await db.flush()
 
-    api_key = await roadmap_generator.resolve_api_key(clerk_org_id, db)
+    api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
 
     team = await db.scalar(
         select(Team).where(Team.organization_id == org.id).order_by(Team.created_at)
@@ -367,7 +367,7 @@ async def regenerate(
     if team is None:
         raise HTTPException(status_code=409, detail="no_team_for_org")
 
-    api_key = await roadmap_generator.resolve_api_key(clerk_org_id, db)
+    api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
 
     try:
         await roadmap_generator.regenerate_roadmap(session, team, api_key, db)
@@ -418,7 +418,7 @@ async def regenerate_milestone_endpoint(
     org, session = await _session_and_brief(clerk_org_id, db)
     milestone = await _owned_milestone(milestone_id, org, db)
 
-    api_key = await roadmap_generator.resolve_api_key(clerk_org_id, db)
+    api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
 
     try:
         milestone = await roadmap_generator.regenerate_milestone(milestone, session, api_key, db)

@@ -58,15 +58,20 @@ def _as_int(value) -> int:
 
 
 def compute_cost(usages: Iterable) -> CostBreakdown:
-    """Sum token counts across one or more Anthropic `usage` objects and price them."""
+    """Sum token counts across one or more `usage` objects and price them.
+
+    Accepts both Anthropic's shape (`input_tokens`/`output_tokens`) and
+    OpenAI/Groq's (`prompt_tokens`/`completion_tokens`) — roadmap generation
+    and adjustment run on Groq, sprint_brain still runs on Anthropic.
+    """
     input_t = output_t = cache_w = cache_r = 0
     calls = 0
     for u in usages:
         if u is None:
             continue
         calls += 1
-        input_t += _as_int(getattr(u, "input_tokens", 0))
-        output_t += _as_int(getattr(u, "output_tokens", 0))
+        input_t += _as_int(getattr(u, "input_tokens", None) or getattr(u, "prompt_tokens", 0))
+        output_t += _as_int(getattr(u, "output_tokens", None) or getattr(u, "completion_tokens", 0))
         cache_w += _as_int(getattr(u, "cache_creation_input_tokens", 0))
         cache_r += _as_int(getattr(u, "cache_read_input_tokens", 0))
 

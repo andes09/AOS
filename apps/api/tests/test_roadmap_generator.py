@@ -1,15 +1,19 @@
 """
-Unit tests for services/roadmap_generator — Claude calls are mocked, the DB is
-an in-memory sqlite scoped to just the tables this feature touches (the shared
-tmp_db fixture pulls in models whose bare-JSONB columns break on sqlite).
+Unit tests for services/roadmap_generator — Groq (OpenAI-compatible) calls are
+mocked, the DB is an in-memory sqlite scoped to just the tables this feature
+touches (the shared tmp_db fixture pulls in models whose bare-JSONB columns
+break on sqlite).
 """
 
+import json
 import uuid
 from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest_asyncio
+from openai import BadRequestError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -73,39 +77,40 @@ async def _seed(Session, purpose="hobby"):
     return team_id, session_id
 
 
-# ─── Claude fakes ──────────────────────────────────────────────────────────────
+# ─── Groq (OpenAI-compatible) fakes ─────────────────────────────────────────────
 
-class _FakeToolBlock:
-    type = "tool_use"
-
+class _FakeToolCall:
     def __init__(self, name, payload):
-        self.name = name
-        self.input = payload
+        self.function = SimpleNamespace(name=name, arguments=json.dumps(payload))
 
 
-class _FakeTextBlock:
-    type = "text"
-    text = "I refuse to use the tool."
-
-
-def _fake_anthropic(payload=None, tool_name="build_roadmap", blocks=None):
-    """Fake AsyncAnthropic whose messages.create returns the given tool output."""
-    if blocks is None:
-        blocks = [_FakeToolBlock(tool_name, payload)]
+def _fake_groq(payload=None, tool_name="build_roadmap", tool_calls=None):
+    """Fake AsyncOpenAI whose chat.completions.create returns the given tool call."""
+    if tool_calls is None:
+        tool_calls = [_FakeToolCall(tool_name, payload)] if payload is not None else []
+    message = SimpleNamespace(tool_calls=tool_calls or None)
     response = SimpleNamespace(
-        content=blocks,
-        usage=SimpleNamespace(
-            input_tokens=100, output_tokens=200,
-            cache_creation_input_tokens=0, cache_read_input_tokens=0,
-        ),
+        choices=[SimpleNamespace(message=message)],
+        usage=SimpleNamespace(prompt_tokens=100, completion_tokens=200),
     )
-    return SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(return_value=response)))
+    fake_completions = SimpleNamespace(create=AsyncMock(return_value=response))
+    return SimpleNamespace(chat=SimpleNamespace(completions=fake_completions))
 
 
-def _patch_claude(fake):
+def _patch_groq(fake):
     return patch(
-        "src.services.roadmap_generator.anthropic.AsyncAnthropic", return_value=fake
+        "src.services.roadmap_generator.AsyncOpenAI", return_value=fake
     )
+
+
+def _tool_use_failed_error():
+    """A Groq 400 with code=tool_use_failed — observed live when the model's raw
+    output doesn't parse as a clean tool call. Groq's own guidance is to retry."""
+    resp = httpx.Response(
+        400, request=httpx.Request("POST", "http://groq.test"),
+        json={"error": {"code": "tool_use_failed"}},
+    )
+    return BadRequestError("Failed to call a function.", response=resp, body={"code": "tool_use_failed"})
 
 
 _ROADMAP_PAYLOAD = {
@@ -128,23 +133,60 @@ _ROADMAP_PAYLOAD = {
 }
 
 
+# ─── _call_planner retry on tool_use_failed ────────────────────────────────────
+
+async def test_call_planner_retries_tool_use_failed_then_succeeds():
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(
+            tool_calls=[_FakeToolCall("build_roadmap", _ROADMAP_PAYLOAD)]
+        ))],
+        usage=SimpleNamespace(prompt_tokens=100, completion_tokens=200),
+    )
+    create_mock = AsyncMock(side_effect=[_tool_use_failed_error(), response])
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create_mock)))
+
+    with _patch_groq(fake):
+        data, usage = await roadmap_generator._call_planner(
+            "sk-key", "sys", "user", roadmap_generator._ROADMAP_TOOL
+        )
+
+    assert data["projectName"] == "Trail Buddy"
+    assert create_mock.await_count == 2
+
+
+async def test_call_planner_gives_up_after_max_tool_use_failures():
+    create_mock = AsyncMock(side_effect=[_tool_use_failed_error() for _ in range(10)])
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create_mock)))
+
+    with _patch_groq(fake):
+        try:
+            await roadmap_generator._call_planner(
+                "sk-key", "sys", "user", roadmap_generator._ROADMAP_TOOL
+            )
+            raise AssertionError("expected RuntimeError")
+        except RuntimeError as exc:
+            assert "Groq API error" in str(exc)
+
+    assert create_mock.await_count == roadmap_generator._MAX_TOOL_RETRIES + 1
+
+
 # ─── generate_roadmap ──────────────────────────────────────────────────────────
 
 async def test_generate_roadmap_happy_path(roadmap_db):
     team_id, session_id = await _seed(roadmap_db, purpose="hobby")
-    fake = _fake_anthropic(_ROADMAP_PAYLOAD)
+    fake = _fake_groq(_ROADMAP_PAYLOAD)
 
     async with roadmap_db() as db:
         session = await db.get(OnboardingSession, session_id)
         team = await db.get(Team, team_id)
-        with _patch_claude(fake):
+        with _patch_groq(fake):
             project = await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
 
     # Forced-tool call with purpose steering in the system prompt.
-    call = fake.messages.create.await_args.kwargs
-    assert call["tool_choice"] == {"type": "tool", "name": "build_roadmap"}
-    assert _PURPOSE_GUIDANCE["hobby"] in call["system"]
-    assert "Brief Name" in call["messages"][0]["content"]
+    call = fake.chat.completions.create.await_args.kwargs
+    assert call["tool_choice"] == {"type": "function", "function": {"name": "build_roadmap"}}
+    assert _PURPOSE_GUIDANCE["hobby"] in call["messages"][0]["content"]
+    assert "Brief Name" in call["messages"][1]["content"]
 
     async with roadmap_db() as db:
         saved = await db.get(Project, project.id)
@@ -172,12 +214,12 @@ async def test_generate_roadmap_happy_path(roadmap_db):
 
 async def test_generate_roadmap_no_tool_block_persists_nothing(roadmap_db):
     team_id, session_id = await _seed(roadmap_db)
-    fake = _fake_anthropic(blocks=[_FakeTextBlock()])
+    fake = _fake_groq(tool_calls=[])
 
     async with roadmap_db() as db:
         session = await db.get(OnboardingSession, session_id)
         team = await db.get(Team, team_id)
-        with _patch_claude(fake):
+        with _patch_groq(fake):
             try:
                 await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
                 raise AssertionError("expected RuntimeError")
@@ -190,12 +232,12 @@ async def test_generate_roadmap_no_tool_block_persists_nothing(roadmap_db):
 
 async def test_generate_roadmap_empty_milestones_persists_nothing(roadmap_db):
     team_id, session_id = await _seed(roadmap_db)
-    fake = _fake_anthropic({"projectName": "X", "milestones": []})
+    fake = _fake_groq({"projectName": "X", "milestones": []})
 
     async with roadmap_db() as db:
         session = await db.get(OnboardingSession, session_id)
         team = await db.get(Team, team_id)
-        with _patch_claude(fake):
+        with _patch_groq(fake):
             try:
                 await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
                 raise AssertionError("expected RuntimeError")
@@ -218,12 +260,12 @@ async def test_generate_roadmap_clamps_and_defaults(roadmap_db):
             ],
         }],
     }
-    fake = _fake_anthropic(payload)
+    fake = _fake_groq(payload)
 
     async with roadmap_db() as db:
         session = await db.get(OnboardingSession, session_id)
         team = await db.get(Team, team_id)
-        with _patch_claude(fake):
+        with _patch_groq(fake):
             project = await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
 
     async with roadmap_db() as db:
@@ -247,23 +289,23 @@ async def test_generate_roadmap_clamps_and_defaults(roadmap_db):
 
 async def test_regenerate_roadmap_keeps_project_id_and_replaces_content(roadmap_db):
     team_id, session_id = await _seed(roadmap_db)
-    fake = _fake_anthropic(_ROADMAP_PAYLOAD)
+    fake = _fake_groq(_ROADMAP_PAYLOAD)
 
     async with roadmap_db() as db:
         session = await db.get(OnboardingSession, session_id)
         team = await db.get(Team, team_id)
-        with _patch_claude(fake):
+        with _patch_groq(fake):
             first = await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
 
     regen_payload = {
         "projectName": "Trail Buddy 2",
         "milestones": [{"title": "Restart", "tasks": [{"title": "Redo it", "dayOffset": 0}]}],
     }
-    fake2 = _fake_anthropic(regen_payload)
+    fake2 = _fake_groq(regen_payload)
     async with roadmap_db() as db:
         session = await db.get(OnboardingSession, session_id)
         team = await db.get(Team, team_id)
-        with _patch_claude(fake2):
+        with _patch_groq(fake2):
             second = await roadmap_generator.regenerate_roadmap(session, team, "sk-key", db)
 
     assert second.id == first.id  # Project row preserved
@@ -312,18 +354,18 @@ async def test_regenerate_milestone_touches_only_the_target(roadmap_db):
             {"title": "New task B", "dayOffset": 1},
         ],
     }
-    fake = _fake_anthropic(payload, tool_name="rebuild_milestone")
+    fake = _fake_groq(payload, tool_name="rebuild_milestone")
 
     async with roadmap_db() as db:
         session = await db.get(OnboardingSession, session_id)
         target = await db.get(Milestone, milestone_ids[1])
-        with _patch_claude(fake):
+        with _patch_groq(fake):
             result = await roadmap_generator.regenerate_milestone(target, session, "sk-key", db)
 
     # The prompt carried the full outline with the target marked.
-    call = fake.messages.create.await_args.kwargs
-    assert call["tool_choice"] == {"type": "tool", "name": "rebuild_milestone"}
-    assert '"isTarget": true' in call["messages"][0]["content"]
+    call = fake.chat.completions.create.await_args.kwargs
+    assert call["tool_choice"] == {"type": "function", "function": {"name": "rebuild_milestone"}}
+    assert '"isTarget": true' in call["messages"][1]["content"]
 
     assert result.id == milestone_ids[1]
     async with roadmap_db() as db:
@@ -350,11 +392,11 @@ async def test_regenerate_milestone_failure_leaves_everything_untouched(roadmap_
     team_id, session_id = await _seed(roadmap_db)
     project_id, milestone_ids = await _seed_roadmap(roadmap_db, session_id, team_id)
 
-    fake = _fake_anthropic(blocks=[_FakeTextBlock()])  # no tool block → RuntimeError
+    fake = _fake_groq(tool_calls=[])  # no tool block → RuntimeError
     async with roadmap_db() as db:
         session = await db.get(OnboardingSession, session_id)
         target = await db.get(Milestone, milestone_ids[1])
-        with _patch_claude(fake):
+        with _patch_groq(fake):
             try:
                 await roadmap_generator.regenerate_milestone(target, session, "sk-key", db)
                 raise AssertionError("expected RuntimeError")

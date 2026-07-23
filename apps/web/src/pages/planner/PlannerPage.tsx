@@ -21,6 +21,7 @@ import { ApiError } from '../../lib/api'
 import { Alert } from '../../components/ui/Alert'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
+import { Modal } from '../../components/ui/Modal'
 import { addDays, mondayOf, parseISO, toISO } from '../../lib/date'
 import { PlannerSidebar } from '../../components/planner/PlannerSidebar'
 import { PlannerToolbar } from '../../components/planner/PlannerToolbar'
@@ -56,6 +57,9 @@ export function PlannerPage() {
   const [trayCollapsed, setTrayCollapsed] = useState(false)
   const [openTaskId, setOpenTaskId] = useState<string | null>(null)
   const [draggingTask, setDraggingTask] = useState<FlatTask | null>(null)
+  // Ask right away when there's no plan yet (fresh out of onboarding), rather
+  // than leaving generation as a button the user has to notice on their own.
+  const [askOpen, setAskOpen] = useState(true)
 
   const toggleLanesPanel = () =>
     setLanesHidden(prev => {
@@ -144,6 +148,14 @@ export function PlannerPage() {
   if (!data.roadmap) {
     const err = generate.error
     const notOnboarded = err instanceof ApiError && err.status === 409
+    const errorAlert = notOnboarded ? (
+      <Alert variant="warning" style={{ maxWidth: 440 }}>{err.message}</Alert>
+    ) : generate.isError ? (
+      <Alert variant="danger" style={{ maxWidth: 440 }}>
+        {err instanceof Error ? err.message : 'Could not generate your plan. Please try again.'}
+      </Alert>
+    ) : null
+
     return (
       <Shell>
         <div style={emptyStateStyle}>
@@ -152,17 +164,34 @@ export function PlannerPage() {
             Turn your project idea into a day-by-day plan. We'll break it into milestones and lay the
             tasks out across your team's week.
           </p>
-          {notOnboarded ? (
-            <Alert variant="warning" style={{ maxWidth: 440 }}>{err.message}</Alert>
-          ) : generate.isError ? (
-            <Alert variant="danger" style={{ maxWidth: 440 }}>
-              {err instanceof Error ? err.message : 'Could not generate your plan. Please try again.'}
-            </Alert>
-          ) : null}
+          {errorAlert}
           <Button variant="primary" size="lg" onClick={() => generate.mutate()} disabled={generate.isPending}>
             <Sparkles size={16} /> {generate.isPending ? 'Building your plan…' : 'Generate my plan'}
           </Button>
         </div>
+
+        <Modal open={askOpen} onClose={() => setAskOpen(false)} title="Ready to build your plan?" width={440}>
+          <p style={{ color: 'var(--color-text-secondary)', lineHeight: 1.5, marginTop: 0 }}>
+            Turn your project idea into a day-by-day plan — we'll break it into milestones and lay
+            tasks out across your team's week.
+          </p>
+          {errorAlert}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
+            <Button variant="secondary" onClick={() => setAskOpen(false)}>
+              Not now
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                generate.mutate()
+                setAskOpen(false)
+              }}
+              disabled={generate.isPending}
+            >
+              <Sparkles size={16} /> Generate my plan
+            </Button>
+          </div>
+        </Modal>
       </Shell>
     )
   }

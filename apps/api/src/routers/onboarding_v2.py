@@ -315,6 +315,7 @@ async def _build_state(
             "messageCount": message_count,
             "brief": session.project_brief if session else None,
             "briefComplete": bool(session and session.brief_complete),
+            "awaitingConfirmation": bool(session and session.awaiting_confirmation),
         },
         "onboardingPath": onboarding_path,
         "importArtifact": _import_payload(session) if session and session.import_analyzed_at else None,
@@ -557,6 +558,7 @@ async def _chat_payload(session: OnboardingSession, db: AsyncSession) -> dict:
         ],
         "brief": session.project_brief,
         "briefComplete": session.brief_complete,
+        "awaitingConfirmation": session.awaiting_confirmation,
     }
 
 
@@ -601,6 +603,7 @@ async def get_chat(
             "messages": [],
             "brief": None,
             "briefComplete": False,
+            "awaitingConfirmation": False,
         }
     return await _chat_payload(session, db)
 
@@ -640,6 +643,7 @@ async def _chat_event_stream(
                 "brief": result["brief"],
                 "missingFields": result["missing_fields"],
                 "briefComplete": result["brief_complete"],
+                "awaitingConfirmation": result["awaiting_confirmation"],
             }))
             await queue.put(("done", {
                 "messageId": result["message_id"],

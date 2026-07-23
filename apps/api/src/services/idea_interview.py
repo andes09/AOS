@@ -78,9 +78,21 @@ Rules:
 - Keep replies to 2-4 sentences plus the question. Be warm but efficient.
 - Don't re-ask what the founder already answered; build on it.
 - When every important area is covered, briefly summarize your understanding of \
-the project in 3-5 bullet points and tell them they can finish onboarding — do \
-not ask another question at that point.
+the project in 3-5 bullet points, then ask a single closing question: whether \
+there's anything else they'd like to add before you wrap up. Do not tell them \
+onboarding is finished at this point — you're still waiting on their answer.
 """
+
+# Appended only on the turn right after the assistant asked its closing
+# question above. Whatever the founder says here, the interview ends this
+# turn — see run_interview_turn's use of `was_awaiting_confirmation`.
+_CONFIRMATION_SYSTEM_ADDENDUM = """
+
+The founder was just asked if they have anything to add before wrapping up, \
+and this message is their answer. Respond in 1-2 sentences: if they added new \
+information, briefly confirm you've noted it; otherwise just acknowledge \
+warmly. Either way, tell them onboarding is complete now. Do not ask another \
+question — this is the final message of the interview."""
 
 # The project's purpose changes what a "good roadmap" even means, so it changes
 # what the interview should prioritize digging into. Collected via an explicit
@@ -227,7 +239,7 @@ async def _transcript(session: OnboardingSession, db: AsyncSession) -> list[dict
 def _turn_context(brief: dict | None) -> str:
     return (
         f"\n\nCurrent extracted brief (JSON): {json.dumps(brief or {})}"
-        f"\nStill missing: {', '.join(missing_fields(brief)) or 'nothing — wrap up'}"
+        f"\nStill missing: {', '.join(missing_fields(brief)) or 'nothing — summarize and ask if they have anything to add'}"
     )
 
 
@@ -240,6 +252,11 @@ async def run_interview_turn(
 ) -> dict:
     """Run one interview turn. Persists both messages, streams reply tokens via
     `on_token`, updates the brief, and returns the turn outcome."""
+    # Captured before this turn mutates it: True means the assistant's previous
+    # message asked "anything else to add?" and this user message is the
+    # answer — which always ends the interview, regardless of content.
+    was_awaiting_confirmation = session.awaiting_confirmation
+
     seq = await _next_seq(session, db)
     db.add(OnboardingMessage(session_id=session.id, role="user", content=user_content, seq=seq))
     await db.flush()
@@ -248,6 +265,8 @@ async def run_interview_turn(
     client = AsyncOpenAI(api_key=api_key, base_url=settings.groq_base_url)
 
     system_prompt = _system_prompt(session.project_purpose) + _turn_context(session.project_brief)
+    if was_awaiting_confirmation:
+        system_prompt += _CONFIRMATION_SYSTEM_ADDENDUM
     reply_parts: list[str] = []
     reply_usage = None
     try:
@@ -316,16 +335,24 @@ async def run_interview_turn(
         if tool_call is not None:
             extracted = json.loads(tool_call.function.arguments)
             session.project_brief = merge_brief(session.project_brief, extracted)
-            # Trust the model's judgment only when the required fields back it up.
-            if extracted.get("isComplete") and not missing_fields(session.project_brief):
+            # Trust the model's judgment only when the required fields back it
+            # up — and only the first time: once we're waiting on the founder's
+            # confirmation, this flag has already done its job.
+            if (
+                not was_awaiting_confirmation
+                and extracted.get("isComplete")
+                and not missing_fields(session.project_brief)
+            ):
                 session.brief_complete = True
+                session.awaiting_confirmation = True
     except (APIError, json.JSONDecodeError):
         # Extraction is best-effort — a failed pass must not lose the reply.
         logger.exception("idea_interview extraction failed for session %s", session.id)
 
     user_message_count = sum(1 for m in transcript if m["role"] == "user")
-    if session.brief_complete or user_message_count >= MAX_USER_MESSAGES:
+    if was_awaiting_confirmation or user_message_count >= MAX_USER_MESSAGES:
         session.status = "completed"
+        session.awaiting_confirmation = False
         if session.completed_at is None:
             session.completed_at = datetime.utcnow()
 
@@ -347,5 +374,6 @@ async def run_interview_turn(
         "brief": session.project_brief,
         "missing_fields": missing_fields(session.project_brief),
         "brief_complete": session.brief_complete,
+        "awaiting_confirmation": session.awaiting_confirmation,
         "status": session.status,
     }

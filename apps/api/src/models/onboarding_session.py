@@ -50,6 +50,10 @@ class OnboardingSession(Base):
     # Set when the extraction pass judges the brief complete. Distinct from
     # status == "completed": the user can end the chat before the brief is full.
     brief_complete: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # True once the assistant has asked "anything else to add?" but before the
+    # founder's answer has been processed. The next turn always completes the
+    # interview regardless of what they say — see idea_interview.run_interview_turn.
+    awaiting_confirmation: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     github_skipped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Which build_plan sub-flow this session took: "chat" or "import". Null

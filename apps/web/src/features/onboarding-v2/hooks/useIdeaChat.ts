@@ -21,6 +21,7 @@ export function useIdeaChat() {
   const [status, setStatus] = useState<ChatStatus>('not_started')
   const [brief, setBrief] = useState<ProjectBrief | null>(null)
   const [briefComplete, setBriefComplete] = useState(false)
+  const [awaitingConfirmation, setAwaitingConfirmation] = useState(false)
   const [streamingReply, setStreamingReply] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -38,6 +39,7 @@ export function useIdeaChat() {
         setStatus(payload.status)
         setBrief(payload.brief)
         setBriefComplete(payload.briefComplete)
+        setAwaitingConfirmation(payload.awaitingConfirmation)
       })
       .catch(err => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setIsLoading(false))
@@ -77,6 +79,7 @@ export function useIdeaChat() {
             onBrief: d => {
               setBrief(d.brief)
               setBriefComplete(d.briefComplete)
+              setAwaitingConfirmation(d.awaitingConfirmation)
             },
           },
           controller.signal,
@@ -115,6 +118,7 @@ export function useIdeaChat() {
     status,
     brief,
     briefComplete,
+    awaitingConfirmation,
     streamingReply,
     isStreaming,
     isLoading,

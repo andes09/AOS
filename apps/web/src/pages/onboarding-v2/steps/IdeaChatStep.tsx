@@ -77,7 +77,7 @@ export function IdeaChatStep() {
         <BriefPanel brief={chat.brief} complete={chat.briefComplete} />
       </div>
 
-      {chat.status !== 'completed' && chat.messages.length > 2 && (
+      {chat.status !== 'completed' && !chat.awaitingConfirmation && chat.messages.length > 2 && (
         <div>
           <Btn variant="outline" size="sm" onClick={() => void chat.complete()}>That's enough — finish up</Btn>
         </div>

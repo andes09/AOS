@@ -17,20 +17,13 @@ class GithubClient:
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
-    async def get_user(self) -> dict:
-        """Return the authenticated user (id, login, avatar_url, ...)."""
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{GITHUB_API_BASE}/user", headers=self._headers)
-            response.raise_for_status()
-            return response.json()
-
     async def list_repos(self, page: int = 1, per_page: int = 30) -> list[dict]:
-        """List repos the token can access, most recently pushed first."""
+        """List repos the installation token can access."""
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{GITHUB_API_BASE}/user/repos",
+                f"{GITHUB_API_BASE}/installation/repositories",
                 headers=self._headers,
-                params={"page": page, "per_page": per_page, "sort": "pushed"},
+                params={"page": page, "per_page": per_page},
             )
             response.raise_for_status()
-            return response.json()
+            return response.json()["repositories"]

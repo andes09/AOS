@@ -20,9 +20,9 @@ class Settings(BaseSettings):
     clerk_publishable_key: str
     clerk_webhook_secret: str = ""
 
-    github_client_id: str = ""
-    github_client_secret: str = ""
-    github_redirect_uri: str = "http://localhost:8000/api/integrations/github/callback"
+    github_app_id: str = ""
+    github_app_slug: str = ""
+    github_app_private_key: str = ""
 
     # Platform-level Anthropic key used by the main AI features (sprint brain,
     # scope cop, retro, etc.). Org BYOK still wins when present.
@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def github_app_private_key_pem(self) -> str:
+        """Normalize a PEM stored with escaped newlines (common for single-line env vars)."""
+        return self.github_app_private_key.replace("\\n", "\n")
 
     @property
     def allowed_origins(self) -> list[str]:

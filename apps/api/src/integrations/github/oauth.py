@@ -1,42 +1,51 @@
-import httpx
+import time
 from urllib.parse import urlencode
-from src.config import settings
 
-GITHUB_AUTH_URL = "https://github.com/login/oauth/authorize"
-GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
-# OAuth App (classic) scopes. `repo` is broad but is the only OAuth-App scope
-# that grants private-repo read access; a later switch to a GitHub App gives
-# per-repo grants (schema already carries nullable refresh/expiry for that).
-GITHUB_SCOPES = "repo read:user user:email"
+import httpx
+from jose import jwt
+
+from src.config import settings
+from src.integrations.github.client import GITHUB_API_BASE
 
 
 def get_authorization_url(state: str) -> str:
-    params = {
-        "client_id": settings.github_client_id,
-        "redirect_uri": settings.github_redirect_uri,
-        "scope": GITHUB_SCOPES,
-        "state": state,
+    """Build the GitHub App installation URL. GitHub echoes `state` back on redirect."""
+    params = {"state": state}
+    return f"https://github.com/apps/{settings.github_app_slug}/installations/new?{urlencode(params)}"
+
+
+def _generate_app_jwt() -> str:
+    """Sign a short-lived JWT identifying the App itself (not an installation)."""
+    now = int(time.time())
+    payload = {"iat": now - 60, "exp": now + 600, "iss": settings.github_app_id}
+    return jwt.encode(payload, settings.github_app_private_key_pem, algorithm="RS256")
+
+
+def _app_headers() -> dict:
+    return {
+        "Authorization": f"Bearer {_generate_app_jwt()}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
     }
-    return f"{GITHUB_AUTH_URL}?{urlencode(params)}"
 
 
-async def exchange_code_for_tokens(code: str) -> dict:
-    """Exchange the OAuth code for an access token.
+async def get_installation(installation_id: str) -> dict:
+    """Return the installation object (account identity, granted permissions)."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{GITHUB_API_BASE}/app/installations/{installation_id}",
+            headers=_app_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
 
-    GitHub returns form-encoded by default; Accept: application/json switches
-    it to JSON. Errors come back as 200s with an `error` key, so callers must
-    check for `access_token` presence, not just the status code.
-    """
+
+async def get_installation_access_token(installation_id: str) -> dict:
+    """Mint a fresh installation access token (~1h lifetime)."""
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            GITHUB_TOKEN_URL,
-            headers={"Accept": "application/json"},
-            data={
-                "client_id": settings.github_client_id,
-                "client_secret": settings.github_client_secret,
-                "code": code,
-                "redirect_uri": settings.github_redirect_uri,
-            },
+            f"{GITHUB_API_BASE}/app/installations/{installation_id}/access_tokens",
+            headers=_app_headers(),
         )
         response.raise_for_status()
         return response.json()

@@ -11,12 +11,15 @@ class GithubConnection(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), index=True)
+    installation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     github_user_id: Mapped[str] = mapped_column(String(255))
     github_login: Mapped[str] = mapped_column(String(255))
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    # Tokens stored encrypted. OAuth App tokens don't expire, so refresh/expiry
-    # stay NULL for now — columns exist so a later GitHub App switch (which
-    # issues expiring tokens) needs no migration.
+    # Tokens stored encrypted. GitHub App installation tokens expire hourly and
+    # are refreshed via installation_id (see router._get_valid_access_token);
+    # there's no user refresh token for installation tokens, so that column
+    # stays NULL. installation_id is NULL for pre-migration OAuth connections,
+    # which are treated as needing reconnect (see /status's needsReconnect).
     encrypted_access_token: Mapped[str] = mapped_column(Text)
     encrypted_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

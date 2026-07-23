@@ -1,8 +1,8 @@
 """
 GitHub integration routes (onboarding v2 — repo access for the roadmap AI).
 
-GET    /api/integrations/github/connect     → returns GitHub OAuth authorization URL
-GET    /api/integrations/github/callback    → handles OAuth code exchange, saves connection
+GET    /api/integrations/github/connect     → returns GitHub App installation URL
+GET    /api/integrations/github/callback    → handles the install callback, saves connection
 GET    /api/integrations/github/status      → returns connection status for the current org
 DELETE /api/integrations/github/disconnect  → deactivates the connection
 GET    /api/integrations/github/repos       → lists repos the connection can access
@@ -22,7 +22,7 @@ from src.auth import get_current_user_id, get_current_org_id
 from src.config import settings
 from src.database import get_db
 from src.integrations.github.client import GithubClient
-from src.integrations.github.oauth import exchange_code_for_tokens, get_authorization_url
+from src.integrations.github.oauth import get_authorization_url, get_installation, get_installation_access_token
 from src.models.github_connection import GithubConnection
 from src.models.oauth_state import OAuthState
 from src.models.organization import Organization
@@ -50,6 +50,18 @@ async def get_active_connection(
     )
 
 
+async def _get_valid_access_token(connection: GithubConnection, db: AsyncSession) -> str:
+    """Return a live installation access token, refreshing it if it's stale or near expiry."""
+    if connection.token_expires_at and connection.token_expires_at > datetime.utcnow() + timedelta(minutes=2):
+        return decrypt(connection.encrypted_access_token)
+
+    token_data = await get_installation_access_token(connection.installation_id)
+    connection.encrypted_access_token = encrypt(token_data["token"])
+    connection.token_expires_at = datetime.fromisoformat(token_data["expires_at"]).replace(tzinfo=None)
+    await db.commit()
+    return decrypt(connection.encrypted_access_token)
+
+
 @router.get("/connect")
 async def github_connect(
     return_to: str = Query(default="/onboarding"),
@@ -57,7 +69,7 @@ async def github_connect(
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return the GitHub OAuth authorization URL."""
+    """Return the GitHub App installation URL."""
     state = secrets.token_urlsafe(32)
     db.add(OAuthState(
         state=state,
@@ -77,13 +89,15 @@ def _error_redirect(return_to: str, reason: str) -> RedirectResponse:
 
 @router.get("/callback")
 async def github_callback(
-    code: str = Query(...),
+    installation_id: int = Query(...),
+    setup_action: str = Query(default=""),
     state: str = Query(...),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    GitHub redirects here after the user grants access. Exchanges the code for
-    a token, resolves the org from the state token, and persists the connection.
+    GitHub redirects here after the user installs the App. Resolves the org
+    from the state token, mints an installation access token, and persists
+    the connection.
     """
     try:
         await db.execute(delete(OAuthState).where(OAuthState.expires_at < datetime.utcnow()))
@@ -107,29 +121,21 @@ async def github_callback(
         await db.commit()
         return _error_redirect(return_to, "org_not_provisioned")
 
+    if setup_action == "request":
+        # Org member requested install; an org admin still needs to approve it on GitHub's side.
+        await db.commit()
+        return _error_redirect(return_to, "installation_pending")
+
     try:
-        tokens = await exchange_code_for_tokens(code)
+        installation = await get_installation(str(installation_id))
+        token_data = await get_installation_access_token(str(installation_id))
     except httpx.HTTPError:
-        logger.exception("GitHub token exchange failed")
+        logger.exception("GitHub App installation lookup failed")
         await db.commit()
         return _error_redirect(return_to, "token_exchange_failed")
-    access_token = tokens.get("access_token")
-    if not access_token:
-        # GitHub reports errors (bad_verification_code etc.) in a 200 body.
-        logger.warning("GitHub token exchange returned error: %s", tokens.get("error"))
-        await db.commit()
-        return _error_redirect(return_to, tokens.get("error", "token_exchange_failed"))
 
-    try:
-        gh_user = await GithubClient(access_token).get_user()
-    except httpx.HTTPError:
-        logger.exception("GitHub /user fetch failed")
-        await db.commit()
-        return _error_redirect(return_to, "user_fetch_failed")
-
-    expires_at = None
-    if "expires_in" in tokens:
-        expires_at = datetime.utcnow() + timedelta(seconds=int(tokens["expires_in"]))
+    account = installation.get("account") or {}
+    expires_at = datetime.fromisoformat(token_data["expires_at"]).replace(tzinfo=None)
 
     # Deactivate existing active connections for this org before inserting.
     existing = await db.execute(
@@ -143,13 +149,14 @@ async def github_callback(
 
     db.add(GithubConnection(
         organization_id=org.id,
-        github_user_id=str(gh_user["id"]),
-        github_login=gh_user["login"],
-        avatar_url=gh_user.get("avatar_url"),
-        encrypted_access_token=encrypt(access_token),
-        encrypted_refresh_token=encrypt(tokens["refresh_token"]) if tokens.get("refresh_token") else None,
+        installation_id=str(installation_id),
+        github_user_id=str(account.get("id", "")),
+        github_login=account.get("login", ""),
+        avatar_url=account.get("avatar_url"),
+        encrypted_access_token=encrypt(token_data["token"]),
+        encrypted_refresh_token=None,
         token_expires_at=expires_at,
-        scopes=(tokens.get("scope") or "").split(",") if tokens.get("scope") else [],
+        scopes=list((installation.get("permissions") or {}).keys()) or None,
         is_active=True,
         connected_by_user_id=connected_by,
     ))
@@ -179,6 +186,7 @@ async def github_status(
         "avatarUrl": connection.avatar_url,
         "scopes": connection.scopes or [],
         "connectedAt": connection.created_at.isoformat(),
+        "needsReconnect": connection.installation_id is None,
     }
 
 
@@ -216,7 +224,7 @@ async def github_repos(
     if not connection:
         raise HTTPException(status_code=404, detail="No active GitHub connection found")
 
-    client = GithubClient(decrypt(connection.encrypted_access_token))
+    client = GithubClient(await _get_valid_access_token(connection, db))
     try:
         repos = await client.list_repos(page=page, per_page=per_page)
     except httpx.HTTPStatusError as exc:

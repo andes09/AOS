@@ -74,7 +74,10 @@ export function createOnboardingApi(getToken: GetToken, apiUrl: string = DEFAULT
         body: JSON.stringify({ source }),
       }),
     completeOnboarding: () =>
-      request<{ completedAt: string }>('/api/onboarding/v2/complete', { method: 'POST' }),
+      request<{ completedAt: string; projectId: string | null }>(
+        '/api/onboarding/v2/complete',
+        { method: 'POST' },
+      ),
 
     /** Self-heal for direct navigation before the org row exists (409 org_not_provisioned). */
     provisionOrganization: () => request<unknown>('/api/organizations', { method: 'POST' }),

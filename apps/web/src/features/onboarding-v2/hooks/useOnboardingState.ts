@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
+import { PROJECTS_KEY } from '../../projects/hooks/useProjects'
 import { OnboardingApiError } from '../api'
 import type { OnboardingState, PlanSource, ProjectPurpose } from '../types'
 import { useOnboardingApi } from './useOnboardingApi'
@@ -57,7 +58,12 @@ export function useOnboardingState() {
 
   const complete = useMutation({
     mutationFn: () => api.completeOnboarding(),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ONBOARDING_STATE_KEY }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ONBOARDING_STATE_KEY })
+      // Onboarding may have just created the org's first project — the
+      // project hub's list would otherwise still read as empty.
+      queryClient.invalidateQueries({ queryKey: PROJECTS_KEY })
+    },
   })
 
   return {

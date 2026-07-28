@@ -39,7 +39,7 @@ from src.models.onboarding_session import OnboardingMessage, OnboardingSession
 from src.models.organization import Organization
 from src.models.project import Project
 from src.models.team import Team
-from src.services import idea_interview
+from src.services import idea_interview, roadmap_generator
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +96,15 @@ async def _get_session(org: Organization, db: AsyncSession) -> OnboardingSession
         .order_by(OnboardingSession.created_at.asc())
         .limit(1)
     )
+
+
+async def _resolve_team(org: Organization, db: AsyncSession) -> Team:
+    team = await db.scalar(
+        select(Team).where(Team.organization_id == org.id).order_by(Team.created_at)
+    )
+    if team is None:
+        raise HTTPException(status_code=409, detail="no_team_for_org")
+    return team
 
 
 async def _get_or_create_session(
@@ -576,15 +585,50 @@ async def complete_onboarding(
     db: AsyncSession = Depends(get_db),
 ):
     """Finish onboarding. Only the profile is required — the flow must never
-    brick on a GitHub outage or an LLM misjudging when the brief is done."""
+    brick on a GitHub outage or an LLM misjudging when the brief is done.
+
+    Also drafts the first roadmap for the chat path here (the import path
+    already created its Project synchronously in /import/apply) so the
+    frontend can land the user straight on their new plan instead of the
+    empty project hub. Generation is best-effort: same "never brick" rule
+    applies, so a failure still completes onboarding and just leaves
+    `projectId` null — the project hub's own "create new project" flow is
+    the fallback in that case.
+    """
     org = await _get_org(clerk_org_id, db)
     developer = await _get_developer(org, user_id, db)
     if not _profile_complete(developer):
         raise HTTPException(status_code=409, detail="profile_incomplete")
+
+    session = await _get_session(org, db)
+    project = None
+    if session is not None:
+        project = await db.scalar(
+            select(Project).where(Project.onboarding_session_id == session.id)
+        )
+        if project is None and session.status == "completed" and session.project_brief:
+            try:
+                team = await _resolve_team(org, db)
+                api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
+                project = await roadmap_generator.generate_roadmap(session, team, api_key, db)
+            except Exception:
+                logger.exception(
+                    "[onboarding] roadmap generation failed for session %s", session.id
+                )
+                # Rollback expires every object already loaded on `db` (including
+                # `org`) -- re-fetch it before touching it again below.
+                await db.rollback()
+                org = await _get_org(clerk_org_id, db)
+                project = None
+
     if org.onboarding_completed_at is None:
         org.onboarding_completed_at = datetime.utcnow()
         await db.commit()
-    return {"completedAt": org.onboarding_completed_at.isoformat()}
+
+    return {
+        "completedAt": org.onboarding_completed_at.isoformat(),
+        "projectId": str(project.id) if project else None,
+    }
 
 
 class RepoRequest(BaseModel):

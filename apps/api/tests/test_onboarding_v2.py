@@ -1,4 +1,6 @@
+import json
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -42,6 +44,66 @@ def _client():
 
 
 AUTH = {"Authorization": "Bearer tok"}
+
+
+class _FakeToolCall:
+    def __init__(self, name, payload):
+        self.function = SimpleNamespace(name=name, arguments=json.dumps(payload))
+
+
+def _fake_groq(payload=None, tool_name="build_roadmap", tool_calls=None):
+    """Mirrors test_projects.py's fake Groq client (same forced-tool shape
+    roadmap_generator.generate_roadmap expects)."""
+    if tool_calls is None:
+        tool_calls = [_FakeToolCall(tool_name, payload)] if payload is not None else []
+    message = SimpleNamespace(tool_calls=tool_calls or None)
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=message)],
+        usage=SimpleNamespace(prompt_tokens=100, completion_tokens=200),
+    )
+    fake_completions = SimpleNamespace(create=AsyncMock(return_value=response))
+    return SimpleNamespace(chat=SimpleNamespace(completions=fake_completions))
+
+
+def _patch_groq(fake):
+    return patch("src.services.roadmap_generator.AsyncOpenAI", return_value=fake)
+
+
+def _patch_api_key():
+    return patch(
+        "src.services.idea_interview.resolve_api_key", new=AsyncMock(return_value="sk-test")
+    )
+
+
+async def _complete_profile_and_chat(org_id, team_id, brief):
+    """Fast-forwards past github/profile/purpose/plan-source and stamps the
+    idea-chat session as completed with `brief`, bypassing the real SSE chat
+    turns — mirrors how test_projects.py sets up its own generate tests."""
+    from src.database import get_db
+    from src.models.onboarding_session import OnboardingSession
+
+    with _patch_clerk():
+        async with _client() as client:
+            await client.post("/api/onboarding/v2/github/skip", headers=AUTH)
+            await client.put(
+                "/api/onboarding/v2/profile", json={"name": "Ada", "phone": "+15551234567"},
+                headers=AUTH,
+            )
+            await client.put("/api/onboarding/v2/purpose", json={"purpose": "startup"}, headers=AUTH)
+            await client.put(
+                "/api/onboarding/v2/plan-source", json={"source": "chat"}, headers=AUTH
+            )
+
+    async for db in app.dependency_overrides[get_db]():
+        from sqlalchemy import select
+
+        session = await db.scalar(
+            select(OnboardingSession).where(OnboardingSession.organization_id == org_id)
+        )
+        session.project_brief = brief
+        session.status = "completed"
+        await db.commit()
+        return session.id
 
 
 @pytest.mark.asyncio
@@ -506,3 +568,72 @@ async def test_repo_select_required_when_github_connected(tmp_db):
     assert body["repo"] == {"selected": None, "skipped": False, "available": True}
     repo_step = next(s for s in body["steps"] if s["id"] == "repo_select")
     assert repo_step["status"] != "complete"
+
+
+@pytest.mark.asyncio
+async def test_complete_generates_and_returns_project_for_chat_path(tmp_db):
+    """The chat path never generates a roadmap on its own (unlike the import
+    path, which creates the Project synchronously in /import/apply) — Finish
+    must draft it now so the frontend can land the user on their new plan
+    instead of the empty project hub."""
+    org_id, team_id = await _seed_org_and_team()
+    await _complete_profile_and_chat(
+        org_id, team_id, {"projectName": "New Co", "problemStatement": "Something real"},
+    )
+
+    roadmap_payload = {
+        "projectName": "New Co",
+        "milestones": [{"title": "Kickoff", "tasks": [{"title": "Set up repo", "dayOffset": 0}]}],
+    }
+    fake_groq = _fake_groq(roadmap_payload)
+
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake_groq):
+        async with _client() as client:
+            resp = await client.post("/api/onboarding/v2/complete", headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["projectId"] is not None
+
+    from src.database import get_db
+    from src.models.project import Project
+    from sqlalchemy import select
+
+    async for db in app.dependency_overrides[get_db]():
+        project = await db.scalar(
+            select(Project).where(Project.id == uuid.UUID(body["projectId"]))
+        )
+        assert project is not None
+        assert project.name == "New Co"
+        break
+
+    # Idempotent: calling complete again doesn't regenerate the roadmap.
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake_groq):
+        async with _client() as client:
+            resp2 = await client.post("/api/onboarding/v2/complete", headers=AUTH)
+    assert resp2.json()["projectId"] == body["projectId"]
+    assert fake_groq.chat.completions.create.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_complete_still_finishes_onboarding_when_generation_fails(tmp_db):
+    """Roadmap generation is best-effort — the endpoint's own "never brick"
+    rule applies here too, so a failed generation still completes onboarding
+    and just leaves projectId null."""
+    org_id, team_id = await _seed_org_and_team()
+    await _complete_profile_and_chat(org_id, team_id, {"projectName": "New Co"})
+
+    # No tool_calls at all -> generate_roadmap raises RuntimeError internally.
+    fake_groq = _fake_groq(tool_calls=[])
+
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake_groq):
+        async with _client() as client:
+            resp = await client.post("/api/onboarding/v2/complete", headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["projectId"] is None
+    assert body["completedAt"] is not None
+
+    with _patch_clerk():
+        async with _client() as client:
+            state = (await client.get("/api/onboarding/v2/state", headers=AUTH)).json()
+    assert state["onboardingCompleted"] is True

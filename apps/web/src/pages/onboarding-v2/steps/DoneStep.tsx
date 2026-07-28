@@ -1,12 +1,14 @@
 /**
  * Step 5 — done. `complete()` only needs the profile step, so it's always safe
- * to call here; on success we navigate into the app.
+ * to call here; on success we navigate straight to the plan onboarding just
+ * drafted. If generation didn't produce a project (best-effort — see
+ * POST /complete), fall back to the project hub, which can create one.
  */
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Btn, C, Spinner } from '../theme'
 
-export function DoneStep({ onFinish }: { onFinish: () => Promise<unknown> }) {
+export function DoneStep({ onFinish }: { onFinish: () => Promise<{ projectId: string | null }> }) {
   const navigate = useNavigate()
   const [finishing, setFinishing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -15,8 +17,8 @@ export function DoneStep({ onFinish }: { onFinish: () => Promise<unknown> }) {
     setFinishing(true)
     setError(null)
     try {
-      await onFinish()
-      navigate('/app')
+      const { projectId } = await onFinish()
+      navigate(projectId ? `/app/projects/${projectId}` : '/app')
     } catch (err) {
       setFinishing(false)
       setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')

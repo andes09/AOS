@@ -234,7 +234,15 @@ async def adjust_roadmap(
             task_short_ids = [next(short_ids) for _ in m["tasks"]]
             _add_todo_tasks(milestone.id, m["tasks"], today, 0, task_short_ids, db)
 
-    record_generation_cost("roadmap_adjust", usage, model=_MODEL, session_id=str(project.id))
+    await record_generation_cost(
+        "roadmap_adjust",
+        usage,
+        provider="groq",
+        org_id=org.id,
+        team_id=project.team_id,
+        model=_MODEL,
+        session_id=str(project.id),
+    )
     await db.commit()
     await db.refresh(project)
     return project
@@ -360,7 +368,15 @@ async def extend_day(
             )
         )
 
-    record_generation_cost("roadmap_extend_day", usage, model=_MODEL, session_id=str(project.id))
+    await record_generation_cost(
+        "roadmap_extend_day",
+        usage,
+        provider="groq",
+        org_id=org.id,
+        team_id=project.team_id,
+        model=_MODEL,
+        session_id=str(project.id),
+    )
     await db.commit()
     await db.refresh(project)
     return project

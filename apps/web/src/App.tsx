@@ -2,11 +2,13 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { SignedIn, SignedOut, RedirectToSignIn, SignIn } from '@clerk/clerk-react'
 import { DashboardLayout } from './layouts/DashboardLayout'
 import { OrgProvider } from './components/OrgProvider'
+import { RequireFeature } from './components/RequireFeature'
 import { PlannerPage } from './pages/planner/PlannerPage'
 import { ProjectHubPage } from './pages/projects/ProjectHubPage'
 import { ProjectCreatePage } from './pages/projects/ProjectCreatePage'
 import { OnboardingV2Page } from './pages/OnboardingV2Page'
 import { InviteAcceptPage } from './pages/InviteAcceptPage'
+import { MasterDashboardPage } from './pages/MasterDashboardPage'
 
 function SignInPage() {
   return <SignIn routing="path" path="/sign-in" />
@@ -47,6 +49,26 @@ export default function App() {
         <Route path="projects/new" element={<ProjectCreatePage />} />
         <Route path="projects/:projectId" element={<PlannerPage />} />
       </Route>
+      {/* Master Dashboard — a cross-org, founder-only view (see
+          docs/plans/2026-07-20-master-dashboard.md). Standalone top-level
+          route: no OrgProvider (it has no org context) and no sidebar.
+          Gated client-side by experimental.master_dashboard so the route
+          doesn't even render when the flag is off — the real access
+          boundary is the backend's require_platform_admin allowlist. */}
+      <Route path="/master" element={
+        testMode ? <MasterDashboardPage /> : (
+          <>
+            <SignedIn>
+              <RequireFeature flag="experimental.master_dashboard">
+                <MasterDashboardPage />
+              </RequireFeature>
+            </SignedIn>
+            <SignedOut>
+              <RedirectToSignIn />
+            </SignedOut>
+          </>
+        )
+      } />
       <Route path="*" element={<Navigate to="/app" replace />} />
     </Routes>
   )

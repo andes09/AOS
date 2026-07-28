@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5174"
     api_url: str = "http://localhost:8000"
 
+    # Comma-separated Clerk user IDs allowed to hit the cross-org platform
+    # admin dashboard (src/auth_platform.py). Empty by default — deny-all
+    # until configured. Mirrors the allowed_origins pattern below.
+    platform_admin_user_ids: str = ""
+
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
@@ -72,6 +77,10 @@ class Settings(BaseSettings):
                 if o not in origins:
                     origins.append(o)
         return origins
+
+    @property
+    def platform_admin_ids(self) -> set[str]:
+        return {u.strip() for u in self.platform_admin_user_ids.split(",") if u.strip()}
 
     @property
     def feature_flags(self) -> dict[str, bool]:

@@ -1,5 +1,105 @@
 # Master Dashboard for the Omada Pivot
 
+## Implementation Notes (built 2026-07-28)
+
+Built on `feature/master-dashboard`, stage 4 of 5. The doc below is kept
+as-written for historical context; this section documents where the actual
+build diverged from it, per the reconciliation decided before this stage
+started (and reinforced by stage 3 landing since).
+
+- **§6 "GitHub commit sync (Celery)" was NOT built.** Stage 3 (GitHub Task
+  Auto-Complete, migration `0038`) already built `github_activity_events` —
+  an append-only per-event log (commits + PR opens/merges/closes) fed by a
+  GitHub App webhook plus a reconciliation sweep — which is a strict
+  superset of what this doc's `github_commit_daily` aggregate table would
+  have provided. No `github_commit_daily` table, no `commit_sync.py`, no new
+  `list_commits`/`list_pull_requests` Celery beat job — stage 3 already added
+  those client methods for its own reconciliation sweep and they're reused
+  as-is. `GET /api/platform-admin/commits` and the `/orgs` per-org commit
+  rollup read directly from `github_activity_events`.
+  - One correction beyond "read from the events table instead of a new
+    aggregate": the doc's own instruction to filter on `event_type='commit'`
+    doesn't match reality — `src/models/github_activity_event.py`'s real
+    `event_type` values are `"push"` / `"pr_opened"` / `"pr_merged"` /
+    `"pr_closed"` (one row per commit is recorded with `event_type="push"`,
+    `external_id=<sha>` — see `src/integrations/github/events.py`'s
+    `_process_push_event`). The dashboard queries filter on
+    `event_type == "push"`, not `"commit"`.
+  - Day-bucketing uses Python-side grouping (fetch rows in range, bucket by
+    `occurred_at.date()`) rather than a `date_trunc('day', ...)` SQL clause —
+    `date_trunc` is Postgres-only and this repo's test suite runs the same
+    schema against an in-memory sqlite DB (`tests/conftest.py`'s `tmp_db`
+    fixture), so a Postgres-only construct would break every test touching
+    these endpoints. Fine at this table's current scale; worth revisiting
+    with a dialect-portable `func.date(...)` or real `date_trunc` if the
+    per-query row count ever gets large.
+- **Only `ai_usage_events` got a migration** (`alembic/versions/
+  0039_ai_usage_events.py`, `down_revision='0038'` — the real head at build
+  time, not the doc's `0031`/`0032`/`0033`, which reflect a since-diverged
+  migration history). No second migration for `github_commit_daily`, per the
+  point above.
+- **`record_generation_cost` has 7 call sites, not 5, and two of the doc's
+  five no longer exist.** `sprint_brain.py` and `scope_cop.py` were deleted
+  in an unrelated legacy-Jira cleanup (migration
+  `0031_drop_legacy_jira_schema...`) before this stage started — confirmed
+  via `grep -rn record_generation_cost apps/api/src` turning up nothing for
+  either. The real current call sites, all updated to the new async/
+  provider-aware signature: `services/idea_interview.py` (1, `provider=
+  "groq"`), `services/roadmap_generator.py` (3, `provider="anthropic"`),
+  `services/roadmap_adjuster.py` (2, `provider="groq"` — added by an
+  unrelated same-day commit before Stage 1 started, not in the original
+  doc), `routers/artifact_import.py` (1, `provider="groq"`, added in Stage
+  2, also not in the original doc).
+- **The cost bug is "wrong pricing table for non-Anthropic calls," not a
+  literal "$0."** By build time, `cost_tracker.compute_cost()` already read
+  both Anthropic-shaped (`input_tokens`/`output_tokens`) and Groq-shaped
+  (`prompt_tokens`/`completion_tokens`) attribute names generically in one
+  function — so it didn't compute `$0` for Groq. The real bug: every call,
+  Anthropic or Groq, was priced against the same single `_PER_MTOK` table
+  (Claude Sonnet rates), so Groq usage from `idea_interview.py` was priced
+  as if it were Anthropic Sonnet. The provider-aware rewrite (`_PER_MTOK` +
+  a new `_GROQ_PER_MTOK`, `compute_cost(usages, provider=...)`) fixes this
+  correctly-described-differently bug. Groq pricing for
+  `llama-3.3-70b-versatile` was verified live at https://groq.com/pricing on
+  2026-07-28: **$0.59 / MTok input, $0.79 / MTok output** (no cache-token
+  pricing — Groq's OpenAI-compatible usage objects don't expose cache
+  fields). Not a placeholder.
+- **New feature flag: `experimental.master_dashboard`** (nested under the
+  existing `experimental` block, not top-level — a requirement added after
+  this doc was written, applying to every remaining stage of this build).
+  `true` in `config/features/local.yaml` and `test.yaml`, `false` in
+  `production.yaml`. Gates the entire `platform_admin.py` router via a
+  router-level `Depends`, 404 while off — same idiom as
+  `artifact_import.py`/`github_webhooks.py`. This is in *addition* to
+  `require_platform_admin` (the doc's Clerk-allowlist check), which remains
+  the real security boundary; the flag is just an extra kill switch, same
+  posture as the other stages. The frontend's `/master` route reads the flag
+  via the existing `GET /api/features` endpoint (`useFeatureFlags`/
+  `useFeature` in `featureFlags.ts`) through a new `<RequireFeature
+  flag="experimental.master_dashboard">` wrapper — the doc didn't anticipate
+  a client-side flag gate at all, since the flag itself postdates the doc.
+- **`record_generation_cost` persistence uses its own session correctly**,
+  per the doc's isolation requirement (§5) — `src.database.AsyncSessionLocal`
+  imported directly, never the caller's session — and is verified with an
+  explicit test (`test_broken_persistence_does_not_raise_or_lose_the_
+  breakdown` in `tests/test_cost_tracker.py`) that breaks the internal
+  `_persist()` call and asserts the function still returns a valid
+  `CostBreakdown` and never raises.
+- **Minor model-shape fix needed to make `context` JSONB portable**: the
+  doc's `context (JSONB, catch-all...)` column was initially modeled with
+  `sqlalchemy.dialects.postgresql.JSONB` directly, which doesn't compile
+  against sqlite and broke every test touching `Base.metadata.create_all`
+  (this repo's whole test suite shares one metadata). Fixed to the same
+  `JSON().with_variant(JSONB(), "postgresql")` idiom already used elsewhere
+  in this codebase (e.g. `models/developer.py`'s `skill_ratings`).
+- No `components/exec/` directory or `PlanQualityChart.tsx` exists anymore
+  to mirror, as flagged going in — the three new charts
+  (`SignupsChart.tsx`, `CostChart.tsx`, `CommitsChart.tsx`) were built
+  directly against `recharts` (still a dependency), reusing this repo's
+  existing light/dark hex pairs from `styles/tokens.css` (accent/success/
+  warning) via a small `useChartColors()` hook, rather than inventing a new
+  palette.
+
 ## Context
 
 Since the Omada pivot to project-roadmap AI, there's no single place to see how the business is doing across all customers/orgs. The user wants an internal, founder-only "master dashboard" tracking three metric families to start: **total users**, **AI cost** (real Anthropic + Groq spend), and **GitHub commit activity** — plus the natural sub-metrics that come with each (signups over time, cost by provider, per-org rollups).

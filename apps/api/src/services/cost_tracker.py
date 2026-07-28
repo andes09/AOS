@@ -1,30 +1,39 @@
 """
-AI cost tracking — computes the USD cost of a Claude generation from token
-usage and emits a single structured log line per generation.
+AI cost tracking — computes the USD cost of a generation from token usage,
+emits a structured log line, and persists one row per generation to the
+`ai_usage_events` table (see src/models/ai_usage_event.py) for the platform
+admin dashboard.
 
 Disable via the `cost_tracking` feature flag (config/features/{env}.yaml).
-When the flag is off, record_generation_cost() is a no-op and nothing is logged.
-The recorder is also exception-safe: cost tracking must never break a
-generation, so any failure is swallowed with a warning.
+When the flag is off, record_generation_cost() is a no-op and nothing is
+logged or persisted.
 
-Pricing reflects Claude Sonnet 4.6 list prices (USD per million tokens).
-If the model in sprint_brain changes, update _PER_MTOK and verify against
-https://www.anthropic.com/pricing.
+Pricing is provider-aware: Anthropic calls (input_tokens/output_tokens,
+cache_creation_input_tokens/cache_read_input_tokens) are priced against
+_PER_MTOK (Claude Sonnet 4.6 list prices); Groq calls (prompt_tokens/
+completion_tokens, no cache fields) are priced against _GROQ_PER_MTOK
+(Llama 3.3 70B Versatile list prices, verified at https://groq.com/pricing
+on 2026-07-28 — $0.59 / $0.79 per MTok in/out). If either model changes,
+update the relevant table and re-verify.
+
+The recorder is exception-safe in two independent ways:
+1. The whole function never raises — any failure (bad usage object, DB down,
+   etc.) is swallowed with a warning. Cost tracking must never break the
+   generation it's attached to.
+2. DB persistence runs in its OWN short-lived AsyncSession (never the
+   caller's), so a failed insert can't poison or roll back the caller's own
+   transaction — it can only fail to log a cost row.
 """
 
 from __future__ import annotations
 
-import csv
 import logging
-import os
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Iterable
 
 from src.config import settings
-
-_CSV_PATH = Path(__file__).resolve().parent.parent.parent / "sprint_cost_log.csv"
+from src.database import AsyncSessionLocal
+from src.models.ai_usage_event import AIUsageEvent
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +46,20 @@ _PER_MTOK = {
     "output": 15.00,
     "cache_write": 3.75,
     "cache_read": 0.30,
+}
+
+# USD per 1,000,000 tokens — Llama 3.3 70B Versatile (Groq). No cache
+# pricing: Groq's OpenAI-compatible usage objects don't expose cache fields.
+_GROQ_PER_MTOK = {
+    "input": 0.59,
+    "output": 0.79,
+    "cache_write": 0.0,
+    "cache_read": 0.0,
+}
+
+_PRICING_BY_PROVIDER = {
+    "anthropic": _PER_MTOK,
+    "groq": _GROQ_PER_MTOK,
 }
 
 
@@ -57,13 +80,16 @@ def _as_int(value) -> int:
         return 0
 
 
-def compute_cost(usages: Iterable) -> CostBreakdown:
+def compute_cost(usages: Iterable, provider: str = "anthropic") -> CostBreakdown:
     """Sum token counts across one or more `usage` objects and price them.
 
     Accepts both Anthropic's shape (`input_tokens`/`output_tokens`) and
-    OpenAI/Groq's (`prompt_tokens`/`completion_tokens`) — roadmap generation
-    and adjustment run on Groq, sprint_brain still runs on Anthropic.
+    OpenAI/Groq's (`prompt_tokens`/`completion_tokens`). `provider` selects
+    the pricing table — Anthropic and Groq have different rates, and Groq
+    calls have no cache tokens.
     """
+    per_mtok = _PRICING_BY_PROVIDER.get(provider, _PER_MTOK)
+
     input_t = output_t = cache_w = cache_r = 0
     calls = 0
     for u in usages:
@@ -76,10 +102,10 @@ def compute_cost(usages: Iterable) -> CostBreakdown:
         cache_r += _as_int(getattr(u, "cache_read_input_tokens", 0))
 
     cost = (
-        input_t * _PER_MTOK["input"]
-        + output_t * _PER_MTOK["output"]
-        + cache_w * _PER_MTOK["cache_write"]
-        + cache_r * _PER_MTOK["cache_read"]
+        input_t * per_mtok["input"]
+        + output_t * per_mtok["output"]
+        + cache_w * per_mtok["cache_write"]
+        + cache_r * per_mtok["cache_read"]
     ) / 1_000_000
 
     return CostBreakdown(
@@ -100,74 +126,97 @@ def is_enabled() -> bool:
         return False
 
 
-_CSV_HEADERS = [
-    "date", "model", "ticket_count", "total_tokens", "input_tokens", "output_tokens",
-    "cost_per_sprint_generation_usd", "price_per_ticket_usd",
-]
+async def _persist(
+    *,
+    operation: str,
+    provider: str,
+    org_id,
+    team_id,
+    breakdown: CostBreakdown,
+    model: str | None,
+    context: dict,
+) -> None:
+    """Insert one ai_usage_events row on its own session/transaction — never
+    the caller's. Allowed to raise; `record_generation_cost` is what
+    guarantees the swallow, so this stays independently testable."""
+    async with AsyncSessionLocal() as db:
+        db.add(
+            AIUsageEvent(
+                organization_id=org_id,
+                team_id=team_id,
+                provider=provider,
+                operation=operation,
+                model=model,
+                input_tokens=breakdown.input_tokens,
+                output_tokens=breakdown.output_tokens,
+                cache_write_tokens=breakdown.cache_write_tokens,
+                cache_read_tokens=breakdown.cache_read_tokens,
+                call_count=breakdown.call_count,
+                cost_usd=breakdown.cost_usd,
+                context=context or None,
+            )
+        )
+        await db.commit()
 
 
-def _append_csv_row(breakdown: CostBreakdown, model: str, assigned_count: int) -> None:
-    total_tokens = breakdown.input_tokens + breakdown.output_tokens
-    price_per_ticket = breakdown.cost_usd / assigned_count if assigned_count else 0.0
-    row = {
-        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        "model": model,
-        "ticket_count": assigned_count,
-        "total_tokens": total_tokens,
-        "input_tokens": breakdown.input_tokens,
-        "output_tokens": breakdown.output_tokens,
-        "cost_per_sprint_generation_usd": f"${breakdown.cost_usd:.2f}",
-        "price_per_ticket_usd": f"${price_per_ticket:.2f}",
-    }
-    write_header = not _CSV_PATH.exists() or os.path.getsize(_CSV_PATH) == 0
-    with open(_CSV_PATH, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=_CSV_HEADERS)
-        if write_header:
-            writer.writeheader()
-        writer.writerow(row)
-
-
-def record_generation_cost(
+async def record_generation_cost(
     operation: str,
     *usages,
+    provider: str = "anthropic",
+    org_id=None,
+    team_id=None,
     **context,
 ) -> CostBreakdown | None:
     """
-    Compute and log the cost of a single generation.
+    Compute, log, and persist the cost of a single generation.
 
-    `usages` are the `.usage` objects from each Claude response that made up the
+    `usages` are the `.usage` objects from each response that made up the
     generation (e.g. the complexity call + the assignment call). `context` is
-    extra structured metadata to attach (team_id, ticket_count, ...).
+    extra structured metadata to attach (session_id, milestone_id, ...).
+    `org_id`/`team_id` identify the ai_usage_events row for the dashboard's
+    per-org rollups.
 
-    Returns the CostBreakdown, or None when tracking is disabled or fails.
+    Returns the CostBreakdown, or None when tracking is disabled or the cost
+    computation itself fails. A failed *persistence* step does NOT affect the
+    return value — only a warning is logged, per this module's isolation
+    contract (see module docstring).
     """
     if not is_enabled():
         return None
     try:
-        breakdown = compute_cost(usages)
-        logger.info(
-            "ai_cost operation=%s cost_usd=%.6f input_tokens=%d output_tokens=%d "
-            "cache_read_tokens=%d cache_write_tokens=%d calls=%d%s",
-            operation,
-            breakdown.cost_usd,
-            breakdown.input_tokens,
-            breakdown.output_tokens,
-            breakdown.cache_read_tokens,
-            breakdown.cache_write_tokens,
-            breakdown.call_count,
-            "".join(f" {k}={v}" for k, v in context.items()),
-            extra={"ai_cost": {"operation": operation, **asdict(breakdown), **context}},
-        )
-        if operation in ("sprint_plan", "scope_cop"):
-            try:
-                _append_csv_row(
-                    breakdown,
-                    model=context.get("model", "unknown"),
-                    assigned_count=context.get("assigned_count", 0),
-                )
-            except Exception:
-                logger.warning("cost_tracker._append_csv_row failed", exc_info=True)
-        return breakdown
+        breakdown = compute_cost(usages, provider=provider)
     except Exception:
         logger.warning("cost_tracker.record_generation_cost failed", exc_info=True)
         return None
+
+    logger.info(
+        "ai_cost operation=%s provider=%s cost_usd=%.6f input_tokens=%d output_tokens=%d "
+        "cache_read_tokens=%d cache_write_tokens=%d calls=%d%s",
+        operation,
+        provider,
+        breakdown.cost_usd,
+        breakdown.input_tokens,
+        breakdown.output_tokens,
+        breakdown.cache_read_tokens,
+        breakdown.cache_write_tokens,
+        breakdown.call_count,
+        "".join(f" {k}={v}" for k, v in context.items()),
+    )
+
+    if org_id is not None:
+        try:
+            await _persist(
+                operation=operation,
+                provider=provider,
+                org_id=org_id,
+                team_id=team_id,
+                breakdown=breakdown,
+                model=context.get("model"),
+                context=context,
+            )
+        except Exception:
+            logger.warning("cost_tracker: failed to persist ai_usage_event", exc_info=True)
+    else:
+        logger.warning("cost_tracker: no org_id given for operation=%s, skipping persistence", operation)
+
+    return breakdown

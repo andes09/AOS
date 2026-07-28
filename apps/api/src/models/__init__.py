@@ -22,6 +22,7 @@ from src.models.project import Project
 from src.models.milestone import Milestone
 from src.models.task import Task, TaskStatus
 from src.models.github_activity_event import GithubActivityEvent
+from src.models.ai_usage_event import AIUsageEvent
 
 __all__ = [
     "Organization",
@@ -67,4 +68,5 @@ __all__ = [
     "Task",
     "TaskStatus",
     "GithubActivityEvent",
+    "AIUsageEvent",
 ]

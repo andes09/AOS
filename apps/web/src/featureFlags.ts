@@ -10,6 +10,9 @@ export type FeatureFlags = {
   roadmap_chat: boolean
   experimental: {
     enabled: boolean
+    import_artifacts?: boolean
+    github_autocomplete?: boolean
+    master_dashboard?: boolean
   }
 }
 

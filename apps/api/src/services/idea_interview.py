@@ -329,10 +329,12 @@ async def run_interview_turn(
         if session.completed_at is None:
             session.completed_at = datetime.utcnow()
 
-    record_generation_cost(
+    await record_generation_cost(
         "idea_interview",
         reply_usage,
         extract_usage,
+        provider="groq",
+        org_id=session.organization_id,
         model=_MODEL,
         session_id=str(session.id),
     )

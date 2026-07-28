@@ -221,8 +221,14 @@ async def generate_roadmap(
     if session.selected_github_repo_full_name:
         project.github_repo_full_name = session.selected_github_repo_full_name
 
-    record_generation_cost(
-        "roadmap_generate", usage, model=_MODEL, session_id=str(session.id)
+    await record_generation_cost(
+        "roadmap_generate",
+        usage,
+        provider="anthropic",
+        org_id=team.organization_id,
+        team_id=team.id,
+        model=_MODEL,
+        session_id=str(session.id),
     )
     await db.commit()
     await db.refresh(project)
@@ -262,8 +268,14 @@ async def regenerate_roadmap(
     org = await db.get(Organization, team.organization_id)
     await _persist_milestones(project, milestones, org, db)
 
-    record_generation_cost(
-        "roadmap_regenerate", usage, model=_MODEL, session_id=str(session.id)
+    await record_generation_cost(
+        "roadmap_regenerate",
+        usage,
+        provider="anthropic",
+        org_id=team.organization_id,
+        team_id=team.id,
+        model=_MODEL,
+        session_id=str(session.id),
     )
     await db.commit()
     await db.refresh(project)
@@ -302,18 +314,24 @@ async def regenerate_milestone(
     await db.execute(delete(Task).where(Task.milestone_id == milestone.id))
     milestone.title = new["title"]
     milestone.description = new["description"]
-    org = await db.scalar(
-        select(Organization)
-        .join(Team, Team.organization_id == Organization.id)
-        .join(Project, Project.team_id == Team.id)
-        .where(Project.id == milestone.project_id)
-    )
+    org_row = (
+        await db.execute(
+            select(Organization, Team.id)
+            .join(Team, Team.organization_id == Organization.id)
+            .join(Project, Project.team_id == Team.id)
+            .where(Project.id == milestone.project_id)
+        )
+    ).first()
+    org, milestone_team_id = org_row
     short_ids = await allocate_short_ids(org, len(new["tasks"]), db)
     _add_tasks(milestone.id, new["tasks"], date.today(), short_ids, db)
 
-    record_generation_cost(
+    await record_generation_cost(
         "roadmap_regenerate_milestone",
         usage,
+        provider="anthropic",
+        org_id=org.id,
+        team_id=milestone_team_id,
         model=_MODEL,
         session_id=str(session.id),
         milestone_id=str(milestone.id),

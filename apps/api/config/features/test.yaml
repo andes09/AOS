@@ -10,3 +10,4 @@ features:
     enabled: true
     import_artifacts: true
     github_autocomplete: true
+    master_dashboard: true

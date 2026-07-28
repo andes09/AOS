@@ -229,8 +229,13 @@ async def analyze_import(
     session.project_brief = idea_interview.merge_brief(session.project_brief, data)
     session.import_analyzed_at = datetime.utcnow()
 
-    record_generation_cost(
-        "artifact_import_analyze", usage, model=settings.groq_model, session_id=str(session.id)
+    await record_generation_cost(
+        "artifact_import_analyze",
+        usage,
+        provider="groq",
+        org_id=org.id,
+        model=settings.groq_model,
+        session_id=str(session.id),
     )
     await db.commit()
 

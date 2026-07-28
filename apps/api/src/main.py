@@ -31,6 +31,7 @@ from src.routers.slack import slack_router
 from src.routers.features import router as features_router
 from src.routers.recalibration import router as recalibration_router
 from src.routers.github_webhooks import router as github_webhooks_router
+from src.routers.platform_admin import router as platform_admin_router
 
 app = FastAPI(
     title="Omada API",
@@ -87,6 +88,7 @@ app.include_router(slack_router, prefix="/api/teams")
 app.include_router(features_router)
 app.include_router(recalibration_router, prefix="/api/recalibration")
 app.include_router(github_webhooks_router)
+app.include_router(platform_admin_router)
 
 
 @app.get("/health")

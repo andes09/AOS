@@ -23,6 +23,9 @@ from src.models.milestone import Milestone
 from src.models.task import Task, TaskStatus
 from src.models.github_activity_event import GithubActivityEvent
 from src.models.ai_usage_event import AIUsageEvent
+from src.models.oauth_client import OAuthClient
+from src.models.oauth_authorization_code import OAuthAuthorizationCode
+from src.models.oauth_token import OAuthToken
 
 __all__ = [
     "Organization",
@@ -69,4 +72,7 @@ __all__ = [
     "TaskStatus",
     "GithubActivityEvent",
     "AIUsageEvent",
+    "OAuthClient",
+    "OAuthAuthorizationCode",
+    "OAuthToken",
 ]

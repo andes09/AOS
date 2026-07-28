@@ -15,7 +15,7 @@ def test_local_yaml_loads():
     assert flags["roadmap_chat"] is True
     assert flags["experimental"] == {
         "enabled": True, "import_artifacts": True, "github_autocomplete": True,
-        "master_dashboard": True,
+        "master_dashboard": True, "mcp_server": True,
     }
 
 
@@ -28,7 +28,7 @@ def test_production_yaml_loads():
     assert flags["roadmap_chat"] is False
     assert flags["experimental"] == {
         "enabled": False, "import_artifacts": False, "github_autocomplete": False,
-        "master_dashboard": False,
+        "master_dashboard": False, "mcp_server": False,
     }
 
 

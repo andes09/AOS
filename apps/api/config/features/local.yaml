@@ -11,3 +11,4 @@ features:
     import_artifacts: true
     github_autocomplete: true
     master_dashboard: true
+    mcp_server: true

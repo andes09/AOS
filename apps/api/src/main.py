@@ -32,6 +32,7 @@ from src.routers.features import router as features_router
 from src.routers.recalibration import router as recalibration_router
 from src.routers.github_webhooks import router as github_webhooks_router
 from src.routers.platform_admin import router as platform_admin_router
+from src.routers.mcp_oauth_consent import router as mcp_oauth_consent_router
 
 app = FastAPI(
     title="Omada API",
@@ -89,6 +90,7 @@ app.include_router(features_router)
 app.include_router(recalibration_router, prefix="/api/recalibration")
 app.include_router(github_webhooks_router)
 app.include_router(platform_admin_router)
+app.include_router(mcp_oauth_consent_router)
 
 
 @app.get("/health")
@@ -99,3 +101,45 @@ async def health():
 @app.get("/api/me")
 async def get_me(user_id: str = Depends(get_current_user_id)):
     return {"user_id": user_id}
+
+
+# ─── MCP server (Omada roadmap tools for Claude Code, Claude Desktop, ...) ──────
+# Mounted only when the experimental.mcp_server flag is on, and mounted LAST —
+# after every other route above, including /health and /api/me — because
+# FastAPI/Starlette match routes in registration order, and a Mount at "/"
+# matches any path that starts with "/", i.e. everything. Placed earlier in
+# the file, it would silently swallow every route defined after it (this was
+# caught by inspecting app.routes directly after a first attempt placed it
+# right after /health, which put it before /api/me — confirmed broken, moved
+# here). This catch-all only ever handles paths nothing more specific already
+# claimed (/authorize, /token, /register, /revoke, /.well-known/..., and the
+# streamable-http transport path). Mounting at "/" rather than "/mcp" is also
+# deliberate: FastMCP.streamable_http_app() already serves the MCP transport
+# internally at streamable_http_path (default "/mcp") and registers
+# .well-known/OAuth routes as root-relative — mounting the whole app at "/mcp"
+# would double-nest to "/mcp/mcp" and misplace .well-known (confirmed against
+# the real installed mcp==1.28.1, see docs/plans/2026-07-20-omada-mcp-server.md's
+# Implementation Notes).
+if settings.is_feature_enabled("experimental.mcp_server"):
+    from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
+    from mcp.server.fastmcp import FastMCP
+
+    from src.mcp_server.oauth_provider import OmadaOAuthProvider
+    from src.mcp_server.tools import register_tools
+
+    _mcp = FastMCP(
+        "omada",
+        auth_server_provider=OmadaOAuthProvider(),
+        auth=AuthSettings(
+            issuer_url=settings.api_url,
+            resource_server_url=f"{settings.api_url}/mcp",
+            client_registration_options=ClientRegistrationOptions(
+                enabled=True,
+                valid_scopes=["roadmap"],
+                default_scopes=["roadmap"],
+            ),
+            revocation_options=RevocationOptions(enabled=True),
+        ),
+    )
+    register_tools(_mcp)
+    app.mount("/", _mcp.streamable_http_app())

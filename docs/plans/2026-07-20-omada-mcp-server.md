@@ -1,5 +1,78 @@
 # Omada MCP Server
 
+## Implementation Notes (built 2026-07-28)
+
+Built on branch `feature/omada-mcp-server`, stage 5 (final) of the 5-stage build. This
+doc's design was followed closely; the corrections below were already decided during
+reconciliation, plus real findings from spiking against the actual installed SDK.
+
+- **9th tool, `list_projects`, added; `project_id` threaded through the 6 tools that
+  need it** (`get_roadmap`, `get_task`, `list_tasks`, `get_next_task`, `complete_task`,
+  `regenerate_milestone`). Resolution rule: omit `project_id` and it resolves to the
+  org's sole active project if there is exactly one; otherwise the tool errors with the
+  available project list (same shape `list_projects` returns).
+- **`roadmap_service.py` extracted against the CURRENT, already-project-scoped
+  `roadmap.py`/`project_common.py`** (Stage 1's Project Hub), not the pre-Project-Hub,
+  org-only version this doc's line numbers assume. `roadmap.py`'s route handlers are now
+  thin adapters over it — REST and MCP share one implementation. Verified behavior-
+  preserving by re-running `test_roadmap.py`/`test_projects.py`/`test_roadmap_planner.py`
+  unmodified immediately after the extraction, before building anything else on top.
+- **`mcp` pinned to exactly `1.28.1`**, not `>=1.28.1` — the SDK has since shipped a
+  `2.0.0` major version (confirmed on PyPI), and verifying this design's OAuth-provider
+  assumptions against an unreviewed 2.0.0 API would have been strictly riskier than
+  against the version the design was actually reasoned about.
+- **Spike findings against the real installed `mcp==1.28.1`** (resolves the doc's two
+  open risks):
+  - `AccessToken` extension: no subclassing needed at all — `mcp.shared.auth.AccessToken`
+    already has a builtin `claims: dict[str, Any] | None` field, and
+    `get_access_token()` (`mcp.server.auth.middleware.auth_context`) returns the exact
+    object `load_access_token` constructs, unchanged (confirmed by reading
+    `AuthenticatedUser.__init__`, which stores it as-is). `clerk_org_id`/`clerk_user_id`/
+    `developer_id` are carried in `claims`, resolved fresh from the DB on every tool call.
+  - `.well-known` placement: `FastMCP.streamable_http_app()` registers `/authorize`,
+    `/token`, `/register`, `/revoke`, and `.well-known/oauth-authorization-server` as
+    **root-relative** routes on the Starlette app it returns, alongside the MCP transport
+    itself (default `streamable_http_path="/mcp"`). The whole app is mounted at FastAPI
+    root `"/"`, not `/mcp` (double-nesting to `/mcp/mcp` and misplacing `.well-known`
+    would result otherwise) — and mounted **last**, after every other route including
+    `/health`/`/api/me`, since a root-path Starlette `Mount` matches any path and would
+    otherwise shadow everything registered after it. (Caught by inspecting `app.routes`
+    directly after a first attempt placed the mount earlier in `main.py`.)
+  - `client_secret`: the SDK's own `ClientAuthenticator` compares it via
+    `hmac.compare_digest` against a **plaintext** value returned by `get_client()` — no
+    hash-and-compare path exists. `oauth_clients.client_secret_enc` is therefore
+    reversibly Fernet-encrypted (`src/services/encryption.py`), not hashed, the opposite
+    direction from `oauth_tokens.token_hash` (which Omada only ever verifies, never
+    presents back). Low-stakes in practice: real MCP clients register as public PKCE
+    clients (`token_endpoint_auth_method="none"`) with no secret at all.
+- **`experimental.mcp_server` feature flag**, not the doc's plain `mcp_server` — nested
+  under the existing `experimental` block (same pattern as every prior stage), gating
+  both the FastMCP mount in `main.py` and the `/api/mcp/oauth/consent` router. The
+  frontend route (`/mcp/authorize`) is gated the same way `/master` is (Stage 4):
+  client-side via `RequireFeature`, with the backend's flag check as the real boundary.
+- **A third instance of the `SAEnum(native_enum=False)` enum-reload footgun** (previously
+  found on `Task.status`/`Project.status`) surfaced here on `Developer.app_role`:
+  `auth_roles.py`'s new `role_at_least()` predicate is called both by `require_role`
+  (via `get_current_app_role`, which already normalizes) and directly by
+  `regenerate_milestone`'s role gate with a freshly-loaded `Developer.app_role` — which
+  reloads as the `AppRole` enum member, not its string value, and silently failed the
+  `ROLE_HIERARCHY` dict lookup. Fixed by normalizing inside `role_at_least()` itself, so
+  it's safe regardless of which shape a caller hands in. Also fixed
+  `roadmap_service.task_json()`'s `status` field the same way (`_status_str()`, already
+  defined in that file for this exact purpose but not applied to that line) — REST
+  responses got away with the raw enum member because FastAPI's `jsonable_encoder`
+  auto-unwraps it, but MCP tool results are plain dicts with no such encoder guaranteed
+  downstream.
+- **Test DB session gap for tools/OAuth provider**: `tests/conftest.py`'s `tmp_db`
+  fixture only overrides FastAPI's `Depends(get_db)` — but `oauth_provider.py`/
+  `tools.py` call `src.database.db_session()` directly (never through FastAPI DI, since
+  MCP tool functions aren't request handlers), which resolves against
+  `src.database.AsyncSessionLocal` and would otherwise hit the real, unconfigured
+  production engine in tests. Solved with a dedicated `mcp_db` fixture (mirrors Stage 4's
+  `test_cost_tracker.py::cost_db` fixture) that patches `AsyncSessionLocal` to the same
+  in-memory sqlite engine `tmp_db` uses, so data seeded through either path is visible to
+  both.
+
 ## Context
 
 Omada is pivoting toward being the AI project manager for a team's roadmap (`Organization` → `Team` → `Project` → `Milestone` → `Task`, built via `apps/api/src/routers/roadmap.py`). Right now the only way to read or update that roadmap is the web app. The ask here is to let users **connect their own coding agents (Claude Code, Claude Desktop, Cursor, etc.) directly to their Omada roadmap** via MCP — so an agent can check what it should work on next, and report back when it's done, without a human relaying that through the UI. This is also the natural counterpart to the in-flight (uncommitted) GitHub auto-complete plan (`docs/plans/2026-07-20-github-task-autocomplete.md`): that plan closes the loop from *commits → task status*; this one closes the loop from *agent → task status* directly.

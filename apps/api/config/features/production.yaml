@@ -11,3 +11,4 @@ features:
     import_artifacts: false
     github_autocomplete: false
     master_dashboard: false
+    mcp_server: false

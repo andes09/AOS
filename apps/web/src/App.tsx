@@ -9,6 +9,7 @@ import { ProjectCreatePage } from './pages/projects/ProjectCreatePage'
 import { OnboardingV2Page } from './pages/OnboardingV2Page'
 import { InviteAcceptPage } from './pages/InviteAcceptPage'
 import { MasterDashboardPage } from './pages/MasterDashboardPage'
+import { McpAuthorizePage } from './pages/McpAuthorizePage'
 
 function SignInPage() {
   return <SignIn routing="path" path="/sign-in" />
@@ -61,6 +62,26 @@ export default function App() {
             <SignedIn>
               <RequireFeature flag="experimental.master_dashboard">
                 <MasterDashboardPage />
+              </RequireFeature>
+            </SignedIn>
+            <SignedOut>
+              <RedirectToSignIn />
+            </SignedOut>
+          </>
+        )
+      } />
+      {/* Omada MCP Server consent screen (see docs/plans/2026-07-20-omada-mcp-server.md
+          and src/mcp_server/oauth_provider.py's `authorize()`, which redirects
+          here). Gated the same way as /master: client-side by
+          experimental.mcp_server so the route doesn't render when the flag
+          is off, and by Clerk sign-in — the actual OAuth security boundary is
+          the backend's /api/mcp/oauth/consent endpoint (also flag-gated). */}
+      <Route path="/mcp/authorize" element={
+        testMode ? <McpAuthorizePage /> : (
+          <>
+            <SignedIn>
+              <RequireFeature flag="experimental.mcp_server">
+                <McpAuthorizePage />
               </RequireFeature>
             </SignedIn>
             <SignedOut>

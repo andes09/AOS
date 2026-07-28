@@ -13,6 +13,7 @@ export type FeatureFlags = {
     import_artifacts?: boolean
     github_autocomplete?: boolean
     master_dashboard?: boolean
+    mcp_server?: boolean
   }
 }
 

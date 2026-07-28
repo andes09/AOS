@@ -8,6 +8,10 @@ below is scoped by project_id, resolved via project_common._owned_project
 scheduled_date (calendar day) and a status the user flips to check things
 off, plus delete.
 
+Route handlers here are thin adapters over src/services/roadmap_service.py
+(extracted in Stage 5, the MCP server build, so REST and MCP tools share one
+implementation) — JSON shaping, lookups, and validators all live there now.
+
 GET    /api/projects/{project_id}/roadmap                              → the project's roadmap
 GET    /api/projects/{project_id}/roadmap/members                      → team members + lane colors (planner sidebar)
 POST   /api/projects/{project_id}/roadmap/generate                     → idempotent repair: regenerate from brief only if no milestones exist yet
@@ -36,19 +40,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from src.auth import get_current_org_id, get_current_user_id
 from src.database import get_db
-from src.models.developer import Developer
-from src.models.milestone import Milestone
-from src.models.onboarding_session import OnboardingMessage, OnboardingSession
-from src.models.organization import Organization
-from src.models.project import Project
+from src.models.onboarding_session import OnboardingMessage
 from src.models.task import Task, TaskStatus
-from src.models.team import Team
 from src.routers.project_common import _get_org, _owned_project
 from src.services import idea_interview, roadmap_adjuster, roadmap_generator
+from src.services import roadmap_service as svc
 from src.services.task_ids import allocate_short_id
 
 logger = logging.getLogger(__name__)
@@ -62,182 +61,6 @@ _CHAT_OPENER = (
 
 router = APIRouter(prefix="/api/projects/{project_id}/roadmap", tags=["roadmap"])
 
-_VALID_STATUSES = {s.value for s in TaskStatus}
-
-# Must match LANE_COLOR_COUNT in apps/web/src/lib/laneColors.ts and the
-# --lane-N-* triples in apps/web/src/styles/tokens.css.
-_LANE_COLOR_COUNT = 10
-
-# A task shorter than 5 minutes is unrenderable on the grid; longer than a day
-# is a data-entry slip, not a plan.
-_MIN_DURATION_MINUTES = 5
-_MAX_DURATION_MINUTES = 1440
-
-
-# ─── serialization ─────────────────────────────────────────────────────────────
-def _task_json(task: Task) -> dict:
-    return {
-        "id": str(task.id),
-        "shortId": task.short_id,
-        "title": task.title,
-        "description": task.description,
-        "status": task.status,
-        "sortOrder": task.sort_order,
-        "scheduledDate": task.scheduled_date.isoformat() if task.scheduled_date else None,
-        # "%H:%M", not isoformat(): isoformat emits seconds ("09:30:00"), which
-        # the frontend's time helpers would have to strip on every render.
-        "scheduledTime": task.scheduled_time.strftime("%H:%M") if task.scheduled_time else None,
-        "durationMinutes": task.duration_minutes,
-        "parallel": bool(task.parallel),
-        "assigneeId": str(task.assignee_id) if task.assignee_id else None,
-        "feedback": task.feedback,
-    }
-
-
-def _initials(name: str) -> str:
-    """First+last initial. Computed here so every surface agrees on the fallback."""
-    parts = [p for p in (name or "").split() if p]
-    if not parts:
-        return "?"
-    if len(parts) == 1:
-        return parts[0][:2].upper()
-    return (parts[0][0] + parts[-1][0]).upper()
-
-
-def _member_json(dev: Developer, scheduled_count: int) -> dict:
-    return {
-        "id": str(dev.id),
-        "name": dev.name,
-        "role": dev.role,
-        "email": dev.email,
-        "colorIndex": (dev.color_index or 0) % _LANE_COLOR_COUNT,
-        "avatarUrl": dev.avatar_url,
-        "initials": _initials(dev.name),
-        "isActive": bool(dev.is_active),
-        "scheduledCount": scheduled_count,
-    }
-
-
-def _milestone_json(m: Milestone) -> dict:
-    return {
-        "id": str(m.id),
-        "title": m.title,
-        "description": m.description,
-        "sortOrder": m.sort_order,
-        "tasks": [_task_json(t) for t in m.tasks],
-    }
-
-
-def _project_json(project: Project) -> dict:
-    return {
-        "id": str(project.id),
-        "name": project.name,
-        "summary": project.summary,
-        "purpose": project.purpose,
-        "status": project.status,
-        "milestones": [_milestone_json(m) for m in project.milestones],
-    }
-
-
-# ─── shared lookups ─────────────────────────────────────────────────────────────
-async def _owned_task(task_id: str, project: Project, db: AsyncSession) -> Task:
-    """Load a task, ensuring it belongs to `project`. 404 otherwise.
-
-    Filtering on Milestone.project_id (not just the org) closes a real
-    cross-tenant-within-org gap: a client could otherwise pass a valid
-    project_id for project A but a task_id belonging to sibling project B in
-    the same org, and an org-only check would wrongly authorize it.
-    """
-    try:
-        tid = uuid.UUID(task_id)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="task_not_found")
-    task = await db.scalar(
-        select(Task)
-        .join(Milestone, Task.milestone_id == Milestone.id)
-        .where(Task.id == tid, Milestone.project_id == project.id)
-    )
-    if task is None:
-        raise HTTPException(status_code=404, detail="task_not_found")
-    return task
-
-
-async def _owned_developer(dev_id: uuid.UUID, org: Organization, db: AsyncSession) -> Developer:
-    """
-    Load a developer, ensuring they belong to the caller's org. 404 otherwise.
-
-    Stays org-scoped (not project-scoped): developers aren't project-scoped
-    entities, they're shared across every project in the org. This is the
-    cross-tenant guard for assignment — without it, a PATCH carrying an
-    assigneeId guessed from another organization would succeed, silently
-    leaking that person's name and color into this org's planner.
-    """
-    dev = await db.scalar(
-        select(Developer)
-        .join(Team, Developer.team_id == Team.id)
-        .where(Developer.id == dev_id, Team.organization_id == org.id)
-    )
-    if dev is None:
-        raise HTTPException(status_code=404, detail="developer_not_found")
-    return dev
-
-
-async def _owned_tasks(task_ids: list[uuid.UUID], project: Project, db: AsyncSession) -> dict:
-    """
-    Bulk sibling of `_owned_task` — one query for the whole batch rather than N.
-
-    Returns {id: Task}. Callers are responsible for treating a short result as a
-    failure; see the reschedule endpoint, which refuses to apply partially.
-    """
-    rows = (
-        await db.execute(
-            select(Task)
-            .join(Milestone, Task.milestone_id == Milestone.id)
-            .where(Task.id.in_(task_ids), Milestone.project_id == project.id)
-        )
-    ).scalars().all()
-    return {t.id: t for t in rows}
-
-
-def _parse_uuid(raw: str, detail: str) -> uuid.UUID:
-    try:
-        return uuid.UUID(raw)
-    except (ValueError, AttributeError, TypeError):
-        raise HTTPException(status_code=404, detail=detail)
-
-
-async def _owned_milestone(milestone_id: str, project: Project, db: AsyncSession) -> Milestone:
-    """Load a milestone (with tasks), ensuring it belongs to `project`. 404 otherwise."""
-    try:
-        mid = uuid.UUID(milestone_id)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="milestone_not_found")
-    milestone = await db.scalar(
-        select(Milestone)
-        .where(Milestone.id == mid, Milestone.project_id == project.id)
-        .options(selectinload(Milestone.tasks))
-    )
-    if milestone is None:
-        raise HTTPException(status_code=404, detail="milestone_not_found")
-    return milestone
-
-
-def _require_brief(session: OnboardingSession) -> None:
-    if not session.project_brief:
-        raise HTTPException(
-            status_code=409,
-            # Deliberately not "finish onboarding" — the planner's refine-chat
-            # can supply the brief too, so onboarding isn't the only way out.
-            detail="Add some project details first — there's no project brief to plan from yet.",
-        )
-
-
-async def _resolve_project_team(project: Project, db: AsyncSession) -> Team:
-    team = await db.scalar(select(Team).where(Team.id == project.team_id))
-    if team is None:
-        raise HTTPException(status_code=409, detail="no_team_for_org")
-    return team
-
 
 # ─── endpoints ──────────────────────────────────────────────────────────────────
 @router.get("")
@@ -248,7 +71,7 @@ async def get_roadmap(
 ):
     org = await _get_org(clerk_org_id, db)
     project = await _owned_project(project_id, org, db)
-    return _project_json(project)
+    return svc.project_json(project)
 
 
 @router.get("/members")
@@ -264,39 +87,10 @@ async def get_members(
 
     Deliberately lives here rather than in developers.py — that router is
     require_role("lead")-gated, and every developer needs to see the lanes.
-    Membership stays org-scoped (every developer in the org can be assigned),
-    but the workload count is scoped to this project's tasks only — with
-    multiple projects per org, counting org-wide would conflate unrelated
-    projects' workloads into one badge.
     """
     org = await _get_org(clerk_org_id, db)
     project = await _owned_project(project_id, org, db)
-
-    # Correlated subquery for the per-person count, so this stays one round trip
-    # instead of a query per lane.
-    scheduled_count = (
-        select(func.count(Task.id))
-        .join(Milestone, Task.milestone_id == Milestone.id)
-        .where(
-            Task.assignee_id == Developer.id,
-            Milestone.project_id == project.id,
-            Task.scheduled_date.is_not(None),
-            Task.status != TaskStatus.DONE.value,
-        )
-        .correlate(Developer)
-        .scalar_subquery()
-    )
-
-    rows = (
-        await db.execute(
-            select(Developer, scheduled_count)
-            .join(Team, Developer.team_id == Team.id)
-            .where(Team.organization_id == org.id, Developer.is_active.is_(True))
-            .order_by(Developer.created_at, Developer.id)
-        )
-    ).all()
-
-    return {"members": [_member_json(dev, count or 0) for dev, count in rows]}
+    return await svc.get_members(org, project, db)
 
 
 @router.post("/generate")
@@ -321,11 +115,11 @@ async def generate(
     org = await _get_org(clerk_org_id, db)
     project = await _owned_project(project_id, org, db)
     if project.milestones:
-        return _project_json(project)
+        return svc.project_json(project)
 
     session = project.onboarding_session
-    _require_brief(session)
-    team = await _resolve_project_team(project, db)
+    svc.require_brief(session)
+    team = await svc.resolve_project_team(project, db)
     api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
 
     try:
@@ -336,29 +130,7 @@ async def generate(
         raise HTTPException(status_code=502, detail=str(exc))
 
     project = await _owned_project(project_id, org, db)
-    return _project_json(project)
-
-
-def _validate_status(v: str | None) -> str | None:
-    if v is not None and v not in _VALID_STATUSES:
-        raise ValueError(f"status must be one of {sorted(_VALID_STATUSES)}")
-    return v
-
-
-def _validate_title(v: str | None) -> str | None:
-    if v is not None:
-        v = v.strip()
-        if not (1 <= len(v) <= 255):
-            raise ValueError("title must be 1-255 characters")
-    return v
-
-
-def _validate_duration(v: int | None) -> int | None:
-    if v is not None and not (_MIN_DURATION_MINUTES <= v <= _MAX_DURATION_MINUTES):
-        raise ValueError(
-            f"durationMinutes must be between {_MIN_DURATION_MINUTES} and {_MAX_DURATION_MINUTES}"
-        )
-    return v
+    return svc.project_json(project)
 
 
 @router.post("/regenerate")
@@ -370,8 +142,8 @@ async def regenerate(
     org = await _get_org(clerk_org_id, db)
     project = await _owned_project(project_id, org, db)
     session = project.onboarding_session
-    _require_brief(session)
-    team = await _resolve_project_team(project, db)
+    svc.require_brief(session)
+    team = await svc.resolve_project_team(project, db)
 
     api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
 
@@ -383,7 +155,7 @@ async def regenerate(
         raise HTTPException(status_code=502, detail=str(exc))
 
     project = await _owned_project(project_id, org, db)
-    return _project_json(project)
+    return svc.project_json(project)
 
 
 @router.post("/adjust")
@@ -413,7 +185,7 @@ async def adjust(
         raise HTTPException(status_code=502, detail=str(exc))
 
     project = await _owned_project(project_id, org, db)
-    return _project_json(project)
+    return svc.project_json(project)
 
 
 class ExtendDayRequest(BaseModel):
@@ -447,7 +219,7 @@ async def extend_day(
         raise HTTPException(status_code=502, detail=str(exc))
 
     project = await _owned_project(project_id, org, db)
-    return _project_json(project)
+    return svc.project_json(project)
 
 
 @router.post("/milestones/{milestone_id}/regenerate")
@@ -459,7 +231,7 @@ async def regenerate_milestone_endpoint(
 ):
     org = await _get_org(clerk_org_id, db)
     project = await _owned_project(project_id, org, db)
-    milestone = await _owned_milestone(milestone_id, project, db)
+    milestone = await svc.owned_milestone(milestone_id, project, db)
     session = project.onboarding_session
 
     api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
@@ -471,7 +243,7 @@ async def regenerate_milestone_endpoint(
     except RuntimeError as exc:  # upstream / model failure
         raise HTTPException(status_code=502, detail=str(exc))
 
-    return _milestone_json(milestone)
+    return svc.milestone_json(milestone)
 
 
 class TaskUpdateRequest(BaseModel):
@@ -495,17 +267,17 @@ class TaskUpdateRequest(BaseModel):
     @field_validator("status")
     @classmethod
     def _valid_status(cls, v: str | None) -> str | None:
-        return _validate_status(v)
+        return svc.validate_status(v)
 
     @field_validator("title")
     @classmethod
     def _valid_title(cls, v: str | None) -> str | None:
-        return _validate_title(v)
+        return svc.validate_title(v)
 
     @field_validator("durationMinutes")
     @classmethod
     def _valid_duration(cls, v: int | None) -> int | None:
-        return _validate_duration(v)
+        return svc.validate_duration(v)
 
 
 async def _reorder_task(task: Task, new_order: int, db: AsyncSession) -> None:
@@ -533,7 +305,7 @@ async def update_task(
 ):
     org = await _get_org(clerk_org_id, db)
     project = await _owned_project(project_id, org, db)
-    task = await _owned_task(task_id, project, db)
+    task = await svc.owned_task(task_id, project, db)
 
     if body.status is not None:
         task.status = body.status
@@ -549,7 +321,7 @@ async def update_task(
         task.duration_minutes = body.durationMinutes
     if "assigneeId" in body.model_fields_set:
         if body.assigneeId is not None:
-            await _owned_developer(body.assigneeId, org, db)  # cross-tenant guard
+            await svc.owned_developer(body.assigneeId, org, db)  # cross-tenant guard
         task.assignee_id = body.assigneeId
     if "feedback" in body.model_fields_set:
         task.feedback = body.feedback
@@ -560,7 +332,7 @@ async def update_task(
 
     await db.commit()
     await db.refresh(task)
-    return _task_json(task)
+    return svc.task_json(task)
 
 
 class TaskCreateRequest(BaseModel):
@@ -575,12 +347,12 @@ class TaskCreateRequest(BaseModel):
     @field_validator("title")
     @classmethod
     def _valid_title(cls, v: str) -> str:
-        return _validate_title(v)
+        return svc.validate_title(v)
 
     @field_validator("durationMinutes")
     @classmethod
     def _valid_duration(cls, v: int | None) -> int | None:
-        return _validate_duration(v)
+        return svc.validate_duration(v)
 
 
 @router.post("/tasks", status_code=201)
@@ -605,7 +377,7 @@ async def create_task(
         milestone = max(project.milestones, key=lambda m: m.sort_order)
 
     if body.assigneeId is not None:
-        await _owned_developer(body.assigneeId, org, db)  # cross-tenant guard
+        await svc.owned_developer(body.assigneeId, org, db)  # cross-tenant guard
 
     next_sort = (
         await db.scalar(
@@ -630,7 +402,7 @@ async def create_task(
     db.add(task)
     await db.commit()
     await db.refresh(task)
-    return _task_json(task)
+    return svc.task_json(task)
 
 
 class TaskRescheduleItem(BaseModel):
@@ -668,14 +440,14 @@ async def reschedule_tasks(
     org = await _get_org(clerk_org_id, db)
     project = await _owned_project(project_id, org, db)
     ids = [u.id for u in body.updates]
-    found = await _owned_tasks(ids, project, db)
+    found = await svc.owned_tasks(ids, project, db)
     if len(found) != len(set(ids)):
         raise HTTPException(status_code=404, detail="task_not_found")
 
     # Validate every referenced assignee before mutating anything, for the same
     # all-or-nothing reason.
     for dev_id in {u.assigneeId for u in body.updates if u.assigneeId is not None}:
-        await _owned_developer(dev_id, org, db)
+        await svc.owned_developer(dev_id, org, db)
 
     for update in body.updates:
         task = found[update.id]
@@ -690,7 +462,7 @@ async def reschedule_tasks(
     await db.commit()
     for task in found.values():
         await db.refresh(task)
-    return {"tasks": [_task_json(found[u.id]) for u in body.updates]}
+    return {"tasks": [svc.task_json(found[u.id]) for u in body.updates]}
 
 
 @router.delete("/tasks/{task_id}", status_code=204)
@@ -702,7 +474,7 @@ async def delete_task(
 ):
     org = await _get_org(clerk_org_id, db)
     project = await _owned_project(project_id, org, db)
-    task = await _owned_task(task_id, project, db)
+    task = await svc.owned_task(task_id, project, db)
     await db.delete(task)
     await db.commit()
     return Response(status_code=204)
@@ -718,12 +490,7 @@ async def get_status(
     """Lightweight, side-effect-free readiness check for the planner's ? badge."""
     org = await _get_org(clerk_org_id, db)
     project = await _owned_project(project_id, org, db)
-    missing = idea_interview.missing_fields(project.onboarding_session.project_brief)
-    return {
-        "hasRoadmap": bool(project.milestones),
-        "needsMoreInfo": len(missing) > 0,
-        "missingFields": missing,
-    }
+    return svc.get_roadmap_status(project)
 
 
 @router.get("/chat")
@@ -786,7 +553,7 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
-async def _chat_stream(session: OnboardingSession, content: str, api_key: str, db: AsyncSession):
+async def _chat_stream(session, content: str, api_key: str, db: AsyncSession):
     """SSE: `token` events while Groq replies, then `brief`, then `done` — or `error`."""
     queue: asyncio.Queue = asyncio.Queue()
 

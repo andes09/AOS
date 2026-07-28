@@ -33,13 +33,35 @@ async def get_current_app_role(
     return row.value if isinstance(row, AppRole) else str(row)
 
 
+def role_at_least(role: str | AppRole, minimum: str) -> bool:
+    """
+    Plain predicate behind the ROLE_HIERARCHY comparison — extracted so the
+    MCP `regenerate_milestone` tool's role gate (src/mcp_server/tools.py) can
+    reuse the exact same comparison `require_role` uses below, rather than a
+    second copy of it. MCP tool calls carry an Omada-minted opaque token
+    (never a Clerk JWT), so they can't go through `Depends(require_role(...))`
+    directly — but the rank comparison itself is identical.
+
+    `role` is normalized defensively: `require_role`'s caller already gets a
+    plain string via `get_current_app_role` (which does its own
+    `AppRole`-member normalization), but the MCP tool passes a freshly-loaded
+    `Developer.app_role` straight from the DB — a `SAEnum(AppRole,
+    native_enum=False)` column, which reloads as the enum *member*, not its
+    string value (same footgun documented on `Task.status`/`Project.status`
+    elsewhere in this codebase). Normalizing here means both callers are safe
+    regardless of which shape they hand in.
+    """
+    role = role.value if isinstance(role, AppRole) else role
+    return ROLE_HIERARCHY.get(role, 0) >= ROLE_HIERARCHY.get(minimum, 0)
+
+
 def require_role(minimum: str):
     """
     Dependency factory. Usage: Depends(require_role("exec"))
     Raises HTTP 403 if current user's role rank < minimum rank.
     """
     async def _check(role: str = Depends(get_current_app_role)):
-        if ROLE_HIERARCHY.get(role, 0) < ROLE_HIERARCHY.get(minimum, 0):
+        if not role_at_least(role, minimum):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Requires '{minimum}' role or higher.",

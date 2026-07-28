@@ -81,6 +81,12 @@ class Task(Base):
     # auto-completes it, or when a user manually flips status to done. NULL
     # for a task that's never been done.
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Free-text note attached when a task is completed via the `complete_task`
+    # MCP tool (src/mcp_server/tools.py) — an agent's summary of what it did.
+    # Never set by the REST PATCH endpoint or GitHub auto-complete today, only
+    # by that tool, but kept as a plain nullable column (not MCP-specific
+    # storage) since it's a fact about the task, not about MCP.
+    completion_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

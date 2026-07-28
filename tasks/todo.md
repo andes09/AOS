@@ -2,6 +2,71 @@
 
 ---
 
+## ✅ DONE — Stage 5: Omada MCP Server (branch: feature/omada-mcp-server, merged to main)
+
+Spec: `docs/plans/2026-07-20-omada-mcp-server.md` + corrections in the task prompt
+(9th `list_projects` tool, `project_id` threading, pin `mcp==1.28.1`, gate behind
+`experimental.mcp_server`, extract `roadmap_service.py` from the CURRENT
+project-scoped `roadmap.py`, only add `Task.completion_note` — not `completed_at`,
+already exists). Do not commit; do not switch branches.
+
+### Spike findings (mcp==1.28.1, confirmed against real installed package)
+- `AccessToken` needs no subclassing at all — it already has a builtin
+  `claims: dict[str, Any] | None` field, and `get_access_token()`
+  (`mcp.server.auth.middleware.auth_context`) returns the exact object
+  `load_access_token` constructs (confirmed via `AuthenticatedUser.__init__`,
+  which stores it as-is). Used `claims` directly for
+  `clerk_org_id`/`clerk_user_id`/`developer_id` — simpler than the doc's assumed
+  subclass approach, no contextvars fallback needed.
+- `.well-known` placement: `create_auth_routes` registers `/authorize`, `/token`,
+  `/register`, `/revoke`, `/.well-known/oauth-authorization-server` as ROOT-relative
+  routes on the Starlette app `FastMCP.streamable_http_app()` returns; that same app
+  also serves the MCP transport at `streamable_http_path` (default `/mcp`)
+  internally. **Mount the whole app at FastAPI root "/"**, not "/mcp" (mounting at
+  "/mcp" would double-nest to `/mcp/mcp` and misplace `.well-known`). issuer_url =
+  plain API origin (no path); resource_server_url = `{api_url}/mcp`.
+- `client.client_secret` is compared via `hmac.compare_digest` against a PLAINTEXT
+  value returned by `get_client()` — the SDK has no hash-and-compare path. Deviation
+  from doc: store `client_secret_enc` (Fernet-encrypted via `src/services/
+  encryption.py`, reversible) instead of a one-way hash. Real MCP clients register
+  as public PKCE clients (`token_endpoint_auth_method="none"`, no secret at all) so
+  this mostly matters for spec-correctness on the less-common path.
+- PKCE/expiry/redirect_uri-match checks all happen in the SDK's own `TokenHandler`
+  before our provider is called — our `exchange_authorization_code`/
+  `exchange_refresh_token` just mint+persist tokens.
+- `mcp==2.0.0` confirmed on PyPI (`pip index versions mcp`) — pinned to exactly
+  `1.28.1` via `uv add "mcp==1.28.1"` (apps/api's actual package manager; plain
+  `pip install` silently installs into system/anaconda Python since the uv venv
+  ships no `pip` binary — cleaned up the accidental global install).
+
+### Steps
+- [x] Read spec + ground-truth files, spike the real SDK
+- [x] `roadmap_service.py` extraction (behavior-preserving) + reran
+      test_roadmap.py/test_projects.py/test_roadmap_planner.py (62 passed)
+- [x] Migration 0040 (tasks.completion_note only) + 0041 (oauth tables)
+- [x] Models: oauth_client.py, oauth_authorization_code.py, oauth_token.py
+- [x] auth_roles.py: role_at_least(role, minimum) — also fixed to normalize
+      AppRole enum members (3rd instance of the SAEnum reload footgun)
+- [x] database.py: db_session() context manager
+- [x] mcp_server/oauth_provider.py, mcp_server/tools.py (9 tools incl. list_projects)
+- [x] routers/mcp_oauth_consent.py
+- [x] main.py: mount FastMCP app at root (last, after every other route —
+      first attempt placed it too early and shadowed /api/me, caught and fixed)
+      + consent router, both gated
+- [x] config/features/{local,production,test}.yaml: experimental.mcp_server
+- [x] apps/web: McpAuthorizePage.tsx + /mcp/authorize route + featureFlags.ts
+- [x] Tests: OAuth e2e (test_mcp_oauth.py, 11 tests), per-tool, flag gate,
+      default-project rule — all passing
+- [x] pytest tests/ -v --tb=short → 283 passed, same 8 pre-existing failures
+- [x] apps/web: tsc --noEmit clean, vitest run 82 passed, prod build clean
+- [x] Prepended Implementation Notes to docs/plans/2026-07-20-omada-mcp-server.md
+
+All 5 stages of the 2026-07-20 plan-reconciliation build are now complete and
+merged to main (Project Hub 0036, Import Artifacts 0037, GitHub Task
+Auto-Complete 0038, Master Dashboard 0039, Omada MCP Server 0040/0041).
+
+---
+
 ## 🚀 ACTIVE — Planner Revamp (team lanes, time blocking, design system)
 
 Rebuild the planner from a bare Mon–Fri checkbox grid into a dense, color-coded

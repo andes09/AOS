@@ -6,6 +6,8 @@ import type { RoadmapMember } from '../../types/roadmap'
 import type { FlatTask } from '../../pages/planner/usePlannerData'
 
 interface PlannerSidebarProps {
+  /** Rendered at the very top of the rail — the date nav lives here. */
+  topSlot?: React.ReactNode
   members: RoadmapMember[]
   byAssignee: Map<string | null, FlatTask[]>
   collapsedIds: Set<string>
@@ -29,6 +31,7 @@ const UNASSIGNED = '__unassigned__'
  * starts — burying it would make the planner look empty on day one.
  */
 export function PlannerSidebar({
+  topSlot,
   members,
   byAssignee,
   collapsedIds,
@@ -44,23 +47,29 @@ export function PlannerSidebar({
   return (
     <aside
       style={{
-        width: 260,
+        width: 300,
         flexShrink: 0,
         display: 'flex',
         flexDirection: 'column',
         gap: 'var(--space-2)',
         borderRight: '1px solid var(--color-border-subtle)',
-        paddingRight: 'var(--space-3)',
+        paddingRight: 'var(--space-4)',
         overflowY: 'auto',
       }}
     >
+      {topSlot && (
+        <div style={{ paddingBottom: 'var(--space-3)', marginBottom: 'var(--space-1)', borderBottom: '1px solid var(--color-border-subtle)' }}>
+          {topSlot}
+        </div>
+      )}
+
       <div style={headerStyle}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Users size={13} />
+          <Users size={15} />
           By person
         </span>
-        <IconButton label="Hide people panel" size={20} onClick={onCollapsePanel}>
-          <PanelLeftClose size={14} />
+        <IconButton label="Hide people panel" size={24} onClick={onCollapsePanel}>
+          <PanelLeftClose size={16} />
         </IconButton>
       </div>
 
@@ -114,10 +123,10 @@ const headerStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  fontSize: 'var(--text-xs)',
+  fontSize: 'var(--text-sm)',
   fontWeight: 'var(--font-weight-semibold)' as CSSProperties['fontWeight'],
   color: 'var(--color-text-muted)',
   textTransform: 'uppercase',
   letterSpacing: '0.06em',
-  padding: '0 var(--space-2)',
+  padding: '0 var(--space-3)',
 }

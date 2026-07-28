@@ -11,6 +11,7 @@ const task = (id: string, over: Partial<RoadmapTask> = {}): RoadmapTask => ({
   scheduledDate: null,
   scheduledTime: null,
   durationMinutes: null,
+  parallel: false,
   assigneeId: null,
   feedback: null,
   ...over,

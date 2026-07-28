@@ -47,6 +47,8 @@ genuinely new work.
 - Every returned task needs a detailed technical `description` (3-6 sentences), a 0-based \
 `dayOffset` (weekdays from today; 0 = today/next weekday), a `startTime` (24h "HH:MM", 09:00-18:00), \
 and a `durationMinutes` (15-240). Lay each day out as a realistic, non-overlapping schedule.
+- Set `parallel: true` on tasks that don't depend on the task before them and could be picked \
+up alongside their siblings; leave it false for work that must wait on earlier tasks.
 - Keep it a short, finishable near-term plan (the next ~2 weeks of weekdays), not a backlog."""
 
 # OpenAI/Groq function-tool form (mirrors idea_interview._BRIEF_TOOL).
@@ -75,6 +77,7 @@ _ADJUST_TOOL = {
                                         "dayOffset": {"type": "integer", "description": "0-based weekday index from today"},
                                         "startTime": {"type": "string", "description": '24h "HH:MM"'},
                                         "durationMinutes": {"type": "integer"},
+                                        "parallel": {"type": "boolean", "description": "True if this task has no dependency on the task before it and can run alongside its siblings."},
                                     },
                                     "required": ["title", "dayOffset"],
                                 },
@@ -122,19 +125,20 @@ def _plan_context(project: Project) -> str:
     return json.dumps({"today": date.today().isoformat(), "milestones": milestones})
 
 
-async def _call_adjuster(api_key: str, context: str):
+async def _call_tool(api_key: str, system: str, user_content: str, tool: dict):
     """One forced-tool Groq call. Returns (parsed tool args, usage)."""
+    tool_name = tool["function"]["name"]
     client = AsyncOpenAI(api_key=api_key, base_url=settings.groq_base_url)
     try:
         resp = await client.chat.completions.create(
             model=_MODEL,
             max_tokens=_MAX_TOKENS,
             messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": "Current plan and feedback:\n" + context},
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
             ],
-            tools=[_ADJUST_TOOL],
-            tool_choice={"type": "function", "function": {"name": "adjust_plan"}},
+            tools=[tool],
+            tool_choice={"type": "function", "function": {"name": tool_name}},
         )
     except AuthenticationError as exc:
         raise ValueError("Invalid Groq API key.") from exc
@@ -144,13 +148,18 @@ async def _call_adjuster(api_key: str, context: str):
         raise RuntimeError(f"Groq API error: {exc}") from exc
 
     tool_calls = resp.choices[0].message.tool_calls or []
-    call = next((t for t in tool_calls if t.function.name == "adjust_plan"), None)
+    call = next((t for t in tool_calls if t.function.name == tool_name), None)
     if call is None:
-        raise RuntimeError("The planner did not return an adjustment. Please try again.")
+        raise RuntimeError("The planner did not return a result. Please try again.")
     try:
         return json.loads(call.function.arguments), resp.usage
     except json.JSONDecodeError as exc:
         raise RuntimeError("The planner returned malformed output. Please try again.") from exc
+
+
+async def _call_adjuster(api_key: str, context: str):
+    """One forced-tool Groq call for the feedback re-plan."""
+    return await _call_tool(api_key, _SYSTEM_PROMPT, "Current plan and feedback:\n" + context, _ADJUST_TOOL)
 
 
 async def adjust_roadmap(
@@ -226,5 +235,108 @@ def _add_todo_tasks(milestone_id, tasks: list[dict], today: date, base_sort: int
                 scheduled_date=roadmap_generator._weekday_after(today, t["day_offset"]),
                 scheduled_time=t.get("start_time"),
                 duration_minutes=t.get("duration_minutes"),
+                parallel=t.get("parallel", False),
             )
         )
+
+
+# ─── extend a single day (AI top-up when the user clears a day) ──────────────────
+_EXTEND_SYSTEM_PROMPT = """You are Omada's project planner. The developer has finished \
+everything planned for a specific day and wants a few more concrete, valuable tasks to fill \
+the SAME day. Given their current plan and progress, propose 2-4 additional `todo` tasks that \
+push the project forward from where they are — real engineering work, not filler. Each task \
+needs a detailed technical `description` (3-6 sentences), a `durationMinutes` (15-240), and \
+`parallel` (true if it has no dependency on the others). Do NOT restate existing or completed \
+tasks."""
+
+_EXTEND_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "extend_day",
+        "description": "Return a few additional tasks to fill out the given day.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "description": "2-4 additional tasks for the same day.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "description": {"type": "string"},
+                            "durationMinutes": {"type": "integer"},
+                            "parallel": {"type": "boolean"},
+                        },
+                        "required": ["title"],
+                    },
+                }
+            },
+            "required": ["tasks"],
+        },
+    },
+}
+
+
+def _milestone_for_day(project: Project, target_date: date) -> Milestone:
+    """The milestone the new tasks should join: the one that owns the target
+    day's work, else the first with unfinished tasks, else the last phase."""
+    by_day_count = {}
+    for m in project.milestones:
+        by_day_count[m.id] = sum(1 for t in m.tasks if t.scheduled_date == target_date)
+    owning = max(project.milestones, key=lambda m: by_day_count[m.id], default=None)
+    if owning is not None and by_day_count[owning.id] > 0:
+        return owning
+    for m in sorted(project.milestones, key=lambda x: x.sort_order):
+        if any(_status_str(t.status) != "done" for t in m.tasks):
+            return m
+    return max(project.milestones, key=lambda m: m.sort_order)
+
+
+async def extend_day(
+    project: Project, target_date: date, api_key: str, db: AsyncSession
+) -> Project:
+    """Ask Groq for a few more `todo` tasks scheduled on `target_date` and
+    append them to the milestone that owns that day. Non-destructive: existing
+    tasks are untouched, and empty/unusable output is a no-op."""
+    project = await db.scalar(
+        select(Project)
+        .where(Project.id == project.id)
+        .options(selectinload(Project.milestones).selectinload(Milestone.tasks))
+    )
+
+    context = (
+        _plan_context(project)
+        + f"\n\nThe developer finished everything scheduled for {target_date.isoformat()} "
+        "and wants a few more tasks for that same day."
+    )
+    data, usage = await _call_tool(api_key, _EXTEND_SYSTEM_PROMPT, context, _EXTEND_TOOL)
+
+    raw_tasks = [t for t in (data.get("tasks") or []) if isinstance(t, dict)]
+    validated = [roadmap_generator._validated_task(t) for t in raw_tasks]
+    validated = [t for t in validated if t["title"]]
+    if not validated:
+        logger.info("extend_day: empty/unusable model output for project %s", project.id)
+        return project
+
+    target = _milestone_for_day(project, target_date)
+    base_sort = (max((t.sort_order for t in target.tasks), default=-1)) + 1
+    for i, t in enumerate(validated):
+        db.add(
+            Task(
+                milestone_id=target.id,
+                title=t["title"],
+                description=t["description"],
+                status="todo",
+                sort_order=base_sort + i,
+                scheduled_date=target_date,
+                scheduled_time=t.get("start_time"),
+                duration_minutes=t.get("duration_minutes"),
+                parallel=t.get("parallel", False),
+            )
+        )
+
+    record_generation_cost("roadmap_extend_day", usage, model=_MODEL, session_id=str(project.id))
+    await db.commit()
+    await db.refresh(project)
+    return project

@@ -18,6 +18,10 @@ export interface RoadmapTask {
   scheduledTime: string | null
   /** Null means "no explicit duration"; the card renders compact. */
   durationMinutes: number | null
+  /** True if this task has no dependency on the one before it and can run
+   *  alongside its siblings. Drives the "PARALLEL" tag and the "waits its
+   *  turn" fade. Set by the generator/adjuster. */
+  parallel: boolean
   /** Owning developer. Null renders in the neutral unassigned lane. */
   assigneeId: string | null
   /** The user's latest progress note, written in the day agenda. */

@@ -1,6 +1,6 @@
 import { CSSProperties } from 'react'
 import { UserButton } from '@clerk/clerk-react'
-import { Settings } from 'lucide-react'
+import { PanelLeft, Settings } from 'lucide-react'
 import { SegmentedControl } from '../ui/SegmentedControl'
 import { IconButton } from '../ui/IconButton'
 import { ThemeToggle } from '../ui/ThemeToggle'
@@ -11,6 +11,8 @@ interface TopBarProps {
   view: PlannerView
   onViewChange: (view: PlannerView) => void
   onOpenSettings: () => void
+  lanesHidden: boolean
+  onToggleLanes: () => void
 }
 
 /**
@@ -18,10 +20,17 @@ interface TopBarProps {
  * planner's view switcher promoted to primary navigation, and the utility
  * cluster. Everything below it is the planner.
  */
-export function TopBar({ view, onViewChange, onOpenSettings }: TopBarProps) {
+export function TopBar({ view, onViewChange, onOpenSettings, lanesHidden, onToggleLanes }: TopBarProps) {
   return (
     <header style={barStyle}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)', minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', minWidth: 0 }}>
+        <IconButton
+          label={lanesHidden ? 'Show people panel' : 'Hide people panel'}
+          aria-pressed={!lanesHidden}
+          onClick={onToggleLanes}
+        >
+          <PanelLeft size={17} />
+        </IconButton>
         <span style={wordmarkStyle}>Omada</span>
         <TeamSwitcher />
       </div>

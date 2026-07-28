@@ -122,7 +122,7 @@ _ROADMAP_PAYLOAD = {
             "description": "Set up the skeleton",
             "tasks": [
                 {"title": "Init repo", "dayOffset": 0},
-                {"title": "Pick stack", "description": "Keep it boring", "dayOffset": 1},
+                {"title": "Pick stack", "description": "Keep it boring", "dayOffset": 1, "parallel": True},
             ],
         },
         {
@@ -206,6 +206,8 @@ async def test_generate_roadmap_happy_path(roadmap_db):
         )).scalars().all()
         assert [t.title for t in tasks] == ["Init repo", "Pick stack"]
         assert [t.sort_order for t in tasks] == [0, 1]
+        # `parallel` is parsed from the tool output; absent defaults to False.
+        assert [bool(t.parallel) for t in tasks] == [False, True]
         for t in tasks:
             assert t.scheduled_date is not None
             assert t.scheduled_date.weekday() < 5  # only weekdays

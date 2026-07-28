@@ -8,6 +8,9 @@ interface AssistantChatProps {
   onRegenerate: () => void
   isRegenerating: boolean
   regenerateError: string | null
+  /** Fired when an assistant reply finishes — the chat is feedback too, so the
+   *  plan auto-updates from it (non-destructively). */
+  onReplyComplete?: () => void
 }
 
 /**
@@ -19,7 +22,7 @@ interface AssistantChatProps {
  * The chat plumbing is the existing `useProjectChat` hook (SSE streaming from
  * POST /api/roadmap/chat/message); this component is purely the surface.
  */
-export function AssistantChat({ onRegenerate, isRegenerating, regenerateError }: AssistantChatProps) {
+export function AssistantChat({ onRegenerate, isRegenerating, regenerateError, onReplyComplete }: AssistantChatProps) {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState('')
   const { messages, streamingReply, isStreaming, isLoading, error, send } = useProjectChat(open)
@@ -29,6 +32,15 @@ export function AssistantChat({ onRegenerate, isRegenerating, regenerateError }:
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [messages, streamingReply, isLoading])
+
+  // A finished assistant reply means the user just gave the AI more detail —
+  // treat it as feedback and auto-update the plan. Fires on the streaming
+  // false-edge, and only when the turn didn't error.
+  const wasStreaming = useRef(false)
+  useEffect(() => {
+    if (wasStreaming.current && !isStreaming && !error) onReplyComplete?.()
+    wasStreaming.current = isStreaming
+  }, [isStreaming, error, onReplyComplete])
 
   const submit = () => {
     const text = draft.trim()

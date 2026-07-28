@@ -1,7 +1,7 @@
 import enum
 import uuid
 from datetime import date, datetime, time
-from sqlalchemy import String, Text, Date, DateTime, Time, ForeignKey, Integer, Index
+from sqlalchemy import String, Text, Date, DateTime, Time, ForeignKey, Integer, Index, Boolean, false
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -44,6 +44,10 @@ class Task(Base):
     # NULL means "no explicit duration" — the card renders compact rather than
     # claiming a default block of grid space.
     duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # True when this task has no dependency on the task before it and can be
+    # tackled alongside its siblings. Drives the planner's "PARALLEL" tag and the
+    # client-derived "waits its turn" fade — set by the generator/adjuster.
+    parallel: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     # The user's latest progress note on this task, written in the day agenda.
     # Fed to the Groq adjuster so it can re-plan upcoming work around blockers
     # and slippage the user reports here.

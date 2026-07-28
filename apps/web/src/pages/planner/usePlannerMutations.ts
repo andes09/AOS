@@ -79,6 +79,14 @@ export function usePlannerMutations() {
     onSettled: settleBoth,
   })
 
+  // Ask the AI for a few more todo tasks on a day the user has cleared. Like
+  // adjust, it's non-destructive — the server appends tasks to that day.
+  const extendDay = useMutation({
+    mutationFn: (isoDate: string) => post<Roadmap>('/api/roadmap/extend-day', { date: isoDate }),
+    onSuccess: data => qc.setQueryData(ROADMAP_KEY, data),
+    onSettled: settleBoth,
+  })
+
   const updateTask = useMutation({
     mutationFn: ({ id, patch: body }: { id: string; patch: TaskPatch }) =>
       patch<RoadmapTask>(`/api/roadmap/tasks/${id}`, body),
@@ -109,6 +117,7 @@ export function usePlannerMutations() {
         scheduledDate: input.scheduledDate ?? null,
         scheduledTime: input.scheduledTime ?? null,
         durationMinutes: input.durationMinutes ?? null,
+        parallel: false,
         assigneeId: input.assigneeId ?? null,
         feedback: null,
       }
@@ -134,5 +143,5 @@ export function usePlannerMutations() {
     })
   }
 
-  return { generate, regenerate, adjust, updateTask, deleteTask, createTask, rescheduleTasks, toggleDone }
+  return { generate, regenerate, adjust, extendDay, updateTask, deleteTask, createTask, rescheduleTasks, toggleDone }
 }

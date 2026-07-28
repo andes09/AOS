@@ -58,7 +58,7 @@ export function MemberLane({
     display: 'flex',
     alignItems: 'center',
     gap: 'var(--space-2)',
-    padding: '6px var(--space-2)',
+    padding: '8px var(--space-3)',
     borderRadius: 'var(--radius-md)',
     cursor: 'pointer',
     background: selected ? 'var(--color-accent-subtle)' : 'transparent',
@@ -89,19 +89,19 @@ export function MemberLane({
         <span
           aria-hidden="true"
           style={{
-            width: 8,
-            height: 8,
+            width: 10,
+            height: 10,
             flexShrink: 0,
             borderRadius: '50%',
             background: lane.solid,
           }}
         />
-        <Avatar name={name} colorIndex={colorIndex} avatarUrl={avatarUrl} initials={initials} size="sm" />
+        <Avatar name={name} colorIndex={colorIndex} avatarUrl={avatarUrl} initials={initials} size="md" />
         <span style={{ minWidth: 0, flex: 1 }}>
           <span
             style={{
               display: 'block',
-              fontSize: 'var(--text-sm)',
+              fontSize: 'var(--text-base)',
               fontWeight: 'var(--font-weight-semibold)' as CSSProperties['fontWeight'],
               color: 'var(--color-text-primary)',
               letterSpacing: '0.02em',
@@ -116,7 +116,7 @@ export function MemberLane({
             <span
               style={{
                 display: 'block',
-                fontSize: 'var(--text-xs)',
+                fontSize: 'var(--text-sm)',
                 color: 'var(--color-text-muted)',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -129,13 +129,13 @@ export function MemberLane({
         </span>
         <IconButton
           label={`Add a task for ${name}`}
-          size={20}
+          size={24}
           onClick={e => {
             e.stopPropagation()
             onAddTask()
           }}
         >
-          <Plus size={13} />
+          <Plus size={15} />
         </IconButton>
       </div>
 
@@ -146,17 +146,17 @@ export function MemberLane({
           display: 'flex',
           alignItems: 'center',
           gap: 4,
-          margin: '2px 0 0 var(--space-2)',
+          margin: '2px 0 0 var(--space-3)',
           padding: '2px 4px',
           background: 'transparent',
           border: 'none',
           cursor: 'pointer',
           color: 'var(--color-accent)',
           fontFamily: 'var(--font-sans)',
-          fontSize: 'var(--text-xs)',
+          fontSize: 'var(--text-sm)',
         }}
       >
-        {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+        {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
         {count} scheduled
       </button>
 

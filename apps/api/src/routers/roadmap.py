@@ -77,6 +77,7 @@ def _task_json(task: Task) -> dict:
         # the frontend's time helpers would have to strip on every render.
         "scheduledTime": task.scheduled_time.strftime("%H:%M") if task.scheduled_time else None,
         "durationMinutes": task.duration_minutes,
+        "parallel": bool(task.parallel),
         "assigneeId": str(task.assignee_id) if task.assignee_id else None,
         "feedback": task.feedback,
     }
@@ -400,6 +401,39 @@ async def adjust(
 
     try:
         await roadmap_adjuster.adjust_roadmap(project, api_key, db)
+    except ValueError as exc:  # bad key
+        raise HTTPException(status_code=402, detail=str(exc))
+    except RuntimeError as exc:  # upstream / model failure
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    project = await _load_project(session.id, db)
+    return _project_json(project)
+
+
+class ExtendDayRequest(BaseModel):
+    date: date
+
+
+@router.post("/extend-day")
+async def extend_day(
+    body: ExtendDayRequest,
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate a few more `todo` tasks for a single day, once the user has cleared
+    everything scheduled on it and wants to keep going. Non-destructive: existing
+    tasks are untouched. See services/roadmap_adjuster.extend_day.
+    """
+    org, session = await _session_and_brief(clerk_org_id, db)
+    project = await _load_project(session.id, db)
+    if project is None:
+        raise HTTPException(status_code=409, detail="no_roadmap")
+
+    api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
+
+    try:
+        await roadmap_adjuster.extend_day(project, body.date, api_key, db)
     except ValueError as exc:  # bad key
         raise HTTPException(status_code=402, detail=str(exc))
     except RuntimeError as exc:  # upstream / model failure

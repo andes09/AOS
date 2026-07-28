@@ -65,6 +65,8 @@ of weekdays where possible.
 between 09:00 and 18:00) and a `durationMinutes` (15–240). Order tasks within a day by time \
 and don't overlap them — a developer should be able to follow the day top to bottom.
 - Order milestones and tasks the way they should actually be tackled (dependencies first).
+- Set `parallel: true` on tasks that don't depend on the task before them and could be \
+picked up alongside their siblings; leave it false for work that must wait on earlier tasks.
 - Ground everything in THIS project and its stated stack/constraints. Never invent facts the \
 brief doesn't support; where the brief is silent, make a sensible, clearly-reasonable technical \
 choice and state it."""
@@ -100,6 +102,10 @@ _MILESTONE_SCHEMA = {
                     "durationMinutes": {
                         "type": "integer",
                         "description": "How long the task should take, 15-240 minutes",
+                    },
+                    "parallel": {
+                        "type": "boolean",
+                        "description": "True if this task has no dependency on the task before it and can be worked on alongside its siblings; false if it must wait for earlier tasks.",
                     },
                 },
                 "required": ["title", "dayOffset"],
@@ -266,6 +272,7 @@ def _validated_task(raw: dict) -> dict:
         "day_offset": min(max(offset, 0), _MAX_DAY_OFFSET),
         "start_time": _parse_hhmm(raw.get("startTime")),
         "duration_minutes": _clamp_duration(raw.get("durationMinutes")),
+        "parallel": bool(raw.get("parallel", False)),
     }
 
 
@@ -298,6 +305,7 @@ def _add_tasks(milestone_id, tasks: list[dict], start: date, db: AsyncSession) -
                 scheduled_date=_weekday_after(start, t["day_offset"]),
                 scheduled_time=t.get("start_time"),
                 duration_minutes=t.get("duration_minutes"),
+                parallel=t.get("parallel", False),
             )
         )
 

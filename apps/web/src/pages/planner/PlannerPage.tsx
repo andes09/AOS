@@ -25,9 +25,11 @@ import { Modal } from '../../components/ui/Modal'
 import { addDays, mondayOf, parseISO, toISO } from '../../lib/date'
 import { PlannerSidebar } from '../../components/planner/PlannerSidebar'
 import { PlannerToolbar } from '../../components/planner/PlannerToolbar'
+import { DateNav } from '../../components/planner/DateNav'
 import type { PlannerOutletContext } from '../../components/planner/plannerViews'
 import { CalendarGrid } from '../../components/planner/CalendarGrid'
 import { DayAgenda } from '../../components/planner/DayAgenda'
+import { MilestoneMap } from '../../components/planner/MilestoneMap'
 import { ListView } from '../../components/planner/ListView'
 import { BoardView } from '../../components/planner/BoardView'
 import { UnscheduledTray } from '../../components/planner/UnscheduledTray'
@@ -42,37 +44,27 @@ import { EMPTY_FILTERS, toggleInSet, UNASSIGNED, type PlannerFilters } from './p
 const START_HOUR = 7
 const END_HOUR = 20
 
-/** Persisted collapse state for the member-lane panel. '0' = collapsed. */
-const LANES_KEY = 'aos_planner_lanes'
-
 export function PlannerPage() {
-  // `view` lives in the layout so the top-bar switcher and this page share it.
-  // The page only reads it; the top bar owns the setter.
-  const { view } = useOutletContext<PlannerOutletContext>()
+  // `view` and the people-panel collapse state live in the layout so the top
+  // bar (switcher + panel toggle) and this page share them.
+  const { view, lanesHidden, onToggleLanes } = useOutletContext<PlannerOutletContext>()
 
   const [filters, setFilters] = useState<PlannerFilters>(EMPTY_FILTERS)
   const [anchorOverride, setAnchorOverride] = useState<Date | null>(null)
   const [collapsedLanes, setCollapsedLanes] = useState<Set<string>>(new Set())
-  const [lanesHidden, setLanesHidden] = useState(() => localStorage.getItem(LANES_KEY) === '0')
   const [trayCollapsed, setTrayCollapsed] = useState(false)
   const [openTaskId, setOpenTaskId] = useState<string | null>(null)
   const [draggingTask, setDraggingTask] = useState<FlatTask | null>(null)
+  const [planMapOpen, setPlanMapOpen] = useState(false)
   // Ask right away when there's no plan yet (fresh out of onboarding), rather
   // than leaving generation as a button the user has to notice on their own.
   const [askOpen, setAskOpen] = useState(true)
-
-  const toggleLanesPanel = () =>
-    setLanesHidden(prev => {
-      const next = !prev
-      localStorage.setItem(LANES_KEY, next ? '0' : '1')
-      return next
-    })
 
   const data = usePlannerData(filters)
   // `rescheduleTasks` is intentionally not destructured here — a single drag is
   // one task, so it goes through updateTask. The bulk endpoint is wired up in
   // the hook and waits for multi-select.
-  const { generate, regenerate, adjust, updateTask, deleteTask, createTask, toggleDone } =
+  const { generate, regenerate, adjust, extendDay, updateTask, deleteTask, createTask, toggleDone } =
     usePlannerMutations()
 
   // Require a real drag before starting one, or the checkbox and delete button
@@ -92,6 +84,37 @@ export function PlannerPage() {
     task.assigneeId ? data.membersById.get(task.assigneeId)?.colorIndex ?? null : null
 
   const openTask = openTaskId ? data.allTasks.find(t => t.id === openTaskId) ?? null : null
+
+  // Completion for the days currently in view (one day in Day view, the week in
+  // Week view) — the toolbar bar tracks the visible range, not the whole plan.
+  const rangeStats = useMemo(() => {
+    let total = 0
+    let done = 0
+    for (let i = 0; i < dayCount; i++) {
+      const dayTasks = data.byDate.get(toISO(addDays(anchor, i))) ?? []
+      total += dayTasks.length
+      done += dayTasks.filter(t => t.status === 'done').length
+    }
+    return { total, done, pct: total > 0 ? Math.round((done / total) * 100) : 0 }
+  }, [anchor, dayCount, data.byDate])
+
+  // The milestone the user is currently working through: the first (in plan
+  // order) that still has an unfinished task. Drives the "Up next" subtitle.
+  const currentMilestoneTitle = useMemo(() => {
+    const ms = [...(data.roadmap?.milestones ?? [])].sort((a, b) => a.sortOrder - b.sortOrder)
+    const active = ms.find(m => m.tasks.some(t => t.status !== 'done'))
+    return (active ?? ms[ms.length - 1])?.title ?? null
+  }, [data.roadmap])
+
+  // Feedback anywhere — a task's note or the AI chat — auto-updates the plan,
+  // so there's no manual "update my plan" button. Both funnel through the
+  // non-destructive `adjust` re-plan (done/in-progress work is preserved).
+  const handleTaskFeedback = (task: FlatTask, feedback: string) => {
+    updateTask.mutate(
+      { id: task.id, patch: { feedback } },
+      { onSuccess: () => adjust.mutate() },
+    )
+  }
 
   // ─── handlers ────────────────────────────────────────────────────────────
   const handleDragStart = (e: DragStartEvent) => {
@@ -198,33 +221,31 @@ export function PlannerPage() {
 
   const isCalendar = view === 'week' || view === 'day'
 
+  // The date nav lives in the sidebar only — it collapses away with the panel.
+  const dateNav = isCalendar ? (
+    <DateNav
+      rangeStart={anchor}
+      rangeEnd={rangeEnd}
+      onPrev={() => setAnchorOverride(addDays(anchor, -dayCount))}
+      onNext={() => setAnchorOverride(addDays(anchor, dayCount))}
+      onToday={() => setAnchorOverride(view === 'day' ? new Date() : mondayOf(new Date()))}
+    />
+  ) : null
+
   return (
     <Shell>
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-        <PlannerToolbar
-          rangeStart={anchor}
-          rangeEnd={rangeEnd}
-          onPrev={() => setAnchorOverride(addDays(anchor, -dayCount))}
-          onNext={() => setAnchorOverride(addDays(anchor, dayCount))}
-          onToday={() => setAnchorOverride(view === 'day' ? new Date() : mondayOf(new Date()))}
-          done={data.stats.done}
-          total={data.stats.total}
-          pct={data.stats.pct}
-          showDateNav={isCalendar}
-          lanesCollapsed={lanesHidden}
-          onToggleLanes={toggleLanesPanel}
-        />
-
         <div style={{ display: 'flex', gap: 'var(--space-4)', alignItems: 'flex-start' }}>
           {!lanesHidden && (
             <PlannerSidebar
+              topSlot={dateNav}
               members={data.members}
               byAssignee={data.byAssignee}
               collapsedIds={collapsedLanes}
               selectedIds={filters.assigneeIds}
               onToggleCollapse={toggleLane}
               onToggleSelect={selectLane}
-              onCollapsePanel={toggleLanesPanel}
+              onCollapsePanel={onToggleLanes}
               onAddTask={handleAddTask}
               renderTask={t => (
                 <TaskCard
@@ -241,26 +262,36 @@ export function PlannerPage() {
           )}
 
           <main style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ marginBottom: 'var(--space-3)', maxWidth: 280, position: 'relative' }}>
-              <Search
-                size={13}
-                style={{
-                  position: 'absolute',
-                  left: 8,
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  color: 'var(--color-text-muted)',
-                  pointerEvents: 'none',
-                }}
-              />
-              <Input
-                value={filters.search}
-                onChange={e => setFilters(f => ({ ...f, search: e.target.value }))}
-                placeholder="Search tasks…"
-                aria-label="Search tasks"
-                style={{ paddingLeft: 26 }}
-              />
-            </div>
+            <PlannerToolbar
+              done={isCalendar ? rangeStats.done : data.stats.done}
+              total={isCalendar ? rangeStats.total : data.stats.total}
+              pct={isCalendar ? rangeStats.pct : data.stats.pct}
+            />
+
+            {/* Search is noise on the focused daily list; it belongs to the
+                broader week/list/board views. */}
+            {view !== 'day' && (
+              <div style={{ marginBottom: 'var(--space-3)', maxWidth: 280, position: 'relative' }}>
+                <Search
+                  size={13}
+                  style={{
+                    position: 'absolute',
+                    left: 8,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: 'var(--color-text-muted)',
+                    pointerEvents: 'none',
+                  }}
+                />
+                <Input
+                  value={filters.search}
+                  onChange={e => setFilters(f => ({ ...f, search: e.target.value }))}
+                  placeholder="Search tasks…"
+                  aria-label="Search tasks"
+                  style={{ paddingLeft: 26 }}
+                />
+              </div>
+            )}
 
             {view === 'day' && (
               <DayAgenda
@@ -268,11 +299,13 @@ export function PlannerPage() {
                 tasks={data.byDate.get(toISO(anchor)) ?? []}
                 membersById={data.membersById}
                 colorOf={colorOf}
-                onStatus={(t, status) => updateTask.mutate({ id: t.id, patch: { status } })}
-                onFeedback={(t, feedback) => updateTask.mutate({ id: t.id, patch: { feedback } })}
+                done={rangeStats.done}
+                total={rangeStats.total}
+                currentMilestoneTitle={currentMilestoneTitle}
+                onToggleDone={toggleDone}
+                onFeedback={handleTaskFeedback}
                 onDelete={t => deleteTask.mutate(t.id)}
                 onOpen={t => setOpenTaskId(t.id)}
-                onAdjust={() => adjust.mutate()}
                 isAdjusting={adjust.isPending}
                 adjustError={
                   adjust.isError
@@ -281,6 +314,16 @@ export function PlannerPage() {
                       : 'Could not update the plan.'
                     : null
                 }
+                onExtendDay={() => extendDay.mutate(toISO(anchor))}
+                isExtending={extendDay.isPending}
+                extendError={
+                  extendDay.isError
+                    ? extendDay.error instanceof Error
+                      ? extendDay.error.message
+                      : 'Could not add more tasks.'
+                    : null
+                }
+                onOpenPlanMap={() => setPlanMapOpen(true)}
               />
             )}
             {view === 'week' && (
@@ -315,7 +358,9 @@ export function PlannerPage() {
               />
             )}
 
-            {isCalendar && (
+            {/* The unscheduled tray is calendar clutter on the daily list;
+                keep it to the week view where dragging onto days matters. */}
+            {view === 'week' && (
               <UnscheduledTray
                 tasks={data.unscheduled}
                 collapsed={trayCollapsed}
@@ -355,7 +400,12 @@ export function PlannerPage() {
         onDelete={() => openTask && deleteTask.mutate(openTask.id)}
       />
 
+      <Modal open={planMapOpen} onClose={() => setPlanMapOpen(false)} title="The plan" width={880}>
+        <MilestoneMap milestones={data.roadmap?.milestones ?? []} />
+      </Modal>
+
       <AssistantChat
+        onReplyComplete={() => adjust.mutate()}
         onRegenerate={() => regenerate.mutate()}
         isRegenerating={regenerate.isPending}
         regenerateError={

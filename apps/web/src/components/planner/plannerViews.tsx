@@ -20,4 +20,8 @@ export const VIEW_OPTIONS: readonly SegmentedOption<PlannerView>[] = [
 export interface PlannerOutletContext {
   view: PlannerView
   setView: (view: PlannerView) => void
+  /** People-panel collapse state — owned by the layout so the top-bar toggle
+   *  (its industry-standard spot) and the planner share one value. */
+  lanesHidden: boolean
+  onToggleLanes: () => void
 }

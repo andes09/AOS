@@ -106,7 +106,39 @@ Hard dependency on Project Hub landing first. Tool surface changes:
 
 ## Status
 
-This doc records the decisions; the 5 source plans have not yet been edited to match.
-Next step, if wanted: apply the migration-number, `down_revision`, and cross-reference
-edits above directly to each of the 5 files, and rewrite Master Dashboard §6 and Omada
-MCP Server's tool table/service-layer section as described.
+**Built and merged to main, 2026-07-28** (all 5 stages, in the decided order). Each
+source plan doc has its own "Implementation Notes" header recording what actually
+shipped versus what's written below — the sections below are the original decisions,
+kept as-written for history.
+
+Two corrections emerged during the build that this doc's original text didn't
+anticipate, since `main` kept moving under the build:
+
+- **Migration numbers shifted by one across the board**: a same-day, unrelated commit
+  (`74036ca`, `task_parallel`) landed on `main` mid-build and claimed `0035` (this doc's
+  text below still says Project Hub is `0032`/`0035` depending on the section — the real
+  chain that shipped is **`0036` Project Hub → `0037` Import Artifacts → `0038` GitHub
+  Task Auto-Complete → `0039` Master Dashboard → `0040` MCP task fields → `0041` MCP
+  OAuth tables**, chained off the real head at each stage's start (`0034` →
+  `0035 task_parallel` → ...).
+- **GitHub Task Auto-Complete's per-repo webhook design (§ below) was never built** —
+  the repo had already migrated OAuth App → GitHub App (`a4c70d0`) before this doc was
+  written, and a GitHub App gets one app-level webhook for every installed repo
+  automatically. Built as a single app-level webhook + 6h reconciliation sweep instead;
+  see that plan's own Implementation Notes for the full write-up.
+
+Every stage also picked up a new, cross-cutting requirement introduced mid-build: new
+functionality is gated behind a feature flag nested under `experimental` in
+`apps/api/config/features/{local,production,test}.yaml` (`experimental.import_artifacts`,
+`experimental.github_autocomplete`, `experimental.master_dashboard`,
+`experimental.mcp_server`) — off in production until each is ready to ship.
+
+A real, recurring bug was found and fixed three times across the build: SQLAlchemy's
+`Enum(SomeEnum, native_enum=False)` column type reloads as the Python enum *member*, not
+its string value, once an instance is re-fetched from the DB. Fine for SQL-level
+comparisons and FastAPI's JSON response encoding (which unwraps enums automatically),
+but silently wrong for any plain Python `==`/`!=` comparison against an already-loaded
+value. Hit on `Project.status` (Stage 1), then `Task.status` in MCP tool JSON output
+(Stage 5), then `Developer.app_role` in the MCP role gate (Stage 5) — worth grepping for
+this pattern (`SAEnum(..., native_enum=False)`) before adding new Python-level
+comparisons against any enum-backed column in this codebase.

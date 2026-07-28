@@ -24,8 +24,11 @@ class OnboardingSession(Base):
     __tablename__ = "onboarding_sessions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # No longer unique: an org can have multiple sessions, one per project
+    # (see the Project Hub plan). The plain index (kept) is what the now-
+    # multi-row lookups need; ordering by created_at picks the right one.
     organization_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("organizations.id"), unique=True, index=True
+        UUID(as_uuid=True), ForeignKey("organizations.id"), index=True
     )
     created_by_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="in_progress", server_default="in_progress")

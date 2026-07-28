@@ -1,32 +1,30 @@
-// Streaming chat with Groq to add project detail (roadmap refine-chat).
-// Loads the transcript on first open, then streams each reply token-by-token
-// over SSE from POST /api/roadmap/chat/message. When the brief changes, the
-// planner's readiness badge is refreshed via the ['roadmap-status'] query.
+// Streaming chat for the project-creation flow (POST
+// /api/projects/sessions/{id}/chat/message). Mirrors
+// pages/planner/useProjectChat.ts's SSE-consuming logic, but session-scoped
+// rather than the single org-wide roadmap refine-chat.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
-import { useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@clerk/clerk-react'
-import type { ProjectChatMessage } from '../../types/roadmap'
+import type { ProjectCreationChatMessage } from '../types'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
-export function useProjectChat(open: boolean) {
+export function useProjectCreationChat(sessionId: string) {
   const { getToken } = useAuth()
-  const qc = useQueryClient()
-  const { projectId } = useParams<{ projectId: string }>()
-  if (!projectId) throw new Error('useProjectChat must be used within a /projects/:projectId route')
-  const base = `${API_URL}/api/projects/${projectId}/roadmap`
-  const [messages, setMessages] = useState<ProjectChatMessage[]>([])
+  const [messages, setMessages] = useState<ProjectCreationChatMessage[]>([])
+  const [brief, setBrief] = useState<Record<string, unknown> | null>(null)
+  const [briefComplete, setBriefComplete] = useState(false)
   const [streamingReply, setStreamingReply] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const loadedRef = useRef(false)
+  const loadedRef = useRef<string | null>(null)
+
+  const base = `${API_URL}/api/projects/sessions/${sessionId}`
 
   useEffect(() => {
-    if (!open || loadedRef.current) return
-    loadedRef.current = true
+    if (loadedRef.current === sessionId) return
+    loadedRef.current = sessionId
     setIsLoading(true)
     ;(async () => {
       try {
@@ -37,13 +35,15 @@ export function useProjectChat(open: boolean) {
         if (!res.ok) throw new Error('Failed to load chat')
         const data = await res.json()
         setMessages(data.messages ?? [])
+        setBrief(data.brief ?? null)
+        setBriefComplete(Boolean(data.briefComplete))
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
       } finally {
         setIsLoading(false)
       }
     })()
-  }, [open, getToken])
+  }, [sessionId, base, getToken])
 
   const send = useCallback(
     async (content: string) => {
@@ -52,7 +52,7 @@ export function useProjectChat(open: boolean) {
       setIsStreaming(true)
       setStreamingReply('')
 
-      const userMsg: ProjectChatMessage = {
+      const userMsg: ProjectCreationChatMessage = {
         id: `local-${Date.now()}`,
         role: 'user',
         content,
@@ -99,9 +99,16 @@ export function useProjectChat(open: boolean) {
             } catch {
               continue
             }
-            if (ev === 'token') replyText += (data as { text: string }).text
-            else if (ev === 'error') streamError = (data as { message?: string }).message ?? 'Chat failed'
-            if (ev === 'token') setStreamingReply(replyText)
+            if (ev === 'token') {
+              replyText += (data as { text: string }).text
+              setStreamingReply(replyText)
+            } else if (ev === 'brief') {
+              const b = data as { brief: Record<string, unknown>; briefComplete: boolean }
+              setBrief(b.brief)
+              setBriefComplete(b.briefComplete)
+            } else if (ev === 'error') {
+              streamError = (data as { message?: string }).message ?? 'Chat failed'
+            }
           }
         }
 
@@ -110,8 +117,6 @@ export function useProjectChat(open: boolean) {
           ...prev,
           { id: `asst-${Date.now()}`, role: 'assistant', content: replyText, createdAt: new Date().toISOString() },
         ])
-        // The brief may have grown → refresh the planner's readiness badge.
-        qc.invalidateQueries({ queryKey: ['roadmap-status'] })
       } catch (e) {
         // Roll back the optimistic user message so they can retry.
         setMessages(prev => prev.filter(m => m.id !== userMsg.id))
@@ -121,8 +126,8 @@ export function useProjectChat(open: boolean) {
         setIsStreaming(false)
       }
     },
-    [getToken, isStreaming, qc],
+    [base, getToken, isStreaming],
   )
 
-  return { messages, streamingReply, isStreaming, isLoading, error, send }
+  return { messages, brief, briefComplete, streamingReply, isStreaming, isLoading, error, send }
 }

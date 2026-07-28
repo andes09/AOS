@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, Text, Boolean
+from sqlalchemy import String, DateTime, Text, Boolean, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from src.database import Base
@@ -16,6 +16,10 @@ class Organization(Base):
     encrypted_anthropic_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     use_managed_key: Mapped[bool] = mapped_column(Boolean, default=False)
     onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # NULL = unlimited. Counts all projects regardless of status (see
+    # routers/projects.py) — archiving is a visibility flag, not a
+    # resource-freeing operation, so it must not be a loophole around the cap.
+    max_projects: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

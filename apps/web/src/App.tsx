@@ -3,6 +3,8 @@ import { SignedIn, SignedOut, RedirectToSignIn, SignIn } from '@clerk/clerk-reac
 import { DashboardLayout } from './layouts/DashboardLayout'
 import { OrgProvider } from './components/OrgProvider'
 import { PlannerPage } from './pages/planner/PlannerPage'
+import { ProjectHubPage } from './pages/projects/ProjectHubPage'
+import { ProjectCreatePage } from './pages/projects/ProjectCreatePage'
 import { OnboardingV2Page } from './pages/OnboardingV2Page'
 import { InviteAcceptPage } from './pages/InviteAcceptPage'
 
@@ -37,9 +39,13 @@ export default function App() {
           </>
         )
       }>
-        {/* The planner is the whole app now. Settings is a modal opened from
-            the top bar, not a route. */}
-        <Route index element={<PlannerPage />} />
+        {/* Project Hub is the new landing page — an org can have multiple
+            projects now (see docs/plans/2026-07-20-project-hub.md). The
+            planner becomes a project-scoped nested route. Settings is a
+            modal opened from the top bar, not a route. */}
+        <Route index element={<ProjectHubPage />} />
+        <Route path="projects/new" element={<ProjectCreatePage />} />
+        <Route path="projects/:projectId" element={<PlannerPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/app" replace />} />
     </Routes>

@@ -1,12 +1,19 @@
 """
-Router tests for /api/roadmap. Follows the test_onboarding_v2.py skeleton
-(tmp_db fixture, _patch_clerk, ASGI test client, manual seeding).
+Router tests for /api/projects/{project_id}/roadmap. Follows the
+test_onboarding_v2.py skeleton (tmp_db fixture, _patch_clerk, ASGI test
+client, manual seeding).
 
 Happy-path generate/regenerate tests exercise the real service with only the
 Groq client faked (same approach as test_roadmap_generator.py) so the
 router->service wiring and response shapes are actually verified. Error-
 mapping tests (402/502) mock the service functions directly since that's
 testing the router's own exception translation, not the service's.
+
+Every route is now project-scoped (see docs/plans/2026-07-20-project-hub.md);
+in addition to the org-scoping tests, this file covers the cross-tenant-
+within-org gap the multi-project change introduces: a task/milestone from
+project A must 404 through project B's URL even when both projects belong to
+the same org.
 """
 
 import json
@@ -78,6 +85,18 @@ async def _seed_session(org_id, brief=_BRIEF, purpose="hobby"):
         return session_id
 
 
+async def _seed_project_no_milestones(team_id, session_id, name="Seeded"):
+    """A Project row with no milestones yet — the "repair" case for POST .../generate."""
+    project_id = uuid.uuid4()
+    async for db in app.dependency_overrides[get_db]():
+        db.add(Project(
+            id=project_id, team_id=team_id, onboarding_session_id=session_id,
+            name=name, purpose="hobby",
+        ))
+        await db.commit()
+        return project_id
+
+
 async def _seed_roadmap(team_id, session_id):
     """Persist a project with 2 milestones (M0: 2 tasks, M1: 1 task) directly."""
     project_id = uuid.uuid4()
@@ -100,6 +119,10 @@ async def _seed_roadmap(team_id, session_id):
         ])
         await db.commit()
         return project_id, (m0, m1)
+
+
+def _url(project_id, suffix=""):
+    return f"/api/projects/{project_id}/roadmap{suffix}"
 
 
 # ─── Groq fakes (mirrors test_roadmap_generator.py) ─────────────────────────────
@@ -130,109 +153,116 @@ def _patch_api_key():
     )
 
 
-# ─── GET /api/roadmap ───────────────────────────────────────────────────────────
+# ─── GET /api/projects/{project_id}/roadmap ─────────────────────────────────────
 @pytest.mark.asyncio
 async def test_get_roadmap_org_not_provisioned(tmp_db):
     with _patch_clerk():
         async with _client() as client:
-            resp = await client.get("/api/roadmap", headers=AUTH)
+            resp = await client.get(_url(uuid.uuid4()), headers=AUTH)
     assert resp.status_code == 409
     assert resp.json()["detail"] == "org_not_provisioned"
 
 
 @pytest.mark.asyncio
-async def test_get_roadmap_no_session_returns_null(tmp_db):
+async def test_get_roadmap_project_not_found(tmp_db):
     await _seed_org()
     with _patch_clerk():
         async with _client() as client:
-            resp = await client.get("/api/roadmap", headers=AUTH)
-    assert resp.status_code == 200
-    assert resp.json() is None
+            resp = await client.get(_url(uuid.uuid4()), headers=AUTH)
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "project_not_found"
 
 
-# ─── POST /api/roadmap/generate ─────────────────────────────────────────────────
 @pytest.mark.asyncio
-async def test_generate_requires_brief(tmp_db):
-    org_id, _ = await _seed_org()
-    await _seed_session(org_id, brief=None)
+async def test_get_roadmap_happy_path(tmp_db):
+    org_id, team_id = await _seed_org()
+    session_id = await _seed_session(org_id)
+    project_id, _ = await _seed_roadmap(team_id, session_id)
+
     with _patch_clerk():
         async with _client() as client:
-            resp = await client.post("/api/roadmap/generate", headers=AUTH)
-    assert resp.status_code == 409
+            resp = await client.get(_url(project_id), headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == str(project_id)
+    assert body["status"] == "active"
+    assert [m["title"] for m in body["milestones"]] == ["M0", "M1"]
 
 
+# ─── POST /api/projects/{project_id}/roadmap/generate (idempotent repair) ───────
 @pytest.mark.asyncio
-async def test_generate_no_team_for_org(tmp_db):
-    org_id, _ = await _seed_org(with_team=False)
-    await _seed_session(org_id)
-    with _patch_clerk(), _patch_api_key():
-        async with _client() as client:
-            resp = await client.post("/api/roadmap/generate", headers=AUTH)
-    assert resp.status_code == 409
-    assert resp.json()["detail"] == "no_team_for_org"
-
-
-@pytest.mark.asyncio
-async def test_generate_happy_path_then_idempotent(tmp_db):
+async def test_generate_repair_requires_brief(tmp_db):
     org_id, team_id = await _seed_org()
-    await _seed_session(org_id)
+    session_id = await _seed_session(org_id, brief=None)
+    project_id = await _seed_project_no_milestones(team_id, session_id)
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.post(_url(project_id, "/generate"), headers=AUTH)
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_generate_repair_returns_existing_without_calling_groq(tmp_db):
+    org_id, team_id = await _seed_org()
+    session_id = await _seed_session(org_id)
+    project_id, _ = await _seed_roadmap(team_id, session_id)
     fake = _fake_groq(_ROADMAP_PAYLOAD)
 
     with _patch_clerk(), _patch_api_key(), _patch_groq(fake):
         async with _client() as client:
-            resp = await client.post("/api/roadmap/generate", headers=AUTH)
-            assert resp.status_code == 200
-            body = resp.json()
-            assert body["name"] == "Trail Buddy"
-            assert [m["title"] for m in body["milestones"]] == ["Foundations"]
-
-            # Idempotent: second call returns the same roadmap without calling Groq again.
-            resp2 = await client.post("/api/roadmap/generate", headers=AUTH)
-    assert resp2.json() == body
-    assert fake.chat.completions.create.await_count == 1
+            resp = await client.post(_url(project_id, "/generate"), headers=AUTH)
+    assert resp.status_code == 200
+    assert [m["title"] for m in resp.json()["milestones"]] == ["M0", "M1"]
+    fake.chat.completions.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_generate_upstream_error_maps_to_502(tmp_db):
+async def test_generate_repair_populates_when_no_milestones(tmp_db):
     org_id, team_id = await _seed_org()
-    await _seed_session(org_id)
+    session_id = await _seed_session(org_id)
+    project_id = await _seed_project_no_milestones(team_id, session_id)
+    fake = _fake_groq(_ROADMAP_PAYLOAD)
+
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake):
+        async with _client() as client:
+            resp = await client.post(_url(project_id, "/generate"), headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    # regenerate_roadmap keeps the existing Project row/id (no duplicate insert).
+    assert body["id"] == str(project_id)
+    assert [m["title"] for m in body["milestones"]] == ["Foundations"]
+
+
+@pytest.mark.asyncio
+async def test_generate_repair_upstream_error_maps_to_502(tmp_db):
+    org_id, team_id = await _seed_org()
+    session_id = await _seed_session(org_id)
+    project_id = await _seed_project_no_milestones(team_id, session_id)
     fake = _fake_groq(tool_calls=[])
 
     with _patch_clerk(), _patch_api_key(), _patch_groq(fake):
         async with _client() as client:
-            resp = await client.post("/api/roadmap/generate", headers=AUTH)
+            resp = await client.post(_url(project_id, "/generate"), headers=AUTH)
     assert resp.status_code == 502
 
 
-# ─── POST /api/roadmap/regenerate ───────────────────────────────────────────────
+# ─── POST /api/projects/{project_id}/roadmap/regenerate (full replan) ───────────
 @pytest.mark.asyncio
 async def test_regenerate_requires_brief(tmp_db):
-    org_id, _ = await _seed_org()
-    await _seed_session(org_id, brief=None)
+    org_id, team_id = await _seed_org()
+    session_id = await _seed_session(org_id, brief=None)
+    project_id, _ = await _seed_roadmap(team_id, session_id)
     with _patch_clerk():
         async with _client() as client:
-            resp = await client.post("/api/roadmap/regenerate", headers=AUTH)
+            resp = await client.post(_url(project_id, "/regenerate"), headers=AUTH)
     assert resp.status_code == 409
-
-
-@pytest.mark.asyncio
-async def test_regenerate_falls_back_to_generate_when_no_project(tmp_db):
-    org_id, team_id = await _seed_org()
-    await _seed_session(org_id)
-    fake = _fake_groq(_ROADMAP_PAYLOAD)
-
-    with _patch_clerk(), _patch_api_key(), _patch_groq(fake):
-        async with _client() as client:
-            resp = await client.post("/api/roadmap/regenerate", headers=AUTH)
-    assert resp.status_code == 200
-    assert resp.json()["name"] == "Trail Buddy"
 
 
 @pytest.mark.asyncio
 async def test_regenerate_replaces_existing_roadmap(tmp_db):
     org_id, team_id = await _seed_org()
     session_id = await _seed_session(org_id)
-    await _seed_roadmap(team_id, session_id)
+    project_id, _ = await _seed_roadmap(team_id, session_id)
 
     regen_payload = {
         "projectName": "Trail Buddy 2",
@@ -242,7 +272,7 @@ async def test_regenerate_replaces_existing_roadmap(tmp_db):
 
     with _patch_clerk(), _patch_api_key(), _patch_groq(fake):
         async with _client() as client:
-            resp = await client.post("/api/roadmap/regenerate", headers=AUTH)
+            resp = await client.post(_url(project_id, "/regenerate"), headers=AUTH)
     assert resp.status_code == 200
     body = resp.json()
     assert body["name"] == "Trail Buddy 2"
@@ -252,7 +282,8 @@ async def test_regenerate_replaces_existing_roadmap(tmp_db):
 @pytest.mark.asyncio
 async def test_regenerate_bad_key_maps_to_402(tmp_db):
     org_id, team_id = await _seed_org()
-    await _seed_session(org_id)
+    session_id = await _seed_session(org_id)
+    project_id, _ = await _seed_roadmap(team_id, session_id)
 
     with _patch_clerk(), _patch_api_key():
         with patch(
@@ -260,16 +291,16 @@ async def test_regenerate_bad_key_maps_to_402(tmp_db):
             new=AsyncMock(side_effect=ValueError("Invalid Groq API key.")),
         ):
             async with _client() as client:
-                resp = await client.post("/api/roadmap/regenerate", headers=AUTH)
+                resp = await client.post(_url(project_id, "/regenerate"), headers=AUTH)
     assert resp.status_code == 402
 
 
-# ─── POST /api/roadmap/milestones/{id}/regenerate ───────────────────────────────
+# ─── POST .../milestones/{id}/regenerate ────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_regenerate_milestone_happy_path(tmp_db):
     org_id, team_id = await _seed_org()
     session_id = await _seed_session(org_id)
-    _, (m0, m1) = await _seed_roadmap(team_id, session_id)
+    project_id, (m0, m1) = await _seed_roadmap(team_id, session_id)
 
     payload = {
         "title": "M1 rebuilt",
@@ -280,7 +311,7 @@ async def test_regenerate_milestone_happy_path(tmp_db):
 
     with _patch_clerk(), _patch_api_key(), _patch_groq(fake):
         async with _client() as client:
-            resp = await client.post(f"/api/roadmap/milestones/{m1}/regenerate", headers=AUTH)
+            resp = await client.post(_url(project_id, f"/milestones/{m1}/regenerate"), headers=AUTH)
     assert resp.status_code == 200
     body = resp.json()
     assert body["id"] == str(m1)
@@ -290,7 +321,7 @@ async def test_regenerate_milestone_happy_path(tmp_db):
     # Sibling untouched.
     with _patch_clerk():
         async with _client() as client:
-            roadmap = (await client.get("/api/roadmap", headers=AUTH)).json()
+            roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
     sibling = next(m for m in roadmap["milestones"] if m["id"] == str(m0))
     assert sibling["title"] == "M0"
     assert [t["title"] for t in sibling["tasks"]] == ["T0", "T1"]
@@ -298,11 +329,12 @@ async def test_regenerate_milestone_happy_path(tmp_db):
 
 @pytest.mark.asyncio
 async def test_regenerate_milestone_not_found(tmp_db):
-    org_id, _ = await _seed_org()
-    await _seed_session(org_id)
+    org_id, team_id = await _seed_org()
+    session_id = await _seed_session(org_id)
+    project_id, _ = await _seed_roadmap(team_id, session_id)
     with _patch_clerk(), _patch_api_key():
         async with _client() as client:
-            resp = await client.post(f"/api/roadmap/milestones/{uuid.uuid4()}/regenerate", headers=AUTH)
+            resp = await client.post(_url(project_id, f"/milestones/{uuid.uuid4()}/regenerate"), headers=AUTH)
     assert resp.status_code == 404
     assert resp.json()["detail"] == "milestone_not_found"
 
@@ -311,14 +343,33 @@ async def test_regenerate_milestone_not_found(tmp_db):
 async def test_regenerate_milestone_cross_org_404(tmp_db):
     org_a, team_a = await _seed_org(clerk_org_id="org_a")
     session_a = await _seed_session(org_a)
-    _, (m0, _) = await _seed_roadmap(team_a, session_a)
+    project_a, (m0, _) = await _seed_roadmap(team_a, session_a)
 
     org_b, _ = await _seed_org(clerk_org_id="org_b")
     await _seed_session(org_b)
 
     with _patch_clerk(org_id="org_b"), _patch_api_key():
         async with _client() as client:
-            resp = await client.post(f"/api/roadmap/milestones/{m0}/regenerate", headers=AUTH)
+            resp = await client.post(_url(project_a, f"/milestones/{m0}/regenerate"), headers=AUTH)
+    # project_a doesn't belong to org_b: the project lookup itself 404s first.
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "project_not_found"
+
+
+@pytest.mark.asyncio
+async def test_regenerate_milestone_cross_project_within_org_404(tmp_db):
+    """A milestone that belongs to a sibling project in the SAME org must still 404 —
+    this is the real cross-tenant-within-org gap the multi-project change introduces."""
+    org_id, team_id = await _seed_org()
+    session_a = await _seed_session(org_id)
+    project_a, (m0, _) = await _seed_roadmap(team_id, session_a)
+
+    session_b = await _seed_session(org_id)
+    project_b = await _seed_project_no_milestones(team_id, session_b, name="Sibling")
+
+    with _patch_clerk(), _patch_api_key():
+        async with _client() as client:
+            resp = await client.post(_url(project_b, f"/milestones/{m0}/regenerate"), headers=AUTH)
     assert resp.status_code == 404
     assert resp.json()["detail"] == "milestone_not_found"
 
@@ -327,29 +378,29 @@ async def test_regenerate_milestone_cross_org_404(tmp_db):
 async def test_regenerate_milestone_upstream_error_maps_to_502(tmp_db):
     org_id, team_id = await _seed_org()
     session_id = await _seed_session(org_id)
-    _, (m0, _) = await _seed_roadmap(team_id, session_id)
+    project_id, (m0, _) = await _seed_roadmap(team_id, session_id)
     fake = _fake_groq(tool_calls=[])
 
     with _patch_clerk(), _patch_api_key(), _patch_groq(fake):
         async with _client() as client:
-            resp = await client.post(f"/api/roadmap/milestones/{m0}/regenerate", headers=AUTH)
+            resp = await client.post(_url(project_id, f"/milestones/{m0}/regenerate"), headers=AUTH)
     assert resp.status_code == 502
 
 
-# ─── PATCH /api/roadmap/tasks/{id} ──────────────────────────────────────────────
+# ─── PATCH .../tasks/{id} ────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_patch_task_status_title_description(tmp_db):
     org_id, team_id = await _seed_org()
     session_id = await _seed_session(org_id)
-    _, (m0, _) = await _seed_roadmap(team_id, session_id)
+    project_id, _ = await _seed_roadmap(team_id, session_id)
 
     with _patch_clerk():
         async with _client() as client:
-            roadmap = (await client.get("/api/roadmap", headers=AUTH)).json()
+            roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
             task_id = roadmap["milestones"][0]["tasks"][0]["id"]
 
             resp = await client.patch(
-                f"/api/roadmap/tasks/{task_id}",
+                _url(project_id, f"/tasks/{task_id}"),
                 json={"status": "done", "title": "Renamed", "description": "New desc"},
                 headers=AUTH,
             )
@@ -364,19 +415,43 @@ async def test_patch_task_status_title_description(tmp_db):
 async def test_patch_task_cross_org_404(tmp_db):
     org_a, team_a = await _seed_org(clerk_org_id="org_a")
     session_a = await _seed_session(org_a)
-    _, (m0, _) = await _seed_roadmap(team_a, session_a)
+    project_a, _ = await _seed_roadmap(team_a, session_a)
 
     org_b, _ = await _seed_org(clerk_org_id="org_b")
 
     with _patch_clerk(org_id="org_a"):
         async with _client() as client:
-            roadmap = (await client.get("/api/roadmap", headers=AUTH)).json()
+            roadmap = (await client.get(_url(project_a), headers=AUTH)).json()
             task_id = roadmap["milestones"][0]["tasks"][0]["id"]
 
     with _patch_clerk(org_id="org_b"):
         async with _client() as client:
             resp = await client.patch(
-                f"/api/roadmap/tasks/{task_id}", json={"status": "done"}, headers=AUTH
+                _url(project_a, f"/tasks/{task_id}"), json={"status": "done"}, headers=AUTH
+            )
+    # project_a doesn't belong to org_b: the project lookup itself 404s first.
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "project_not_found"
+
+
+@pytest.mark.asyncio
+async def test_patch_task_cross_project_within_org_404(tmp_db):
+    """A task belonging to a sibling project in the same org must 404 through this
+    project's URL — an org-only check would wrongly authorize it."""
+    org_id, team_id = await _seed_org()
+    session_a = await _seed_session(org_id)
+    project_a, _ = await _seed_roadmap(team_id, session_a)
+
+    session_b = await _seed_session(org_id)
+    project_b = await _seed_project_no_milestones(team_id, session_b, name="Sibling")
+
+    with _patch_clerk():
+        async with _client() as client:
+            roadmap = (await client.get(_url(project_a), headers=AUTH)).json()
+            task_id = roadmap["milestones"][0]["tasks"][0]["id"]
+
+            resp = await client.patch(
+                _url(project_b, f"/tasks/{task_id}"), json={"status": "done"}, headers=AUTH
             )
     assert resp.status_code == 404
     assert resp.json()["detail"] == "task_not_found"
@@ -386,22 +461,22 @@ async def test_patch_task_cross_org_404(tmp_db):
 async def test_patch_task_reorder_shifts_siblings(tmp_db):
     org_id, team_id = await _seed_org()
     session_id = await _seed_session(org_id)
-    _, (m0, _) = await _seed_roadmap(team_id, session_id)
+    project_id, _ = await _seed_roadmap(team_id, session_id)
 
     with _patch_clerk():
         async with _client() as client:
-            roadmap = (await client.get("/api/roadmap", headers=AUTH)).json()
+            roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
             tasks = roadmap["milestones"][0]["tasks"]  # T0 (0), T1 (1)
             t0_id = tasks[0]["id"]
 
             # Move T0 to the end (index 1 of 2).
             resp = await client.patch(
-                f"/api/roadmap/tasks/{t0_id}", json={"sortOrder": 1}, headers=AUTH
+                _url(project_id, f"/tasks/{t0_id}"), json={"sortOrder": 1}, headers=AUTH
             )
             assert resp.status_code == 200
             assert resp.json()["sortOrder"] == 1
 
-            roadmap = (await client.get("/api/roadmap", headers=AUTH)).json()
+            roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
     reordered = roadmap["milestones"][0]["tasks"]
     assert [t["title"] for t in reordered] == ["T1", "T0"]
     assert [t["sortOrder"] for t in reordered] == [0, 1]
@@ -412,53 +487,93 @@ async def test_patch_task_reorder_shifts_siblings(tmp_db):
 async def test_patch_task_reorder_out_of_bounds(tmp_db, bad_order):
     org_id, team_id = await _seed_org()
     session_id = await _seed_session(org_id)
-    _, (m0, _) = await _seed_roadmap(team_id, session_id)
+    project_id, _ = await _seed_roadmap(team_id, session_id)
 
     with _patch_clerk():
         async with _client() as client:
-            roadmap = (await client.get("/api/roadmap", headers=AUTH)).json()
+            roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
             task_id = roadmap["milestones"][0]["tasks"][0]["id"]
 
             resp = await client.patch(
-                f"/api/roadmap/tasks/{task_id}", json={"sortOrder": bad_order}, headers=AUTH
+                _url(project_id, f"/tasks/{task_id}"), json={"sortOrder": bad_order}, headers=AUTH
             )
     assert resp.status_code == 422
     assert resp.json()["detail"] == "sort_order_out_of_bounds"
 
 
-# ─── DELETE /api/roadmap/tasks/{id} ─────────────────────────────────────────────
+# ─── DELETE .../tasks/{id} ───────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_delete_task(tmp_db):
     org_id, team_id = await _seed_org()
     session_id = await _seed_session(org_id)
-    _, (m0, _) = await _seed_roadmap(team_id, session_id)
+    project_id, _ = await _seed_roadmap(team_id, session_id)
 
     with _patch_clerk():
         async with _client() as client:
-            roadmap = (await client.get("/api/roadmap", headers=AUTH)).json()
+            roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
             task_id = roadmap["milestones"][0]["tasks"][0]["id"]
 
-            resp = await client.delete(f"/api/roadmap/tasks/{task_id}", headers=AUTH)
+            resp = await client.delete(_url(project_id, f"/tasks/{task_id}"), headers=AUTH)
             assert resp.status_code == 204
 
-            roadmap = (await client.get("/api/roadmap", headers=AUTH)).json()
+            roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
     assert [t["title"] for t in roadmap["milestones"][0]["tasks"]] == ["T1"]
 
 
 @pytest.mark.asyncio
-async def test_delete_task_cross_org_404(tmp_db):
-    org_a, team_a = await _seed_org(clerk_org_id="org_a")
-    session_a = await _seed_session(org_a)
-    _, (m0, _) = await _seed_roadmap(team_a, session_a)
-    await _seed_org(clerk_org_id="org_b")
+async def test_delete_task_cross_project_within_org_404(tmp_db):
+    org_id, team_id = await _seed_org()
+    session_a = await _seed_session(org_id)
+    project_a, _ = await _seed_roadmap(team_id, session_a)
 
-    with _patch_clerk(org_id="org_a"):
+    session_b = await _seed_session(org_id)
+    project_b = await _seed_project_no_milestones(team_id, session_b, name="Sibling")
+
+    with _patch_clerk():
         async with _client() as client:
-            roadmap = (await client.get("/api/roadmap", headers=AUTH)).json()
+            roadmap = (await client.get(_url(project_a), headers=AUTH)).json()
             task_id = roadmap["milestones"][0]["tasks"][0]["id"]
 
-    with _patch_clerk(org_id="org_b"):
-        async with _client() as client:
-            resp = await client.delete(f"/api/roadmap/tasks/{task_id}", headers=AUTH)
+            resp = await client.delete(_url(project_b, f"/tasks/{task_id}"), headers=AUTH)
     assert resp.status_code == 404
     assert resp.json()["detail"] == "task_not_found"
+
+
+# ─── GET .../members (workload scoped to this project only) ─────────────────────
+@pytest.mark.asyncio
+async def test_members_scheduled_count_scoped_to_project(tmp_db):
+    """A developer's scheduled-task count must only reflect THIS project's tasks,
+    not their workload across every project in the org."""
+    from src.models.developer import Developer
+
+    org_id, team_id = await _seed_org()
+    session_a = await _seed_session(org_id)
+    project_a, (m0, _) = await _seed_roadmap(team_id, session_a)
+
+    session_b = await _seed_session(org_id)
+    project_b, (m0_b, _) = await _seed_roadmap(team_id, session_b)
+
+    dev_id = uuid.uuid4()
+    async for db in app.dependency_overrides[get_db]():
+        db.add(Developer(id=dev_id, team_id=team_id, name="Dev", role="developer"))
+        await db.flush()
+        # Assign + schedule one task in EACH project to the same developer.
+        task_a = (await db.execute(
+            __import__("sqlalchemy").select(Task).where(Task.milestone_id == m0)
+        )).scalars().first()
+        task_b = (await db.execute(
+            __import__("sqlalchemy").select(Task).where(Task.milestone_id == m0_b)
+        )).scalars().first()
+        from datetime import date
+        task_a.assignee_id = dev_id
+        task_a.scheduled_date = date.today()
+        task_b.assignee_id = dev_id
+        task_b.scheduled_date = date.today()
+        await db.commit()
+
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.get(_url(project_a, "/members"), headers=AUTH)
+    assert resp.status_code == 200
+    member = next(m for m in resp.json()["members"] if m["id"] == str(dev_id))
+    assert member["scheduledCount"] == 1

@@ -1,5 +1,49 @@
 # Project Hub — multi-project support, org project cap, Active/Finished/Archived
 
+## Implementation Notes (built 2026-07-28)
+
+- **Migration is `0036`** (`down_revision='0035'`), not `0032` as originally written — the
+  real Alembic head had advanced to `0034` (GitHub App migration) by build time, and a
+  same-day unrelated commit (`74036ca`, `task_parallel`) claimed `0035` mid-build. Chain:
+  `0034 → 0035 (task_parallel, unrelated) → 0036 (this plan)`.
+  `docs/plans/2026-07-20-plan-reconciliation.md` has the full renumbering for all 5 plans.
+- **`Project.status` is a plain `String(20)` column**, not `SAEnum(ProjectStatus, ...)` as
+  first implemented. `SAEnum` reloads as the Python enum *member* (`ProjectStatus.ACTIVE`)
+  rather than its string value once an instance is re-fetched from the DB — that broke
+  `routers/projects.py`'s plain Python `(project.status, body.status) in _ALLOWED_TRANSITIONS`
+  comparison after any reload. `ProjectStatus` stays as a values-only enum (`_VALID_STATUSES`,
+  `.value` constants), never wrapping the column type.
+  `apps/api/src/models/task.py`'s `TaskStatus`/`Task.status` has this same underlying `SAEnum`
+  behavior but has never hit it in practice, since nothing does a Python-level equality
+  comparison against an already-loaded `Task.status` — worth knowing if that ever changes.
+- **`roadmap.py`'s frontend counterpart isn't the `RoadmapPage`/`PlannerPage` split this doc
+  assumed.** The planner underwent an unrelated redesign since this doc was written and is now
+  one unified `pages/planner/PlannerPage.tsx` (no separate roadmap page, no left sidebar nav).
+  `App.tsx` nests `projects/:projectId` → `PlannerPage` directly (one route, not two), and
+  `DashboardLayout`/`TopBar` were made project-aware (conditionally show the view switcher +
+  a "← Projects" breadcrumb only inside a project route) rather than editing a nav sidebar
+  that no longer exists.
+- **`IdeaChatStep.tsx` was not actually reusable** as this doc assumed — it calls
+  `useIdeaChat()` internally, which is hardcoded to the org-wide `/api/onboarding/v2/chat`
+  endpoints, not callback-prop-driven like `PurposeStep.tsx` (which *is* genuinely reusable
+  and is reused as written). Built a new, leaner `pages/projects/ProjectCreateChatStep.tsx` +
+  `features/projects/hooks/useProjectCreationChat.ts` against the session-scoped
+  `/api/projects/sessions/{id}/chat` endpoints instead, mirroring `useProjectChat.ts`'s SSE
+  logic rather than duplicating `IdeaChatStep`'s fuller UI (no live brief side-panel in v1).
+- **`features/roadmap/api.ts` never existed** to mirror — `usePlannerData.ts`/
+  `usePlannerMutations.ts` already call `useApi()` directly with no separate api-client module,
+  so `features/projects/` follows that same (simpler, current) convention instead of the
+  doc's assumed `features/roadmap/`-style barrel.
+- A same-day commit (`74036ca`) also added `POST /api/roadmap/extend-day` and
+  `Task.parallel` — folded both into the project-scoped rewrite (`.../roadmap/extend-day`,
+  `parallel` threaded through `_task_json`) since they landed on `roadmap.py` mid-build.
+- Real-Postgres `alembic upgrade head` verification was not achievable on the build machine —
+  an unrelated pre-existing bug in `0025_merge_team_members_into_developers.py` (step ordering:
+  it remaps `tickets.assignee_id` to a `developers` id before swapping the FK to reference
+  `developers`) breaks migration replay from scratch, independent of this plan. Verified via
+  `pytest` (`tmp_db`'s `Base.metadata.create_all()`, which doesn't go through Alembic) instead;
+  see `docs/plans/2026-07-20-plan-reconciliation.md` for the full writeup.
+
 ## Context
 
 Omada today is single-project-per-org everywhere it matters. `Project.onboarding_session_id` (`apps/api/src/models/project.py:16-18`) is a **unique** FK to `onboarding_sessions.id`, and `OnboardingSession.organization_id` (`apps/api/src/models/onboarding_session.py:27-29`) is **also unique** — so an org can have at most one `OnboardingSession`, which can produce at most one `Project`. Every roadmap endpoint (`apps/api/src/routers/roadmap.py`) and the org-onboarding endpoints (`apps/api/src/routers/onboarding_v2.py`) hard-code this by resolving "the org's session" via `db.scalar(select(OnboardingSession).where(OnboardingSession.organization_id == org.id))` — a single-row assumption with no `ORDER BY`. Once a second row can exist, `.scalar()` (effectively `.first()`) would silently return an arbitrary row instead of erroring — this is the central hazard the plan has to close, not a hypothetical one.

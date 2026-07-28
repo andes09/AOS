@@ -1,0 +1,10 @@
+features:
+  clerk_auth: true
+  slack_alerts: false
+  allow_team_creation_via_api: false
+  cost_tracking: true
+  roadmap_generation: true
+  planner: true
+  roadmap_chat: true
+  experimental:
+    enabled: true

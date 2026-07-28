@@ -1,20 +1,28 @@
 """
 Roadmap — the personal, day-by-day project plan behind the calendar view.
 
-One roadmap (Project → Milestones → Tasks) per org, generated from the
-onboarding brief via services/roadmap_generator. Tasks carry a scheduled_date
-(calendar day) and a status the user flips to check things off, plus delete.
+One roadmap (Project → Milestones → Tasks) per project. An org can have
+multiple projects (see docs/plans/2026-07-20-project-hub.md); every route
+below is scoped by project_id, resolved via project_common._owned_project
+(404s if the project doesn't belong to the caller's org). Tasks carry a
+scheduled_date (calendar day) and a status the user flips to check things
+off, plus delete.
 
-GET    /api/roadmap                              → the org's roadmap, or null
-GET    /api/roadmap/members                      → team members + lane colors (planner sidebar)
-POST   /api/roadmap/generate                     → generate + persist from the brief
-POST   /api/roadmap/regenerate                   → replan the whole roadmap
-POST   /api/roadmap/milestones/{id}/regenerate   → replan one milestone
-POST   /api/roadmap/tasks                        → create a task
-POST   /api/roadmap/tasks/reschedule             → bulk move/reassign (drag-drop)
-PATCH  /api/roadmap/tasks/{task_id}              → update status / title / description /
-                                                    schedule / assignee / sort order
-DELETE /api/roadmap/tasks/{task_id}              → delete a task
+GET    /api/projects/{project_id}/roadmap                              → the project's roadmap
+GET    /api/projects/{project_id}/roadmap/members                      → team members + lane colors (planner sidebar)
+POST   /api/projects/{project_id}/roadmap/generate                     → idempotent repair: regenerate from brief only if no milestones exist yet
+POST   /api/projects/{project_id}/roadmap/regenerate                   → replan the whole roadmap
+POST   /api/projects/{project_id}/roadmap/adjust                       → non-destructive re-plan from per-task feedback
+POST   /api/projects/{project_id}/roadmap/extend-day                   → generate a few more todo tasks for one day
+POST   /api/projects/{project_id}/roadmap/milestones/{id}/regenerate   → replan one milestone
+POST   /api/projects/{project_id}/roadmap/tasks                        → create a task
+POST   /api/projects/{project_id}/roadmap/tasks/reschedule             → bulk move/reassign (drag-drop)
+PATCH  /api/projects/{project_id}/roadmap/tasks/{task_id}              → update status / title / description /
+                                                                          schedule / assignee / sort order
+DELETE /api/projects/{project_id}/roadmap/tasks/{task_id}              → delete a task
+GET    /api/projects/{project_id}/roadmap/status                       → readiness check for the planner's badge
+GET    /api/projects/{project_id}/roadmap/chat                         → refine-chat transcript
+POST   /api/projects/{project_id}/roadmap/chat/message                 → refine-chat turn (SSE)
 """
 
 import asyncio
@@ -39,6 +47,7 @@ from src.models.organization import Organization
 from src.models.project import Project
 from src.models.task import Task, TaskStatus
 from src.models.team import Team
+from src.routers.project_common import _get_org, _owned_project
 from src.services import idea_interview, roadmap_adjuster, roadmap_generator
 
 logger = logging.getLogger(__name__)
@@ -50,7 +59,7 @@ _CHAT_OPENER = (
     "constraints, key features), the more precise and technical I can make your plan."
 )
 
-router = APIRouter(prefix="/api/roadmap", tags=["roadmap"])
+router = APIRouter(prefix="/api/projects/{project_id}/roadmap", tags=["roadmap"])
 
 _VALID_STATUSES = {s.value for s in TaskStatus}
 
@@ -123,29 +132,20 @@ def _project_json(project: Project) -> dict:
         "name": project.name,
         "summary": project.summary,
         "purpose": project.purpose,
+        "status": project.status,
         "milestones": [_milestone_json(m) for m in project.milestones],
     }
 
 
 # ─── shared lookups ─────────────────────────────────────────────────────────────
-async def _get_org(clerk_org_id: str, db: AsyncSession) -> Organization:
-    org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
-    if not org:
-        raise HTTPException(status_code=409, detail="org_not_provisioned")
-    return org
+async def _owned_task(task_id: str, project: Project, db: AsyncSession) -> Task:
+    """Load a task, ensuring it belongs to `project`. 404 otherwise.
 
-
-async def _load_project(session_id: uuid.UUID, db: AsyncSession) -> Project | None:
-    """The org's project with milestones+tasks eagerly loaded (ordered)."""
-    return await db.scalar(
-        select(Project)
-        .where(Project.onboarding_session_id == session_id)
-        .options(selectinload(Project.milestones).selectinload(Milestone.tasks))
-    )
-
-
-async def _owned_task(task_id: str, org: Organization, db: AsyncSession) -> Task:
-    """Load a task, ensuring it belongs to the caller's org. 404 otherwise."""
+    Filtering on Milestone.project_id (not just the org) closes a real
+    cross-tenant-within-org gap: a client could otherwise pass a valid
+    project_id for project A but a task_id belonging to sibling project B in
+    the same org, and an org-only check would wrongly authorize it.
+    """
     try:
         tid = uuid.UUID(task_id)
     except ValueError:
@@ -153,9 +153,7 @@ async def _owned_task(task_id: str, org: Organization, db: AsyncSession) -> Task
     task = await db.scalar(
         select(Task)
         .join(Milestone, Task.milestone_id == Milestone.id)
-        .join(Project, Milestone.project_id == Project.id)
-        .join(Team, Project.team_id == Team.id)
-        .where(Task.id == tid, Team.organization_id == org.id)
+        .where(Task.id == tid, Milestone.project_id == project.id)
     )
     if task is None:
         raise HTTPException(status_code=404, detail="task_not_found")
@@ -166,8 +164,10 @@ async def _owned_developer(dev_id: uuid.UUID, org: Organization, db: AsyncSessio
     """
     Load a developer, ensuring they belong to the caller's org. 404 otherwise.
 
-    This is the cross-tenant guard for assignment. Without it, a PATCH carrying
-    an assigneeId guessed from another organization would succeed, silently
+    Stays org-scoped (not project-scoped): developers aren't project-scoped
+    entities, they're shared across every project in the org. This is the
+    cross-tenant guard for assignment — without it, a PATCH carrying an
+    assigneeId guessed from another organization would succeed, silently
     leaking that person's name and color into this org's planner.
     """
     dev = await db.scalar(
@@ -180,7 +180,7 @@ async def _owned_developer(dev_id: uuid.UUID, org: Organization, db: AsyncSessio
     return dev
 
 
-async def _owned_tasks(task_ids: list[uuid.UUID], org: Organization, db: AsyncSession) -> dict:
+async def _owned_tasks(task_ids: list[uuid.UUID], project: Project, db: AsyncSession) -> dict:
     """
     Bulk sibling of `_owned_task` — one query for the whole batch rather than N.
 
@@ -191,9 +191,7 @@ async def _owned_tasks(task_ids: list[uuid.UUID], org: Organization, db: AsyncSe
         await db.execute(
             select(Task)
             .join(Milestone, Task.milestone_id == Milestone.id)
-            .join(Project, Milestone.project_id == Project.id)
-            .join(Team, Project.team_id == Team.id)
-            .where(Task.id.in_(task_ids), Team.organization_id == org.id)
+            .where(Task.id.in_(task_ids), Milestone.project_id == project.id)
         )
     ).scalars().all()
     return {t.id: t for t in rows}
@@ -206,17 +204,15 @@ def _parse_uuid(raw: str, detail: str) -> uuid.UUID:
         raise HTTPException(status_code=404, detail=detail)
 
 
-async def _owned_milestone(milestone_id: str, org: Organization, db: AsyncSession) -> Milestone:
-    """Load a milestone (with tasks), ensuring it belongs to the caller's org. 404 otherwise."""
+async def _owned_milestone(milestone_id: str, project: Project, db: AsyncSession) -> Milestone:
+    """Load a milestone (with tasks), ensuring it belongs to `project`. 404 otherwise."""
     try:
         mid = uuid.UUID(milestone_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="milestone_not_found")
     milestone = await db.scalar(
         select(Milestone)
-        .join(Project, Milestone.project_id == Project.id)
-        .join(Team, Project.team_id == Team.id)
-        .where(Milestone.id == mid, Team.organization_id == org.id)
+        .where(Milestone.id == mid, Milestone.project_id == project.id)
         .options(selectinload(Milestone.tasks))
     )
     if milestone is None:
@@ -224,60 +220,64 @@ async def _owned_milestone(milestone_id: str, org: Organization, db: AsyncSessio
     return milestone
 
 
-async def _session_and_brief(
-    clerk_org_id: str, db: AsyncSession
-) -> tuple[Organization, OnboardingSession]:
-    """The caller's org + its onboarding session, 409 if there's no completed brief yet."""
-    org = await _get_org(clerk_org_id, db)
-    session = await db.scalar(
-        select(OnboardingSession).where(OnboardingSession.organization_id == org.id)
-    )
-    if session is None or not session.project_brief:
+def _require_brief(session: OnboardingSession) -> None:
+    if not session.project_brief:
         raise HTTPException(
             status_code=409,
             # Deliberately not "finish onboarding" — the planner's refine-chat
             # can supply the brief too, so onboarding isn't the only way out.
             detail="Add some project details first — there's no project brief to plan from yet.",
         )
-    return org, session
+
+
+async def _resolve_project_team(project: Project, db: AsyncSession) -> Team:
+    team = await db.scalar(select(Team).where(Team.id == project.team_id))
+    if team is None:
+        raise HTTPException(status_code=409, detail="no_team_for_org")
+    return team
 
 
 # ─── endpoints ──────────────────────────────────────────────────────────────────
 @router.get("")
 async def get_roadmap(
+    project_id: uuid.UUID,
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     org = await _get_org(clerk_org_id, db)
-    session = await db.scalar(
-        select(OnboardingSession).where(OnboardingSession.organization_id == org.id)
-    )
-    if session is None:
-        return None
-    project = await _load_project(session.id, db)
-    return _project_json(project) if project else None
+    project = await _owned_project(project_id, org, db)
+    return _project_json(project)
 
 
 @router.get("/members")
 async def get_members(
+    project_id: uuid.UUID,
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     """
     The planner sidebar's lanes: every active person in the org, their lane
-    color, and how much open scheduled work they're carrying.
+    color, and how much open scheduled work they're carrying *on this
+    project*.
 
     Deliberately lives here rather than in developers.py — that router is
     require_role("lead")-gated, and every developer needs to see the lanes.
+    Membership stays org-scoped (every developer in the org can be assigned),
+    but the workload count is scoped to this project's tasks only — with
+    multiple projects per org, counting org-wide would conflate unrelated
+    projects' workloads into one badge.
     """
     org = await _get_org(clerk_org_id, db)
+    project = await _owned_project(project_id, org, db)
 
     # Correlated subquery for the per-person count, so this stays one round trip
     # instead of a query per lane.
     scheduled_count = (
         select(func.count(Task.id))
+        .join(Milestone, Task.milestone_id == Milestone.id)
         .where(
             Task.assignee_id == Developer.id,
+            Milestone.project_id == project.id,
             Task.scheduled_date.is_not(None),
             Task.status != TaskStatus.DONE.value,
         )
@@ -299,37 +299,41 @@ async def get_members(
 
 @router.post("/generate")
 async def generate(
-    force: bool = False,
+    project_id: uuid.UUID,
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
-    org, session = await _session_and_brief(clerk_org_id, db)
+    """
+    Idempotent repair endpoint, not the "create a new project" path (that's
+    POST /api/projects/sessions/{id}/generate now). Only reachable for a
+    project that already exists in the URL: returns as-is if milestones
+    already exist, otherwise generates them from the project's onboarding
+    brief.
 
-    # Idempotent unless `force`: return the existing roadmap, or replace it with a
-    # fresh one when the user has added detail and wants to regenerate.
-    existing = await _load_project(session.id, db)
-    if existing is not None:
-        if not force:
-            return _project_json(existing)
-        await db.delete(existing)  # cascades to milestones + tasks
-        await db.flush()
+    Uses regenerate_roadmap (not generate_roadmap) even on the "no
+    milestones yet" branch: generate_roadmap would INSERT a brand-new Project
+    row, which collides with the unique FK on onboarding_session_id since
+    this project already has one. regenerate_roadmap finds the existing
+    Project by that same FK and populates it in place.
+    """
+    org = await _get_org(clerk_org_id, db)
+    project = await _owned_project(project_id, org, db)
+    if project.milestones:
+        return _project_json(project)
 
+    session = project.onboarding_session
+    _require_brief(session)
+    team = await _resolve_project_team(project, db)
     api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
 
-    team = await db.scalar(
-        select(Team).where(Team.organization_id == org.id).order_by(Team.created_at)
-    )
-    if team is None:
-        raise HTTPException(status_code=409, detail="no_team_for_org")
-
     try:
-        await roadmap_generator.generate_roadmap(session, team, api_key, db)
+        await roadmap_generator.regenerate_roadmap(session, team, api_key, db)
     except ValueError as exc:  # bad key
         raise HTTPException(status_code=402, detail=str(exc))
     except RuntimeError as exc:  # upstream / model failure
         raise HTTPException(status_code=502, detail=str(exc))
 
-    project = await _load_project(session.id, db)
+    project = await _owned_project(project_id, org, db)
     return _project_json(project)
 
 
@@ -357,16 +361,15 @@ def _validate_duration(v: int | None) -> int | None:
 
 @router.post("/regenerate")
 async def regenerate(
+    project_id: uuid.UUID,
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
-    org, session = await _session_and_brief(clerk_org_id, db)
-
-    team = await db.scalar(
-        select(Team).where(Team.organization_id == org.id).order_by(Team.created_at)
-    )
-    if team is None:
-        raise HTTPException(status_code=409, detail="no_team_for_org")
+    org = await _get_org(clerk_org_id, db)
+    project = await _owned_project(project_id, org, db)
+    session = project.onboarding_session
+    _require_brief(session)
+    team = await _resolve_project_team(project, db)
 
     api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
 
@@ -377,12 +380,13 @@ async def regenerate(
     except RuntimeError as exc:  # upstream / model failure
         raise HTTPException(status_code=502, detail=str(exc))
 
-    project = await _load_project(session.id, db)
+    project = await _owned_project(project_id, org, db)
     return _project_json(project)
 
 
 @router.post("/adjust")
 async def adjust(
+    project_id: uuid.UUID,
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -392,9 +396,9 @@ async def adjust(
     Runs on Groq and is non-destructive: done/in-progress tasks are preserved,
     only `todo` tasks are re-planned. See services/roadmap_adjuster.
     """
-    org, session = await _session_and_brief(clerk_org_id, db)
-    project = await _load_project(session.id, db)
-    if project is None:
+    org = await _get_org(clerk_org_id, db)
+    project = await _owned_project(project_id, org, db)
+    if not project.milestones:
         raise HTTPException(status_code=409, detail="no_roadmap")
 
     api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
@@ -406,7 +410,7 @@ async def adjust(
     except RuntimeError as exc:  # upstream / model failure
         raise HTTPException(status_code=502, detail=str(exc))
 
-    project = await _load_project(session.id, db)
+    project = await _owned_project(project_id, org, db)
     return _project_json(project)
 
 
@@ -416,6 +420,7 @@ class ExtendDayRequest(BaseModel):
 
 @router.post("/extend-day")
 async def extend_day(
+    project_id: uuid.UUID,
     body: ExtendDayRequest,
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
@@ -425,9 +430,9 @@ async def extend_day(
     everything scheduled on it and wants to keep going. Non-destructive: existing
     tasks are untouched. See services/roadmap_adjuster.extend_day.
     """
-    org, session = await _session_and_brief(clerk_org_id, db)
-    project = await _load_project(session.id, db)
-    if project is None:
+    org = await _get_org(clerk_org_id, db)
+    project = await _owned_project(project_id, org, db)
+    if not project.milestones:
         raise HTTPException(status_code=409, detail="no_roadmap")
 
     api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
@@ -439,18 +444,21 @@ async def extend_day(
     except RuntimeError as exc:  # upstream / model failure
         raise HTTPException(status_code=502, detail=str(exc))
 
-    project = await _load_project(session.id, db)
+    project = await _owned_project(project_id, org, db)
     return _project_json(project)
 
 
 @router.post("/milestones/{milestone_id}/regenerate")
 async def regenerate_milestone_endpoint(
+    project_id: uuid.UUID,
     milestone_id: str,
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
-    org, session = await _session_and_brief(clerk_org_id, db)
-    milestone = await _owned_milestone(milestone_id, org, db)
+    org = await _get_org(clerk_org_id, db)
+    project = await _owned_project(project_id, org, db)
+    milestone = await _owned_milestone(milestone_id, project, db)
+    session = project.onboarding_session
 
     api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
 
@@ -515,13 +523,15 @@ async def _reorder_task(task: Task, new_order: int, db: AsyncSession) -> None:
 
 @router.patch("/tasks/{task_id}")
 async def update_task(
+    project_id: uuid.UUID,
     task_id: str,
     body: TaskUpdateRequest,
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     org = await _get_org(clerk_org_id, db)
-    task = await _owned_task(task_id, org, db)
+    project = await _owned_project(project_id, org, db)
+    task = await _owned_task(task_id, project, db)
 
     if body.status is not None:
         task.status = body.status
@@ -573,17 +583,15 @@ class TaskCreateRequest(BaseModel):
 
 @router.post("/tasks", status_code=201)
 async def create_task(
+    project_id: uuid.UUID,
     body: TaskCreateRequest,
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Create a task — the sidebar lane's "+" button and the day-column quick add."""
     org = await _get_org(clerk_org_id, db)
-    session = await db.scalar(
-        select(OnboardingSession).where(OnboardingSession.organization_id == org.id)
-    )
-    project = await _load_project(session.id, db) if session else None
-    if project is None or not project.milestones:
+    project = await _owned_project(project_id, org, db)
+    if not project.milestones:
         raise HTTPException(status_code=409, detail="no_milestones")
 
     if body.milestoneId is not None:
@@ -642,6 +650,7 @@ class TaskRescheduleRequest(BaseModel):
 
 @router.post("/tasks/reschedule")
 async def reschedule_tasks(
+    project_id: uuid.UUID,
     body: TaskRescheduleRequest,
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
@@ -649,13 +658,14 @@ async def reschedule_tasks(
     """
     Bulk move/reassign, for drag-drop and multi-select operations.
 
-    All-or-nothing: if any id is unknown or belongs to another org, nothing is
-    applied. A partial apply would leave the board in a state the user never
-    asked for and cannot easily undo.
+    All-or-nothing: if any id is unknown or belongs to another project,
+    nothing is applied. A partial apply would leave the board in a state the
+    user never asked for and cannot easily undo.
     """
     org = await _get_org(clerk_org_id, db)
+    project = await _owned_project(project_id, org, db)
     ids = [u.id for u in body.updates]
-    found = await _owned_tasks(ids, org, db)
+    found = await _owned_tasks(ids, project, db)
     if len(found) != len(set(ids)):
         raise HTTPException(status_code=404, detail="task_not_found")
 
@@ -682,56 +692,32 @@ async def reschedule_tasks(
 
 @router.delete("/tasks/{task_id}", status_code=204)
 async def delete_task(
+    project_id: uuid.UUID,
     task_id: str,
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     org = await _get_org(clerk_org_id, db)
-    task = await _owned_task(task_id, org, db)
+    project = await _owned_project(project_id, org, db)
+    task = await _owned_task(task_id, project, db)
     await db.delete(task)
     await db.commit()
     return Response(status_code=204)
 
 
 # ─── project refine-chat (talk to Groq to add detail before/after planning) ─────
-async def _get_or_create_session(
-    org: Organization, user_id: str, db: AsyncSession
-) -> OnboardingSession:
-    session = await db.scalar(
-        select(OnboardingSession).where(OnboardingSession.organization_id == org.id)
-    )
-    if session is None:
-        session = OnboardingSession(
-            organization_id=org.id, created_by_user_id=user_id, status="in_progress"
-        )
-        db.add(session)
-        await db.flush()
-    return session
-
-
 @router.get("/status")
 async def get_status(
+    project_id: uuid.UUID,
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Lightweight, side-effect-free readiness check for the planner's ? badge."""
     org = await _get_org(clerk_org_id, db)
-    session = await db.scalar(
-        select(OnboardingSession).where(OnboardingSession.organization_id == org.id)
-    )
-    brief = session.project_brief if session else None
-    missing = idea_interview.missing_fields(brief)
-    has_roadmap = False
-    if session is not None:
-        has_roadmap = (
-            await db.scalar(
-                select(func.count(Project.id)).where(
-                    Project.onboarding_session_id == session.id
-                )
-            )
-        ) > 0
+    project = await _owned_project(project_id, org, db)
+    missing = idea_interview.missing_fields(project.onboarding_session.project_brief)
     return {
-        "hasRoadmap": has_roadmap,
+        "hasRoadmap": bool(project.milestones),
         "needsMoreInfo": len(missing) > 0,
         "missingFields": missing,
     }
@@ -739,12 +725,14 @@ async def get_status(
 
 @router.get("/chat")
 async def get_chat(
+    project_id: uuid.UUID,
     clerk_org_id: str = Depends(get_current_org_id),
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
     org = await _get_org(clerk_org_id, db)
-    session = await _get_or_create_session(org, user_id, db)
+    project = await _owned_project(project_id, org, db)
+    session = project.onboarding_session
 
     count = await db.scalar(
         select(func.count(OnboardingMessage.id)).where(
@@ -833,16 +821,14 @@ async def _chat_stream(session: OnboardingSession, content: str, api_key: str, d
 
 @router.post("/chat/message")
 async def chat_message(
+    project_id: uuid.UUID,
     body: ChatMessageRequest,
     clerk_org_id: str = Depends(get_current_org_id),
     db: AsyncSession = Depends(get_db),
 ):
     org = await _get_org(clerk_org_id, db)
-    session = await db.scalar(
-        select(OnboardingSession).where(OnboardingSession.organization_id == org.id)
-    )
-    if session is None:
-        raise HTTPException(status_code=409, detail="chat_not_started")
+    project = await _owned_project(project_id, org, db)
+    session = project.onboarding_session
 
     api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
     return StreamingResponse(

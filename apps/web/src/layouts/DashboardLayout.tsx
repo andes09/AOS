@@ -1,10 +1,13 @@
 import { useState } from 'react'
-import { Outlet } from 'react-router-dom'
+import { Outlet, useParams } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { RoleSwitcher } from '../components/RoleSwitcher'
 import { TeamProvider } from '../contexts/TeamContext'
 import { Modal } from '../components/ui/Modal'
 import { TopBar } from '../components/layout/TopBar'
 import { SettingsPage } from '../pages/SettingsPage'
+import { useApi } from '../lib/api'
+import type { ProjectSummary } from '../features/projects/types'
 import type { PlannerOutletContext, PlannerView } from '../components/planner/plannerViews'
 
 /**
@@ -33,17 +36,29 @@ export function DashboardLayout() {
       return next
     })
 
+  // An org can have multiple projects now (see docs/plans/2026-07-20-project-hub.md).
+  // Only /app/projects/:projectId routes get the planner's view switcher/lanes
+  // toggle in the top bar — the Project Hub itself has neither.
+  const { projectId } = useParams<{ projectId: string }>()
+  const { get } = useApi()
+  const { data: project } = useQuery({
+    queryKey: ['projects', projectId, 'summary'],
+    queryFn: () => get<ProjectSummary>(`/api/projects/${projectId}`),
+    enabled: Boolean(projectId),
+  })
+
   const outletContext: PlannerOutletContext = { view, setView, lanesHidden, onToggleLanes: toggleLanes }
 
   return (
     <TeamProvider>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--color-bg-primary)' }}>
         <TopBar
-          view={view}
-          onViewChange={setView}
           onOpenSettings={() => setSettingsOpen(true)}
-          lanesHidden={lanesHidden}
-          onToggleLanes={toggleLanes}
+          planner={
+            projectId
+              ? { view, onViewChange: setView, lanesHidden, onToggleLanes: toggleLanes, projectName: project?.name ?? null }
+              : null
+          }
         />
         <main style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 'var(--space-5)' }}>
           <Outlet context={outletContext} />

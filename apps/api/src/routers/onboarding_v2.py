@@ -72,8 +72,18 @@ async def _get_developer(org: Organization, user_id: str, db: AsyncSession) -> D
 
 
 async def _get_session(org: Organization, db: AsyncSession) -> OnboardingSession | None:
+    """The org's founding session — always the earliest one.
+
+    Orgs can now have more than one OnboardingSession (one per project, see
+    the Project Hub plan), so this must stay ordered: org onboarding always
+    means the first session ever created, even after project-creation
+    sessions exist for the same org.
+    """
     return await db.scalar(
-        select(OnboardingSession).where(OnboardingSession.organization_id == org.id)
+        select(OnboardingSession)
+        .where(OnboardingSession.organization_id == org.id)
+        .order_by(OnboardingSession.created_at.asc())
+        .limit(1)
     )
 
 

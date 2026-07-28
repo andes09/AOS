@@ -7,6 +7,7 @@
 // That pattern is lifted unchanged from the original PlannerCalendarPage; it
 // is what makes drag-drop feel instant despite a round trip.
 
+import { useParams } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useApi } from '../../lib/api'
 import type { Roadmap, RoadmapTask, TaskRescheduleItem } from '../../types/roadmap'
@@ -33,17 +34,23 @@ export interface TaskCreateInput extends TaskPatch {
 export function usePlannerMutations() {
   const { post, patch, del } = useApi()
   const qc = useQueryClient()
+  const { projectId } = useParams<{ projectId: string }>()
+  if (!projectId) throw new Error('usePlannerMutations must be used within a /projects/:projectId route')
+
+  const roadmapKey = ROADMAP_KEY(projectId)
+  const membersKey = MEMBERS_KEY(projectId)
+  const base = `/api/projects/${projectId}/roadmap`
 
   /** Snapshot + optimistically rewrite the cached roadmap. */
   async function optimistic(apply: (rm: Roadmap) => Roadmap) {
-    await qc.cancelQueries({ queryKey: ROADMAP_KEY })
-    const prev = qc.getQueryData<Roadmap | null>(ROADMAP_KEY)
-    if (prev) qc.setQueryData(ROADMAP_KEY, apply(prev))
+    await qc.cancelQueries({ queryKey: roadmapKey })
+    const prev = qc.getQueryData<Roadmap | null>(roadmapKey)
+    if (prev) qc.setQueryData(roadmapKey, apply(prev))
     return { prev }
   }
 
   function rollback(ctx: { prev?: Roadmap | null } | undefined) {
-    if (ctx?.prev !== undefined) qc.setQueryData(ROADMAP_KEY, ctx.prev)
+    if (ctx?.prev !== undefined) qc.setQueryData(roadmapKey, ctx.prev)
   }
 
   /**
@@ -52,13 +59,13 @@ export function usePlannerMutations() {
    * keeps showing a stale "4 scheduled".
    */
   function settleBoth() {
-    qc.invalidateQueries({ queryKey: ROADMAP_KEY })
-    qc.invalidateQueries({ queryKey: MEMBERS_KEY })
+    qc.invalidateQueries({ queryKey: roadmapKey })
+    qc.invalidateQueries({ queryKey: membersKey })
   }
 
   const generate = useMutation({
-    mutationFn: () => post<Roadmap>('/api/roadmap/generate', {}),
-    onSuccess: data => qc.setQueryData(ROADMAP_KEY, data),
+    mutationFn: () => post<Roadmap>(`${base}/generate`, {}),
+    onSuccess: data => qc.setQueryData(roadmapKey, data),
     onSettled: settleBoth,
   })
 
@@ -66,30 +73,30 @@ export function usePlannerMutations() {
   // server replans milestones/tasks, so assignee + time customizations on the
   // current tasks are lost. Gated behind an explicit user action in the UI.
   const regenerate = useMutation({
-    mutationFn: () => post<Roadmap>('/api/roadmap/regenerate', {}),
-    onSuccess: data => qc.setQueryData(ROADMAP_KEY, data),
+    mutationFn: () => post<Roadmap>(`${base}/regenerate`, {}),
+    onSuccess: data => qc.setQueryData(roadmapKey, data),
     onSettled: settleBoth,
   })
 
   // Non-destructive re-plan from per-task feedback (Groq). Preserves done and
   // in-progress tasks; only upcoming todo tasks change.
   const adjust = useMutation({
-    mutationFn: () => post<Roadmap>('/api/roadmap/adjust', {}),
-    onSuccess: data => qc.setQueryData(ROADMAP_KEY, data),
+    mutationFn: () => post<Roadmap>(`${base}/adjust`, {}),
+    onSuccess: data => qc.setQueryData(roadmapKey, data),
     onSettled: settleBoth,
   })
 
   // Ask the AI for a few more todo tasks on a day the user has cleared. Like
   // adjust, it's non-destructive — the server appends tasks to that day.
   const extendDay = useMutation({
-    mutationFn: (isoDate: string) => post<Roadmap>('/api/roadmap/extend-day', { date: isoDate }),
-    onSuccess: data => qc.setQueryData(ROADMAP_KEY, data),
+    mutationFn: (isoDate: string) => post<Roadmap>(`${base}/extend-day`, { date: isoDate }),
+    onSuccess: data => qc.setQueryData(roadmapKey, data),
     onSettled: settleBoth,
   })
 
   const updateTask = useMutation({
     mutationFn: ({ id, patch: body }: { id: string; patch: TaskPatch }) =>
-      patch<RoadmapTask>(`/api/roadmap/tasks/${id}`, body),
+      patch<RoadmapTask>(`${base}/tasks/${id}`, body),
     onMutate: ({ id, patch: body }) =>
       optimistic(rm => mapTask(rm, id, t => ({ ...t, ...body }))),
     onError: (_e, _v, ctx) => rollback(ctx),
@@ -97,14 +104,14 @@ export function usePlannerMutations() {
   })
 
   const deleteTask = useMutation({
-    mutationFn: (id: string) => del<void>(`/api/roadmap/tasks/${id}`),
+    mutationFn: (id: string) => del<void>(`${base}/tasks/${id}`),
     onMutate: (id: string) => optimistic(rm => removeTask(rm, id)),
     onError: (_e, _v, ctx) => rollback(ctx),
     onSettled: settleBoth,
   })
 
   const createTask = useMutation({
-    mutationFn: (input: TaskCreateInput) => post<RoadmapTask>('/api/roadmap/tasks', input),
+    mutationFn: (input: TaskCreateInput) => post<RoadmapTask>(`${base}/tasks`, input),
     onMutate: async (input: TaskCreateInput) => {
       // Optimistic id is temporary; the settle-time invalidate replaces the row
       // with the server's version, so it never leaks into a later mutation.
@@ -129,7 +136,7 @@ export function usePlannerMutations() {
 
   const rescheduleTasks = useMutation({
     mutationFn: (updates: TaskRescheduleItem[]) =>
-      post<{ tasks: RoadmapTask[] }>('/api/roadmap/tasks/reschedule', { updates }),
+      post<{ tasks: RoadmapTask[] }>(`${base}/tasks/reschedule`, { updates }),
     onMutate: (updates: TaskRescheduleItem[]) => optimistic(rm => mapTasks(rm, updates)),
     onError: (_e, _v, ctx) => rollback(ctx),
     onSettled: settleBoth,

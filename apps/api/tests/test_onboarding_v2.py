@@ -295,3 +295,38 @@ async def test_complete_sets_completed_at_idempotently(tmp_db):
 
             state = (await client.get("/api/onboarding/v2/state", headers=AUTH)).json()
             assert state["onboardingCompleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_org_onboarding_resolves_to_earliest_session(tmp_db):
+    """An org can now have multiple OnboardingSessions (one per project, see
+    docs/plans/2026-07-20-project-hub.md) — org onboarding must still always
+    resolve to the FIRST session ever created, even after project-creation
+    sessions exist for the same org."""
+    org_id, team_id = await _seed_org_and_team()
+
+    from src.database import get_db
+    from src.models.onboarding_session import OnboardingSession
+
+    founding_id = uuid.uuid4()
+    later_id = uuid.uuid4()
+    async for db in app.dependency_overrides[get_db]():
+        db.add(OnboardingSession(
+            id=founding_id, organization_id=org_id, status="in_progress",
+            project_purpose="startup",
+        ))
+        await db.flush()
+        # A later, second-project-creation session for the same org.
+        db.add(OnboardingSession(
+            id=later_id, organization_id=org_id, status="in_progress",
+            project_purpose="hobby",
+        ))
+        await db.commit()
+        break
+
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.get("/api/onboarding/v2/state", headers=AUTH)
+    assert resp.status_code == 200
+    # The founding session's purpose ("startup"), not the later one's ("hobby").
+    assert resp.json()["purpose"]["value"] == "startup"

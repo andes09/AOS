@@ -69,6 +69,7 @@ export interface Roadmap {
   name: string
   summary: string | null
   purpose: string | null
+  status: 'active' | 'finished' | 'archived'
   milestones: RoadmapMilestone[]
 }
 

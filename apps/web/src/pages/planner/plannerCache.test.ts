@@ -22,6 +22,7 @@ const roadmap = (): Roadmap => ({
   name: 'Plan',
   summary: null,
   purpose: null,
+  status: 'active',
   milestones: [
     { id: 'm1', title: 'M1', description: null, sortOrder: 0, tasks: [task('a'), task('b')] },
     { id: 'm2', title: 'M2', description: null, sortOrder: 1, tasks: [task('c')] },

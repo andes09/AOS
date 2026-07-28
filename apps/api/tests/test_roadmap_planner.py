@@ -5,6 +5,9 @@ Covers the lane sidebar (GET /members), assignee/time/duration on tasks, task
 creation, and bulk reschedule. The cross-tenant assignment tests are the
 important ones — without `_owned_developer`, a guessed UUID from another org
 would succeed and leak that person into this org's planner.
+
+Routes are project-scoped (see docs/plans/2026-07-20-project-hub.md); every
+call goes through /api/projects/{project_id}/roadmap/... now.
 """
 
 import uuid
@@ -71,6 +74,7 @@ async def _seed(clerk_org_id=ORG, *, developers=(), with_project=True):
 
         milestone_id = None
         session_id = None
+        project_id = None
         if with_project:
             session = OnboardingSession(
                 id=uuid.uuid4(),
@@ -89,6 +93,7 @@ async def _seed(clerk_org_id=ORG, *, developers=(), with_project=True):
             )
             db.add(project)
             await db.flush()
+            project_id = project.id
             milestone = Milestone(
                 id=uuid.uuid4(), project_id=project.id, title="M1", sort_order=0
             )
@@ -100,23 +105,28 @@ async def _seed(clerk_org_id=ORG, *, developers=(), with_project=True):
             "org_id": org.id,
             "team_id": team.id,
             "dev_ids": dev_ids,
+            "project_id": project_id,
             "milestone_id": milestone_id,
             "session_id": session_id,
         }
 
 
-async def _create_task(client, **body):
+def _url(project_id, suffix=""):
+    return f"/api/projects/{project_id}/roadmap{suffix}"
+
+
+async def _create_task(client, project_id, **body):
     payload = {"title": "Task"} | body
-    return await client.post("/api/roadmap/tasks", json=payload, headers=AUTH)
+    return await client.post(_url(project_id, "/tasks"), json=payload, headers=AUTH)
 
 
 # ─── GET /members ───────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_members_returns_lanes_with_distinct_colors(tmp_db):
-    await _seed(developers=["Ada Lovelace", "Grace Hopper"])
+    seeded = await _seed(developers=["Ada Lovelace", "Grace Hopper"])
     with _patch_clerk():
         async with _client() as client:
-            resp = await client.get("/api/roadmap/members", headers=AUTH)
+            resp = await client.get(_url(seeded["project_id"], "/members"), headers=AUTH)
 
     assert resp.status_code == 200
     members = resp.json()["members"]
@@ -128,12 +138,12 @@ async def test_members_returns_lanes_with_distinct_colors(tmp_db):
 
 @pytest.mark.asyncio
 async def test_members_excludes_other_orgs(tmp_db):
-    await _seed(developers=["Ada Lovelace"])
+    seeded = await _seed(developers=["Ada Lovelace"])
     await _seed(OTHER_ORG, developers=["Someone Else"], with_project=False)
 
     with _patch_clerk():
         async with _client() as client:
-            resp = await client.get("/api/roadmap/members", headers=AUTH)
+            resp = await client.get(_url(seeded["project_id"], "/members"), headers=AUTH)
 
     names = [m["name"] for m in resp.json()["members"]]
     assert names == ["Ada Lovelace"]
@@ -143,20 +153,21 @@ async def test_members_excludes_other_orgs(tmp_db):
 async def test_members_scheduled_count_ignores_done_and_unscheduled(tmp_db):
     seeded = await _seed(developers=["Ada Lovelace"])
     dev_id = str(seeded["dev_ids"][0])
+    project_id = seeded["project_id"]
 
     with _patch_clerk():
         async with _client() as client:
             # counted: scheduled + not done
-            await _create_task(client, assigneeId=dev_id, scheduledDate="2026-02-15")
+            await _create_task(client, project_id, assigneeId=dev_id, scheduledDate="2026-02-15")
             # not counted: no date
-            await _create_task(client, assigneeId=dev_id)
+            await _create_task(client, project_id, assigneeId=dev_id)
             # not counted: done
-            r = await _create_task(client, assigneeId=dev_id, scheduledDate="2026-02-16")
+            r = await _create_task(client, project_id, assigneeId=dev_id, scheduledDate="2026-02-16")
             await client.patch(
-                f"/api/roadmap/tasks/{r.json()['id']}", json={"status": "done"}, headers=AUTH
+                _url(project_id, f"/tasks/{r.json()['id']}"), json={"status": "done"}, headers=AUTH
             )
 
-            resp = await client.get("/api/roadmap/members", headers=AUTH)
+            resp = await client.get(_url(project_id, "/members"), headers=AUTH)
 
     assert resp.json()["members"][0]["scheduledCount"] == 1
 
@@ -171,6 +182,7 @@ async def test_create_task_with_time_and_duration(tmp_db):
         async with _client() as client:
             resp = await _create_task(
                 client,
+                seeded["project_id"],
                 title="Standup",
                 assigneeId=dev_id,
                 scheduledDate="2026-02-15",
@@ -191,23 +203,34 @@ async def test_create_task_with_time_and_duration(tmp_db):
 
 @pytest.mark.asyncio
 async def test_create_task_409_without_a_roadmap(tmp_db):
-    await _seed(with_project=False)
+    seeded = await _seed(with_project=True)
+    # Milestone exists but has no tasks yet is fine — what we need is a project
+    # with NO milestones at all, which _seed doesn't produce; build it directly.
+    from src.database import get_db
+    from src.models.milestone import Milestone
+
+    async for db in app.dependency_overrides[get_db]():
+        from sqlalchemy import delete
+        await db.execute(delete(Milestone).where(Milestone.id == seeded["milestone_id"]))
+        await db.commit()
+        break
+
     with _patch_clerk():
         async with _client() as client:
-            resp = await _create_task(client)
+            resp = await _create_task(client, seeded["project_id"])
     assert resp.status_code == 409
     assert resp.json()["detail"] == "no_milestones"
 
 
 @pytest.mark.asyncio
 async def test_create_task_rejects_cross_tenant_assignee(tmp_db):
-    await _seed()
+    seeded = await _seed()
     other = await _seed(OTHER_ORG, developers=["Someone Else"], with_project=False)
     foreign_dev = str(other["dev_ids"][0])
 
     with _patch_clerk():
         async with _client() as client:
-            resp = await _create_task(client, assigneeId=foreign_dev)
+            resp = await _create_task(client, seeded["project_id"], assigneeId=foreign_dev)
 
     assert resp.status_code == 404
     assert resp.json()["detail"] == "developer_not_found"
@@ -215,11 +238,11 @@ async def test_create_task_rejects_cross_tenant_assignee(tmp_db):
 
 @pytest.mark.asyncio
 async def test_create_task_rejects_out_of_range_duration(tmp_db):
-    await _seed()
+    seeded = await _seed()
     with _patch_clerk():
         async with _client() as client:
-            too_short = await _create_task(client, durationMinutes=1)
-            too_long = await _create_task(client, durationMinutes=5000)
+            too_short = await _create_task(client, seeded["project_id"], durationMinutes=1)
+            too_long = await _create_task(client, seeded["project_id"], durationMinutes=5000)
     assert too_short.status_code == 422
     assert too_long.status_code == 422
 
@@ -229,17 +252,18 @@ async def test_create_task_rejects_out_of_range_duration(tmp_db):
 async def test_patch_assigns_and_unassigns(tmp_db):
     seeded = await _seed(developers=["Ada Lovelace"])
     dev_id = str(seeded["dev_ids"][0])
+    project_id = seeded["project_id"]
 
     with _patch_clerk():
         async with _client() as client:
-            task_id = (await _create_task(client)).json()["id"]
+            task_id = (await _create_task(client, project_id)).json()["id"]
 
             assigned = await client.patch(
-                f"/api/roadmap/tasks/{task_id}", json={"assigneeId": dev_id}, headers=AUTH
+                _url(project_id, f"/tasks/{task_id}"), json={"assigneeId": dev_id}, headers=AUTH
             )
             # Explicit null clears — this is the model_fields_set contract.
             cleared = await client.patch(
-                f"/api/roadmap/tasks/{task_id}", json={"assigneeId": None}, headers=AUTH
+                _url(project_id, f"/tasks/{task_id}"), json={"assigneeId": None}, headers=AUTH
             )
 
     assert assigned.json()["assigneeId"] == dev_id
@@ -250,15 +274,16 @@ async def test_patch_assigns_and_unassigns(tmp_db):
 async def test_patch_omitted_field_leaves_value_untouched(tmp_db):
     seeded = await _seed(developers=["Ada Lovelace"])
     dev_id = str(seeded["dev_ids"][0])
+    project_id = seeded["project_id"]
 
     with _patch_clerk():
         async with _client() as client:
             task_id = (
-                await _create_task(client, assigneeId=dev_id, scheduledTime="09:30")
+                await _create_task(client, project_id, assigneeId=dev_id, scheduledTime="09:30")
             ).json()["id"]
             # Touch only the title; assignee and time must survive.
             resp = await client.patch(
-                f"/api/roadmap/tasks/{task_id}", json={"title": "Renamed"}, headers=AUTH
+                _url(project_id, f"/tasks/{task_id}"), json={"title": "Renamed"}, headers=AUTH
             )
 
     body = resp.json()
@@ -270,19 +295,20 @@ async def test_patch_omitted_field_leaves_value_untouched(tmp_db):
 @pytest.mark.asyncio
 async def test_patch_rejects_cross_tenant_assignee(tmp_db):
     """The security-critical case: a guessed UUID from another org must 404."""
-    await _seed()
+    seeded = await _seed()
+    project_id = seeded["project_id"]
     other = await _seed(OTHER_ORG, developers=["Someone Else"], with_project=False)
     foreign_dev = str(other["dev_ids"][0])
 
     with _patch_clerk():
         async with _client() as client:
-            task_id = (await _create_task(client)).json()["id"]
+            task_id = (await _create_task(client, project_id)).json()["id"]
             resp = await client.patch(
-                f"/api/roadmap/tasks/{task_id}",
+                _url(project_id, f"/tasks/{task_id}"),
                 json={"assigneeId": foreign_dev},
                 headers=AUTH,
             )
-            after = await client.get("/api/roadmap", headers=AUTH)
+            after = await client.get(_url(project_id), headers=AUTH)
 
     assert resp.status_code == 404
     assert resp.json()["detail"] == "developer_not_found"
@@ -293,12 +319,13 @@ async def test_patch_rejects_cross_tenant_assignee(tmp_db):
 
 @pytest.mark.asyncio
 async def test_patch_clears_time_for_all_day(tmp_db):
-    await _seed()
+    seeded = await _seed()
+    project_id = seeded["project_id"]
     with _patch_clerk():
         async with _client() as client:
-            task_id = (await _create_task(client, scheduledTime="09:30")).json()["id"]
+            task_id = (await _create_task(client, project_id, scheduledTime="09:30")).json()["id"]
             resp = await client.patch(
-                f"/api/roadmap/tasks/{task_id}", json={"scheduledTime": None}, headers=AUTH
+                _url(project_id, f"/tasks/{task_id}"), json={"scheduledTime": None}, headers=AUTH
             )
     assert resp.json()["scheduledTime"] is None
 
@@ -308,14 +335,15 @@ async def test_patch_clears_time_for_all_day(tmp_db):
 async def test_reschedule_moves_several_tasks(tmp_db):
     seeded = await _seed(developers=["Ada Lovelace"])
     dev_id = str(seeded["dev_ids"][0])
+    project_id = seeded["project_id"]
 
     with _patch_clerk():
         async with _client() as client:
-            a = (await _create_task(client, title="A")).json()["id"]
-            b = (await _create_task(client, title="B")).json()["id"]
+            a = (await _create_task(client, project_id, title="A")).json()["id"]
+            b = (await _create_task(client, project_id, title="B")).json()["id"]
 
             resp = await client.post(
-                "/api/roadmap/tasks/reschedule",
+                _url(project_id, "/tasks/reschedule"),
                 json={
                     "updates": [
                         {"id": a, "scheduledDate": "2026-03-02", "scheduledTime": "10:00"},
@@ -336,13 +364,14 @@ async def test_reschedule_moves_several_tasks(tmp_db):
 @pytest.mark.asyncio
 async def test_reschedule_is_all_or_nothing(tmp_db):
     """One unknown id must abort the batch — a partial apply is unrecoverable UX."""
-    await _seed()
+    seeded = await _seed()
+    project_id = seeded["project_id"]
     with _patch_clerk():
         async with _client() as client:
-            good = (await _create_task(client, title="Good")).json()["id"]
+            good = (await _create_task(client, project_id, title="Good")).json()["id"]
 
             resp = await client.post(
-                "/api/roadmap/tasks/reschedule",
+                _url(project_id, "/tasks/reschedule"),
                 json={
                     "updates": [
                         {"id": good, "scheduledDate": "2026-03-02"},
@@ -351,7 +380,7 @@ async def test_reschedule_is_all_or_nothing(tmp_db):
                 },
                 headers=AUTH,
             )
-            after = await client.get("/api/roadmap", headers=AUTH)
+            after = await client.get(_url(project_id), headers=AUTH)
 
     assert resp.status_code == 404
     tasks = after.json()["milestones"][0]["tasks"]
@@ -360,7 +389,7 @@ async def test_reschedule_is_all_or_nothing(tmp_db):
 
 @pytest.mark.asyncio
 async def test_reschedule_rejects_cross_tenant_task(tmp_db):
-    await _seed()
+    own = await _seed()
     other = await _seed(OTHER_ORG, with_project=True)
 
     from src.database import get_db
@@ -382,7 +411,7 @@ async def test_reschedule_rejects_cross_tenant_task(tmp_db):
     with _patch_clerk():
         async with _client() as client:
             resp = await client.post(
-                "/api/roadmap/tasks/reschedule",
+                _url(own["project_id"], "/tasks/reschedule"),
                 json={"updates": [{"id": foreign_id, "scheduledDate": "2026-03-02"}]},
                 headers=AUTH,
             )
@@ -392,11 +421,11 @@ async def test_reschedule_rejects_cross_tenant_task(tmp_db):
 
 @pytest.mark.asyncio
 async def test_reschedule_rejects_empty_batch(tmp_db):
-    await _seed()
+    seeded = await _seed()
     with _patch_clerk():
         async with _client() as client:
             resp = await client.post(
-                "/api/roadmap/tasks/reschedule", json={"updates": []}, headers=AUTH
+                _url(seeded["project_id"], "/tasks/reschedule"), json={"updates": []}, headers=AUTH
             )
     assert resp.status_code == 422
 
@@ -404,17 +433,18 @@ async def test_reschedule_rejects_empty_batch(tmp_db):
 # ─── per-task feedback (migration 0033) ─────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_feedback_persists_and_round_trips(tmp_db):
-    await _seed()
+    seeded = await _seed()
+    project_id = seeded["project_id"]
     with _patch_clerk():
         async with _client() as client:
-            task_id = (await _create_task(client, title="Ship auth")).json()["id"]
+            task_id = (await _create_task(client, project_id, title="Ship auth")).json()["id"]
 
             patched = await client.patch(
-                f"/api/roadmap/tasks/{task_id}",
+                _url(project_id, f"/tasks/{task_id}"),
                 json={"feedback": "RLS policies were fiddly, took 2x longer"},
                 headers=AUTH,
             )
-            roadmap = await client.get("/api/roadmap", headers=AUTH)
+            roadmap = await client.get(_url(project_id), headers=AUTH)
 
     assert patched.json()["feedback"] == "RLS policies were fiddly, took 2x longer"
     # Survives a reload (it's really on the row, not just echoed back).
@@ -424,13 +454,16 @@ async def test_feedback_persists_and_round_trips(tmp_db):
 
 @pytest.mark.asyncio
 async def test_feedback_can_be_cleared(tmp_db):
-    await _seed()
+    seeded = await _seed()
+    project_id = seeded["project_id"]
     with _patch_clerk():
         async with _client() as client:
-            task_id = (await _create_task(client)).json()["id"]
-            await client.patch(f"/api/roadmap/tasks/{task_id}", json={"feedback": "note"}, headers=AUTH)
+            task_id = (await _create_task(client, project_id)).json()["id"]
+            await client.patch(
+                _url(project_id, f"/tasks/{task_id}"), json={"feedback": "note"}, headers=AUTH
+            )
             cleared = await client.patch(
-                f"/api/roadmap/tasks/{task_id}", json={"feedback": None}, headers=AUTH
+                _url(project_id, f"/tasks/{task_id}"), json={"feedback": None}, headers=AUTH
             )
     assert cleared.json()["feedback"] is None
 
@@ -481,7 +514,7 @@ async def test_adjust_preserves_done_and_replans_todo(tmp_db):
         patch("src.services.roadmap_adjuster._call_adjuster", new=AsyncMock(return_value=_ADJUST_OUTPUT)), \
         patch("src.services.roadmap_adjuster.record_generation_cost"):
         async with _client() as client:
-            resp = await client.post("/api/roadmap/adjust", json={}, headers=AUTH)
+            resp = await client.post(_url(seeded["project_id"], "/adjust"), json={}, headers=AUTH)
 
     assert resp.status_code == 200
     tasks = resp.json()["milestones"][0]["tasks"]
@@ -505,7 +538,7 @@ async def test_adjust_empty_output_is_a_noop(tmp_db):
         patch("src.services.roadmap_adjuster._call_adjuster", new=AsyncMock(return_value=({"milestones": []}, None))), \
         patch("src.services.roadmap_adjuster.record_generation_cost"):
         async with _client() as client:
-            resp = await client.post("/api/roadmap/adjust", json={}, headers=AUTH)
+            resp = await client.post(_url(seeded["project_id"], "/adjust"), json={}, headers=AUTH)
 
     assert resp.status_code == 200
     titles = [t["title"] for t in resp.json()["milestones"][0]["tasks"]]
@@ -514,9 +547,18 @@ async def test_adjust_empty_output_is_a_noop(tmp_db):
 
 @pytest.mark.asyncio
 async def test_adjust_409_without_a_roadmap(tmp_db):
-    await _seed(with_project=False)
+    seeded = await _seed(with_project=True)
+    from src.database import get_db
+    from src.models.milestone import Milestone
+    from sqlalchemy import delete
+
+    async for db in app.dependency_overrides[get_db]():
+        await db.execute(delete(Milestone).where(Milestone.id == seeded["milestone_id"]))
+        await db.commit()
+        break
+
     with _patch_clerk():
         async with _client() as client:
-            resp = await client.post("/api/roadmap/adjust", json={}, headers=AUTH)
-    # No session/brief → the brief gate fires first.
+            resp = await client.post(_url(seeded["project_id"], "/adjust"), json={}, headers=AUTH)
     assert resp.status_code == 409
+    assert resp.json()["detail"] == "no_roadmap"

@@ -7,6 +7,7 @@
 // layout differs.
 
 import { useMemo } from 'react'
+import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useApi } from '../../lib/api'
 import { compareByTime } from '../../lib/date'
@@ -18,8 +19,11 @@ import type {
 } from '../../types/roadmap'
 import { matchesFilters, type PlannerFilters } from './plannerFilters'
 
-export const ROADMAP_KEY = ['roadmap'] as const
-export const MEMBERS_KEY = ['roadmap', 'members'] as const
+// Query keys are parametrized by projectId now that an org can have multiple
+// projects (see docs/plans/2026-07-20-project-hub.md) — otherwise switching
+// between two projects' planners would show stale cross-project data.
+export const ROADMAP_KEY = (projectId: string) => ['roadmap', projectId] as const
+export const MEMBERS_KEY = (projectId: string) => ['roadmap', 'members', projectId] as const
 
 /** A task plus the milestone context the card needs to render. */
 export interface FlatTask extends RoadmapTask {
@@ -53,15 +57,17 @@ export interface PlannerData {
 
 export function usePlannerData(filters: PlannerFilters): PlannerData {
   const { get } = useApi()
+  const { projectId } = useParams<{ projectId: string }>()
+  if (!projectId) throw new Error('usePlannerData must be used within a /projects/:projectId route')
 
   const roadmapQuery = useQuery({
-    queryKey: ROADMAP_KEY,
-    queryFn: () => get<Roadmap | null>('/api/roadmap'),
+    queryKey: ROADMAP_KEY(projectId),
+    queryFn: () => get<Roadmap>(`/api/projects/${projectId}/roadmap`),
   })
 
   const membersQuery = useQuery({
-    queryKey: MEMBERS_KEY,
-    queryFn: () => get<RoadmapMembersResponse>('/api/roadmap/members'),
+    queryKey: MEMBERS_KEY(projectId),
+    queryFn: () => get<RoadmapMembersResponse>(`/api/projects/${projectId}/roadmap/members`),
   })
 
   const roadmap = roadmapQuery.data ?? null

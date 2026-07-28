@@ -37,6 +37,7 @@ from src.models.developer import Developer
 from src.models.github_connection import GithubConnection
 from src.models.onboarding_session import OnboardingMessage, OnboardingSession
 from src.models.organization import Organization
+from src.models.project import Project
 from src.models.team import Team
 from src.services import idea_interview
 
@@ -50,8 +51,18 @@ STEP_GITHUB = "github_connect"
 STEP_PROFILE = "profile"
 STEP_PURPOSE = "purpose"
 STEP_IDEA_CHAT = "idea_chat"
+# The 4th step's id while no build_plan sub-flow has been chosen yet (see
+# PUT /plan-source below). Additive, not a rename: STEP_IDEA_CHAT's own
+# endpoints are untouched, this is just the new pre-choice state exposed at
+# the same position in `steps[]`.
+STEP_BUILD_PLAN = "build_plan"
+STEP_IMPORT_ARTIFACT = "import_artifact"
+# New, genuinely separate step after build_plan — skippable, mirrors
+# github_connect (see docs/plans/2026-07-20-import-artifacts.md).
+STEP_REPO_SELECT = "repo_select"
 
 PROJECT_PURPOSES = ("hobby", "startup", "learning")
+PLAN_SOURCES = ("chat", "import")
 
 
 async def _get_org(clerk_org_id: str, db: AsyncSession) -> Organization:
@@ -113,6 +124,27 @@ def _profile_complete(developer: Developer | None) -> bool:
     )
 
 
+def _import_payload(session: OnboardingSession | None) -> dict:
+    """Thin wrapper around the artifact-import analysis result, shared by
+    `_build_state`'s `importArtifact` field and artifact_import.py's own
+    `GET /import` (so the single onboarding state hook still covers
+    everything, without artifact_import.py needing to import back from here
+    in a circle). Lives here, not in artifact_import.py, purely to keep the
+    import direction one-way: artifact_import.py imports from onboarding_v2,
+    never the reverse.
+    """
+    analyzed = bool(session and session.import_analyzed_at)
+    proposed = (session.proposed_roadmap if session else None) or {}
+    brief = session.project_brief if session else None
+    return {
+        "analyzed": analyzed,
+        "projectName": proposed.get("projectName") if analyzed else None,
+        "summary": proposed.get("summary") if analyzed else None,
+        "milestones": (proposed.get("milestones") or []) if analyzed else [],
+        "missingFields": idea_interview.missing_fields(brief) if analyzed else [],
+    }
+
+
 async def _build_state(
     org: Organization, user_id: str, db: AsyncSession
 ) -> dict:
@@ -125,7 +157,31 @@ async def _build_state(
     github_done = (bool(connection) and connection.installation_id is not None) or github_skipped
     profile_done = _profile_complete(developer)
     purpose_done = bool(session and session.project_purpose)
+    # Unifies both the chat and import paths on one signal: session.status ==
+    # "completed" is already set by /chat/complete (chat) and now also by
+    # artifact_import's /import/apply (import).
     chat_done = bool(session and session.status == "completed")
+
+    # The 4th step's id depends on which build_plan sub-flow was chosen.
+    # Sessions completed before this feature existed (onboarding_path is
+    # still null) always went through chat, so a completed-but-unset session
+    # is treated as "chat" here too — there's no other path it could have
+    # taken.
+    onboarding_path = session.onboarding_path if session else None
+    if session and onboarding_path == "import":
+        fourth_step_id = STEP_IMPORT_ARTIFACT
+    elif session and (onboarding_path == "chat" or session.status == "completed"):
+        fourth_step_id = STEP_IDEA_CHAT
+    else:
+        fourth_step_id = STEP_BUILD_PLAN
+
+    # repo_select is auto-satisfied when there's no GitHub connection to pick
+    # a repo from (github was never connected, whether skipped or just not
+    # yet done) — mirrors github_connect's own skippability.
+    repo_available = bool(connection)
+    repo_selected = bool(session and session.selected_github_repo_full_name)
+    repo_skipped = bool(session and session.repo_select_skipped_at)
+    repo_done = repo_selected or repo_skipped or not repo_available
 
     message_count = 0
     if session:
@@ -142,7 +198,8 @@ async def _build_state(
         (STEP_GITHUB, github_done, True),
         (STEP_PROFILE, profile_done, False),
         (STEP_PURPOSE, purpose_done, False),
-        (STEP_IDEA_CHAT, chat_done, False),
+        (fourth_step_id, chat_done, False),
+        (STEP_REPO_SELECT, repo_done, True),
     ]
     steps = []
     current_assigned = False
@@ -183,6 +240,13 @@ async def _build_state(
             "messageCount": message_count,
             "brief": session.project_brief if session else None,
             "briefComplete": bool(session and session.brief_complete),
+        },
+        "onboardingPath": onboarding_path,
+        "importArtifact": _import_payload(session) if session and session.import_analyzed_at else None,
+        "repo": {
+            "selected": session.selected_github_repo_full_name if session else None,
+            "skipped": repo_skipped,
+            "available": repo_available,
         },
         "onboardingCompleted": org.onboarding_completed_at is not None,
     }
@@ -284,6 +348,36 @@ async def put_purpose(
     org = await _get_org(clerk_org_id, db)
     session = await _get_or_create_session(org, user_id, db)
     session.project_purpose = body.purpose
+    await db.commit()
+    return await _build_state(org, user_id, db)
+
+
+class PlanSourceRequest(BaseModel):
+    source: str
+
+    @field_validator("source")
+    @classmethod
+    def _source_valid(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in PLAN_SOURCES:
+            raise ValueError(f"source must be one of {PLAN_SOURCES}")
+        return v
+
+
+@router.put("/plan-source")
+async def put_plan_source(
+    body: PlanSourceRequest,
+    user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Choose the build_plan sub-flow: chat with the AI, or import an existing
+    plan. Mirrors PUT /purpose's shape exactly. No path-switching UI in v1 —
+    once set and its sub-flow has started, the choice is fixed for the
+    session (see docs/plans/2026-07-20-import-artifacts.md)."""
+    org = await _get_org(clerk_org_id, db)
+    session = await _get_or_create_session(org, user_id, db)
+    session.onboarding_path = body.source
     await db.commit()
     return await _build_state(org, user_id, db)
 
@@ -491,3 +585,60 @@ async def complete_onboarding(
         org.onboarding_completed_at = datetime.utcnow()
         await db.commit()
     return {"completedAt": org.onboarding_completed_at.isoformat()}
+
+
+class RepoRequest(BaseModel):
+    repoFullName: str
+
+    @field_validator("repoFullName")
+    @classmethod
+    def _repo_valid(cls, v: str) -> str:
+        v = v.strip()
+        if not v or len(v) > 255:
+            raise ValueError("repoFullName must be 1-255 characters")
+        return v
+
+
+@router.put("/repo")
+async def put_repo(
+    body: RepoRequest,
+    user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Select a GitHub repo for the project.
+
+    If a Project already exists for this session (true on the import path —
+    artifact_import's /apply already ran), stamp it onto the Project
+    immediately. On the chat path no Project exists yet at this point, so
+    roadmap_generator.generate_roadmap copies
+    session.selected_github_repo_full_name onto the new Project at creation
+    time instead.
+    """
+    org = await _get_org(clerk_org_id, db)
+    session = await _get_or_create_session(org, user_id, db)
+    session.selected_github_repo_full_name = body.repoFullName
+
+    project = await db.scalar(
+        select(Project).where(Project.onboarding_session_id == session.id)
+    )
+    if project is not None:
+        project.github_repo_full_name = body.repoFullName
+
+    await db.commit()
+    return await _build_state(org, user_id, db)
+
+
+@router.post("/repo/skip")
+async def skip_repo(
+    user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mirrors POST /github/skip: mark the repo-select step skipped."""
+    org = await _get_org(clerk_org_id, db)
+    session = await _get_or_create_session(org, user_id, db)
+    if session.repo_select_skipped_at is None:
+        session.repo_select_skipped_at = datetime.utcnow()
+    await db.commit()
+    return await _build_state(org, user_id, db)

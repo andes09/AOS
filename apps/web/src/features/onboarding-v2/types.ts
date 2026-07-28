@@ -2,8 +2,20 @@
 // These mirror the JSON shapes served by /api/onboarding/v2/* and
 // /api/integrations/github/* — see apps/api/src/routers/onboarding_v2.py.
 
-export type OnboardingStepId = 'github_connect' | 'profile' | 'purpose' | 'idea_chat'
+// The 4th step's id depends on which build_plan sub-flow was chosen (see
+// PUT /plan-source): 'build_plan' while unset, then 'idea_chat' or
+// 'import_artifact'. 'repo_select' is a new, genuinely separate 5th step.
+export type OnboardingStepId =
+  | 'github_connect'
+  | 'profile'
+  | 'purpose'
+  | 'build_plan'
+  | 'idea_chat'
+  | 'import_artifact'
+  | 'repo_select'
 export type OnboardingStepStatus = 'complete' | 'current' | 'pending'
+
+export type PlanSource = 'chat' | 'import'
 
 /**
  * What the project is for. Collected explicitly (not chat-extracted) because
@@ -60,7 +72,43 @@ export type OnboardingState = {
     brief: ProjectBrief | null
     briefComplete: boolean
   }
+  onboardingPath: PlanSource | null
+  importArtifact: ImportArtifactState | null
+  repo: RepoState
   onboardingCompleted: boolean
+}
+
+export type ProposedTask = {
+  title: string
+  description?: string | null
+  dayOffset: number
+  startTime?: string | null
+  durationMinutes?: number | null
+  parallel: boolean
+}
+
+export type ProposedMilestone = {
+  title: string
+  description?: string | null
+  tasks: ProposedTask[]
+}
+
+export type ImportArtifactState = {
+  analyzed: boolean
+  projectName: string | null
+  summary: string | null
+  milestones: ProposedMilestone[]
+  missingFields: string[]
+  /** Only meaningful right after a POST /import/analyze call. */
+  truncated?: boolean
+}
+
+export type RepoState = {
+  /** The full "owner/repo" name, once picked via PUT /repo. */
+  selected: string | null
+  skipped: boolean
+  /** True once GitHub is actually connected — repo_select auto-completes when false. */
+  available: boolean
 }
 
 export type ChatMessage = {

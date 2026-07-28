@@ -18,8 +18,7 @@ milestones/tasks replaced) and a single milestone (siblings untouched).
 
 import json
 import logging
-import re
-from datetime import date, time, timedelta
+from datetime import date
 
 from openai import APIError, AsyncOpenAI, AuthenticationError, BadRequestError, RateLimitError
 from sqlalchemy import delete, select
@@ -33,6 +32,19 @@ from src.models.task import Task
 from src.models.team import Team
 from src.services.cost_tracker import record_generation_cost
 from src.services.idea_interview import _PURPOSE_GUIDANCE
+from src.services.roadmap_shapes import (
+    MAX_DAY_OFFSET as _MAX_DAY_OFFSET,
+    MAX_MILESTONES as _MAX_MILESTONES,
+    MAX_TASKS_PER_MILESTONE as _MAX_TASKS_PER_MILESTONE,
+    MILESTONE_SCHEMA as _MILESTONE_SCHEMA,
+    _add_tasks,
+    _persist_milestones,
+    _weekday_after,
+    create_project_with_milestones,
+    validated_milestone as _validated_milestone,
+    validated_milestones as _validated_milestones,
+    validated_task as _validated_task,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +53,6 @@ _MODEL = settings.groq_model
 # 3-6 sentence technical description. At 4096 the tool call gets truncated and
 # the roadmap comes back short.
 _MAX_TOKENS = 8192
-# Guardrails so a runaway model can't create an enormous plan. The point is a
-# short-term, finishable roadmap, not an exhaustive backlog.
-_MAX_MILESTONES = 8
-_MAX_TASKS_PER_MILESTONE = 10
-_MAX_DAY_OFFSET = 30
 
 _SYSTEM_PROMPT = """You are Omada's technical project planner. Given a founder's project brief, \
 produce a SHORT-TERM, day-by-day plan a developer can actually execute — think the next couple \
@@ -79,42 +86,6 @@ def _system_prompt(purpose: str | None) -> str:
     return _SYSTEM_PROMPT + "\n" + guidance
 
 
-_MILESTONE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "title": {"type": "string"},
-        "description": {"type": "string"},
-        "tasks": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "A small, concrete task"},
-                    "description": {"type": "string"},
-                    "dayOffset": {
-                        "type": "integer",
-                        "description": "0-based weekday index from the start date",
-                    },
-                    "startTime": {
-                        "type": "string",
-                        "description": "24h start time, HH:MM (e.g. 09:30), between 09:00 and 18:00",
-                    },
-                    "durationMinutes": {
-                        "type": "integer",
-                        "description": "How long the task should take, 15-240 minutes",
-                    },
-                    "parallel": {
-                        "type": "boolean",
-                        "description": "True if this task has no dependency on the task before it and can be worked on alongside its siblings; false if it must wait for earlier tasks.",
-                    },
-                },
-                "required": ["title", "dayOffset"],
-            },
-        },
-    },
-    "required": ["title", "tasks"],
-}
-
 _ROADMAP_TOOL = {
     "type": "function",
     "function": {
@@ -144,23 +115,6 @@ _MILESTONE_TOOL = {
         "parameters": _MILESTONE_SCHEMA,
     },
 }
-
-
-def _weekday_after(start: date, weekday_offset: int) -> date:
-    """Return the date `weekday_offset` weekdays (Mon–Fri) on/after `start`.
-
-    offset 0 is `start` itself if it's a weekday, else the next weekday.
-    """
-    d = start
-    # Advance to the first weekday if start lands on a weekend.
-    while d.weekday() >= 5:
-        d += timedelta(days=1)
-    remaining = max(0, weekday_offset)
-    while remaining > 0:
-        d += timedelta(days=1)
-        if d.weekday() < 5:
-            remaining -= 1
-    return d
 
 
 def _brief_prompt(session: OnboardingSession) -> str:
@@ -235,97 +189,6 @@ async def _call_planner(api_key: str, system: str, user_content: str, tool: dict
         raise RuntimeError("The planner returned malformed output. Please try again.") from exc
 
 
-_MIN_DURATION = 15
-_MAX_DURATION = 240
-
-
-def _parse_hhmm(raw) -> time | None:
-    """Parse a model-supplied 'HH:MM' into a naive time, or None if unusable."""
-    if not isinstance(raw, str):
-        return None
-    m = re.match(r"^\s*(\d{1,2}):(\d{2})", raw)
-    if not m:
-        return None
-    h, mi = int(m.group(1)), int(m.group(2))
-    if 0 <= h <= 23 and 0 <= mi <= 59:
-        return time(hour=h, minute=mi)
-    return None
-
-
-def _clamp_duration(raw) -> int | None:
-    try:
-        d = int(raw)
-    except (TypeError, ValueError):
-        return None
-    return min(max(d, _MIN_DURATION), _MAX_DURATION)
-
-
-# ─── tool-output validation (always runs before any DB write) ──────────────────
-def _validated_task(raw: dict) -> dict:
-    try:
-        offset = int(raw.get("dayOffset", 0))
-    except (TypeError, ValueError):
-        offset = 0
-    return {
-        "title": str(raw.get("title") or "Untitled task")[:255],
-        "description": raw.get("description"),
-        "day_offset": min(max(offset, 0), _MAX_DAY_OFFSET),
-        "start_time": _parse_hhmm(raw.get("startTime")),
-        "duration_minutes": _clamp_duration(raw.get("durationMinutes")),
-        "parallel": bool(raw.get("parallel", False)),
-    }
-
-
-def _validated_milestone(raw: dict, index: int) -> dict:
-    tasks = [t for t in (raw.get("tasks") or [])[:_MAX_TASKS_PER_MILESTONE] if isinstance(t, dict)]
-    return {
-        "title": str(raw.get("title") or f"Phase {index + 1}")[:255],
-        "description": raw.get("description"),
-        "tasks": [_validated_task(t) for t in tasks],
-    }
-
-
-def _validated_milestones(data: dict) -> list[dict]:
-    raw = [m for m in (data.get("milestones") or [])[:_MAX_MILESTONES] if isinstance(m, dict)]
-    milestones = [_validated_milestone(m, i) for i, m in enumerate(raw)]
-    if not milestones:
-        raise RuntimeError("The planner returned an empty roadmap. Please try again.")
-    return milestones
-
-
-# ─── persistence ───────────────────────────────────────────────────────────────
-def _add_tasks(milestone_id, tasks: list[dict], start: date, db: AsyncSession) -> None:
-    for t_idx, t in enumerate(tasks):
-        db.add(
-            Task(
-                milestone_id=milestone_id,
-                title=t["title"],
-                description=t["description"],
-                sort_order=t_idx,
-                scheduled_date=_weekday_after(start, t["day_offset"]),
-                scheduled_time=t.get("start_time"),
-                duration_minutes=t.get("duration_minutes"),
-                parallel=t.get("parallel", False),
-            )
-        )
-
-
-async def _persist_milestones(
-    project: Project, milestones: list[dict], db: AsyncSession
-) -> None:
-    start = date.today()
-    for m_idx, m in enumerate(milestones):
-        milestone = Milestone(
-            project_id=project.id,
-            title=m["title"],
-            description=m["description"],
-            sort_order=m_idx,
-        )
-        db.add(milestone)
-        await db.flush()  # assign milestone.id
-        _add_tasks(milestone.id, m["tasks"], start, db)
-
-
 # ─── public API ────────────────────────────────────────────────────────────────
 async def generate_roadmap(
     session: OnboardingSession, team: Team, api_key: str, db: AsyncSession
@@ -341,21 +204,20 @@ async def generate_roadmap(
     )
     milestones = _validated_milestones(data)
 
-    project = Project(
-        team_id=team.id,
-        onboarding_session_id=session.id,
-        name=(
-            data.get("projectName")
-            or (session.project_brief or {}).get("projectName")
-            or team.name
-            or "My project"
-        )[:255],
-        summary=data.get("summary"),
-        purpose=session.project_purpose,
+    name = (
+        data.get("projectName")
+        or (session.project_brief or {}).get("projectName")
+        or team.name
+        or "My project"
     )
-    db.add(project)
-    await db.flush()  # assign project.id
-    await _persist_milestones(project, milestones, db)
+    project = await create_project_with_milestones(
+        session, team, name, data.get("summary"), session.project_purpose, milestones, db,
+    )
+    # A repo may already have been picked during onboarding's repo-select step
+    # before this project existed (PUT /repo just stashes it on the session in
+    # that case) — copy it onto the freshly created Project now.
+    if session.selected_github_repo_full_name:
+        project.github_repo_full_name = session.selected_github_repo_full_name
 
     record_generation_cost(
         "roadmap_generate", usage, model=_MODEL, session_id=str(session.id)

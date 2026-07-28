@@ -12,14 +12,20 @@ const STEP_LABELS: Record<OnboardingStepId, string> = {
   github_connect: 'Connect GitHub',
   profile: 'Your details',
   purpose: 'Project purpose',
+  build_plan: 'Build your plan',
   idea_chat: 'Your idea',
+  import_artifact: 'Import your plan',
+  repo_select: 'Connect a repo',
 }
 
 const WHY: Partial<Record<OnboardingState['currentStep'], string>> = {
   github_connect: 'Connecting GitHub lets the roadmap AI read your repos and plan around what already exists. You can skip it and connect later.',
   profile: 'We use your name and phone to personalize your workspace and reach you about your projects — nothing more.',
   purpose: 'A hobby, a startup, and a learning project each need a different roadmap. Your answer steers the AI interview that comes next.',
+  build_plan: 'Chat with the AI, or import an existing plan (a PRD, a validation summary, even a rough brainstorm) — either way you end up with a reviewable roadmap.',
   idea_chat: 'The more the AI understands your idea, the sharper your first roadmap. Answer a few questions and we build the brief live.',
+  import_artifact: 'We extract a project brief and draft a roadmap from what you upload. Review each proposed milestone before anything is created.',
+  repo_select: 'Connecting a specific repo lets Omada tie tasks to real code later — you can also skip this and connect one anytime.',
 }
 
 function labelFor(id: string): string {

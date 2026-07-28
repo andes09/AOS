@@ -43,6 +43,23 @@ class OnboardingSession(Base):
     brief_complete: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     github_skipped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Which build_plan sub-flow this session took: "chat" or "import". Null
+    # until the user picks (see PUT /plan-source in onboarding_v2.py). Once set
+    # and its sub-flow has started, it's fixed for the session — no
+    # path-switching UI in v1.
+    onboarding_path: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Extracted text only, kept for debugging/audit — the original uploaded
+    # file is never persisted (see docs/plans/2026-07-20-import-artifacts.md).
+    raw_import_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The import-analysis output: {projectName, summary, milestones: [...]}.
+    # No accept/reject state persisted — that review state lives client-side
+    # until POST /import/apply.
+    proposed_roadmap: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True
+    )
+    import_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    selected_github_repo_full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    repo_select_skipped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

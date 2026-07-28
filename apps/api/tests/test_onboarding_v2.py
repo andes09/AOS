@@ -62,12 +62,22 @@ async def test_state_initial(tmp_db):
     assert resp.status_code == 200
     body = resp.json()
     assert body["currentStep"] == "github_connect"
-    assert [s["status"] for s in body["steps"]] == ["current", "pending", "pending", "pending"]
-    assert [s["id"] for s in body["steps"]] == ["github_connect", "profile", "purpose", "idea_chat"]
+    assert [s["id"] for s in body["steps"]] == [
+        "github_connect", "profile", "purpose", "build_plan", "repo_select",
+    ]
+    # repo_select auto-completes when there's no GitHub connection to pick a
+    # repo from at all yet (see docs/plans/2026-07-20-import-artifacts.md) —
+    # it's "complete" out of order here, ahead of steps still pending.
+    assert [s["status"] for s in body["steps"]] == [
+        "current", "pending", "pending", "pending", "complete",
+    ]
     assert body["github"] == {"connected": False, "login": None, "skipped": False, "needsReconnect": False}
     assert body["profile"] == {"name": None, "phone": None, "complete": False}
     assert body["purpose"] == {"value": None, "complete": False}
     assert body["ideaChat"]["status"] == "not_started"
+    assert body["onboardingPath"] is None
+    assert body["importArtifact"] is None
+    assert body["repo"] == {"selected": None, "skipped": False, "available": False}
     assert body["onboardingCompleted"] is False
 
 
@@ -80,7 +90,9 @@ async def test_github_skip_advances_flow(tmp_db):
     body = resp.json()
     assert body["github"]["skipped"] is True
     assert body["currentStep"] == "profile"
-    assert [s["status"] for s in body["steps"]] == ["complete", "current", "pending", "pending"]
+    assert [s["status"] for s in body["steps"]] == [
+        "complete", "current", "pending", "pending", "complete",
+    ]
 
 
 @pytest.mark.asyncio
@@ -230,8 +242,15 @@ async def test_purpose_completes_step_and_advances_flow(tmp_db):
             )
     body = resp.json()
     assert body["purpose"] == {"value": "hobby", "complete": True}
-    assert body["currentStep"] == "idea_chat"
-    assert [s["status"] for s in body["steps"]] == ["complete", "complete", "complete", "current"]
+    # No plan-source chosen yet, so the 4th step is still "build_plan" (the
+    # chooser), not "idea_chat" — see PUT /plan-source.
+    assert body["currentStep"] == "build_plan"
+    assert [s["id"] for s in body["steps"]] == [
+        "github_connect", "profile", "purpose", "build_plan", "repo_select",
+    ]
+    assert [s["status"] for s in body["steps"]] == [
+        "complete", "complete", "complete", "current", "complete",
+    ]
 
 
 @pytest.mark.asyncio
@@ -330,3 +349,160 @@ async def test_org_onboarding_resolves_to_earliest_session(tmp_db):
     assert resp.status_code == 200
     # The founding session's purpose ("startup"), not the later one's ("hobby").
     assert resp.json()["purpose"]["value"] == "startup"
+
+
+# ─── plan-source (build_plan chooser) ──────────────────────────────────────────
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["", "carrier_pigeon", "Chat", " import "])
+async def test_plan_source_validation(tmp_db, source):
+    await _seed_org_and_team()
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.put(
+                "/api/onboarding/v2/plan-source", json={"source": source}, headers=AUTH
+            )
+    if source.strip().lower() in ("chat", "import"):
+        assert resp.status_code == 200
+    else:
+        assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_plan_source_chat_advances_to_idea_chat_step(tmp_db):
+    await _seed_org_and_team()
+    with _patch_clerk():
+        async with _client() as client:
+            await client.post("/api/onboarding/v2/github/skip", headers=AUTH)
+            await client.put(
+                "/api/onboarding/v2/profile", json={"name": "Ada", "phone": "+15551234567"},
+                headers=AUTH,
+            )
+            await client.put("/api/onboarding/v2/purpose", json={"purpose": "hobby"}, headers=AUTH)
+            resp = await client.put(
+                "/api/onboarding/v2/plan-source", json={"source": "chat"}, headers=AUTH
+            )
+    body = resp.json()
+    assert body["onboardingPath"] == "chat"
+    assert body["currentStep"] == "idea_chat"
+    assert [s["id"] for s in body["steps"]] == [
+        "github_connect", "profile", "purpose", "idea_chat", "repo_select",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_plan_source_import_advances_to_import_artifact_step(tmp_db):
+    await _seed_org_and_team()
+    with _patch_clerk():
+        async with _client() as client:
+            await client.post("/api/onboarding/v2/github/skip", headers=AUTH)
+            await client.put(
+                "/api/onboarding/v2/profile", json={"name": "Ada", "phone": "+15551234567"},
+                headers=AUTH,
+            )
+            await client.put("/api/onboarding/v2/purpose", json={"purpose": "startup"}, headers=AUTH)
+            resp = await client.put(
+                "/api/onboarding/v2/plan-source", json={"source": "import"}, headers=AUTH
+            )
+    body = resp.json()
+    assert body["onboardingPath"] == "import"
+    assert body["currentStep"] == "import_artifact"
+    assert [s["id"] for s in body["steps"]] == [
+        "github_connect", "profile", "purpose", "import_artifact", "repo_select",
+    ]
+
+
+# ─── repo select ────────────────────────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_repo_select_before_project_exists_only_sets_session(tmp_db):
+    """On the chat path, no Project exists yet when a repo is picked — only
+    the session field is set; generate_roadmap copies it onto the Project
+    later (see roadmap_generator.generate_roadmap)."""
+    await _seed_org_and_team()
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.put(
+                "/api/onboarding/v2/repo", json={"repoFullName": "octocat/hello-world"}, headers=AUTH
+            )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["repo"] == {"selected": "octocat/hello-world", "skipped": False, "available": False}
+
+
+@pytest.mark.asyncio
+async def test_repo_select_after_project_exists_stamps_project(tmp_db):
+    """On the import path, /import/apply already created the Project by the
+    time repo-select runs — PUT /repo must stamp it immediately."""
+    org_id, team_id = await _seed_org_and_team()
+
+    from src.database import get_db
+    from src.models.onboarding_session import OnboardingSession
+    from src.models.project import Project
+
+    session_id = uuid.uuid4()
+    async for db in app.dependency_overrides[get_db]():
+        db.add(OnboardingSession(
+            id=session_id, organization_id=org_id, status="completed", onboarding_path="import",
+        ))
+        await db.flush()
+        db.add(Project(team_id=team_id, onboarding_session_id=session_id, name="Imported Project"))
+        await db.commit()
+        break
+
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.put(
+                "/api/onboarding/v2/repo", json={"repoFullName": "octocat/hello-world"}, headers=AUTH
+            )
+    assert resp.status_code == 200
+    assert resp.json()["repo"]["selected"] == "octocat/hello-world"
+
+    async for db in app.dependency_overrides[get_db]():
+        from sqlalchemy import select as sa_select
+        project = await db.scalar(sa_select(Project).where(Project.onboarding_session_id == session_id))
+        assert project.github_repo_full_name == "octocat/hello-world"
+        break
+
+
+@pytest.mark.asyncio
+async def test_repo_skip_is_idempotent_and_advances_flow(tmp_db):
+    await _seed_org_and_team()
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.post("/api/onboarding/v2/repo/skip", headers=AUTH)
+            assert resp.status_code == 200
+            assert resp.json()["repo"]["skipped"] is True
+            first = resp.json()
+
+            resp = await client.post("/api/onboarding/v2/repo/skip", headers=AUTH)
+            assert resp.json()["repo"] == first["repo"]
+
+
+@pytest.mark.asyncio
+async def test_repo_select_required_when_github_connected(tmp_db):
+    """Unlike the no-connection case, repo_select must NOT auto-complete once
+    GitHub is actually connected — the user has real repos to choose from."""
+    org_id, _ = await _seed_org_and_team()
+
+    from src.database import get_db
+    from src.models.github_connection import GithubConnection
+    from src.services.encryption import encrypt
+
+    async for db in app.dependency_overrides[get_db]():
+        db.add(GithubConnection(
+            organization_id=org_id,
+            installation_id="inst_1",
+            github_user_id="42",
+            github_login="octocat",
+            encrypted_access_token=encrypt("tok"),
+            is_active=True,
+        ))
+        await db.commit()
+        break
+
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.get("/api/onboarding/v2/state", headers=AUTH)
+    body = resp.json()
+    assert body["repo"] == {"selected": None, "skipped": False, "available": True}
+    repo_step = next(s for s in body["steps"] if s["id"] == "repo_select")
+    assert repo_step["status"] != "complete"

@@ -14,13 +14,16 @@ import { SidebarStepper } from './onboarding-v2/SidebarStepper'
 import { GithubStep } from './onboarding-v2/steps/GithubStep'
 import { ProfileStep } from './onboarding-v2/steps/ProfileStep'
 import { PurposeStep } from './onboarding-v2/steps/PurposeStep'
+import { PlanSourceStep } from './onboarding-v2/steps/PlanSourceStep'
 import { IdeaChatStep } from './onboarding-v2/steps/IdeaChatStep'
+import { ImportArtifactStep } from './onboarding-v2/steps/ImportArtifactStep'
+import { RepoSelectStep } from './onboarding-v2/steps/RepoSelectStep'
 import { DoneStep } from './onboarding-v2/steps/DoneStep'
 
 const shellFont = "'Inter', system-ui, sans-serif"
 
 export function OnboardingV2Page() {
-  const { state, isLoading, error, skipGithub, saveProfile, savePurpose, complete } =
+  const { state, isLoading, error, skipGithub, saveProfile, savePurpose, savePlanSource, complete } =
     useOnboardingState()
 
   if (isLoading) {
@@ -100,7 +103,17 @@ export function OnboardingV2Page() {
               saving={savePurpose.isPending}
             />
           )}
+          {state.currentStep === 'build_plan' && (
+            <PlanSourceStep
+              onSave={source => savePlanSource.mutate(source)}
+              saving={savePlanSource.isPending}
+            />
+          )}
           {state.currentStep === 'idea_chat' && <IdeaChatStep />}
+          {state.currentStep === 'import_artifact' && <ImportArtifactStep />}
+          {state.currentStep === 'repo_select' && (
+            <RepoSelectStep repoAvailable={state.repo.available} />
+          )}
           {state.currentStep === 'done' && <DoneStep onFinish={() => complete.mutateAsync()} />}
         </div>
       </div>

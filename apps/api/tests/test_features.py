@@ -13,7 +13,7 @@ def test_local_yaml_loads():
     assert flags["roadmap_generation"] is True
     assert flags["planner"] is True
     assert flags["roadmap_chat"] is True
-    assert flags["experimental"] == {"enabled": True}
+    assert flags["experimental"] == {"enabled": True, "import_artifacts": True}
 
 
 def test_production_yaml_loads():
@@ -23,18 +23,20 @@ def test_production_yaml_loads():
     assert flags["roadmap_generation"] is True
     assert flags["planner"] is True
     assert flags["roadmap_chat"] is False
-    assert flags["experimental"] == {"enabled": False}
+    assert flags["experimental"] == {"enabled": False, "import_artifacts": False}
 
 
 def test_is_feature_enabled_supports_dotted_path_for_grouped_flags():
     local = Settings(environment="local")
     assert local.is_feature_enabled("experimental") is True
     assert local.is_feature_enabled("experimental.enabled") is True
+    assert local.is_feature_enabled("experimental.import_artifacts") is True
     assert local.is_feature_enabled("experimental.nonexistent_sub_flag") is False
 
     production = Settings(environment="production")
     assert production.is_feature_enabled("experimental") is False
     assert production.is_feature_enabled("experimental.enabled") is False
+    assert production.is_feature_enabled("experimental.import_artifacts") is False
 
 
 def test_missing_flag_defaults_to_false():

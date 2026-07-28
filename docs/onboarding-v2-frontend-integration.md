@@ -22,22 +22,29 @@ protocol for you.
 
 ## The flow
 
-Onboarding is four steps, always in this order:
+Onboarding is five steps, always in this order:
 
 ```
-github_connect → profile → purpose → idea_chat → done
+github_connect → profile → purpose → build_plan → repo_select → done
 ```
 
-`github_connect` is skippable; the rest are required. **Don't hardcode this
-order in your UI logic** — read it off `state.steps` / `state.currentStep` so
-if we ever reorder or add a step, your UI adapts without a code change.
+`build_plan` is a fork, not a single step: until the user picks a plan
+source, its `id` in `state.steps` is `'build_plan'`; once they pick via
+`savePlanSource('chat' | 'import')`, it becomes `'idea_chat'` or
+`'import_artifact'` for the rest of the session (no path-switching UI —
+the choice is fixed once its sub-flow starts). `github_connect` and
+`repo_select` are both skippable; `repo_select` also auto-completes on its
+own if GitHub was never connected in the first place (nothing to pick a repo
+from). **Don't hardcode any of this in your UI logic** — read it off
+`state.steps` / `state.currentStep` so if we ever reorder or add a step, your
+UI adapts without a code change.
 
 The whole flow state comes from one hook:
 
 ```tsx
 import { useOnboardingState } from '../features/onboarding-v2'
 
-const { state, isLoading, error, skipGithub, saveProfile, savePurpose, complete } =
+const { state, isLoading, error, skipGithub, saveProfile, savePurpose, savePlanSource, complete } =
   useOnboardingState()
 ```
 
@@ -45,17 +52,22 @@ const { state, isLoading, error, skipGithub, saveProfile, savePurpose, complete 
 
 ```ts
 {
-  currentStep: 'github_connect' | 'profile' | 'purpose' | 'idea_chat' | 'done',
+  currentStep: 'github_connect' | 'profile' | 'purpose' | 'build_plan' | 'idea_chat'
+             | 'import_artifact' | 'repo_select' | 'done',
   steps: [
     { id: 'github_connect', status: 'complete' | 'current' | 'pending', skippable: true },
     { id: 'profile',        status: ..., skippable: false },
     { id: 'purpose',        status: ..., skippable: false },
-    { id: 'idea_chat',      status: ..., skippable: false },
+    { id: 'build_plan' | 'idea_chat' | 'import_artifact', status: ..., skippable: false },
+    { id: 'repo_select',    status: ..., skippable: true },
   ],
   github:   { connected: boolean, login: string | null, skipped: boolean, needsReconnect: boolean },
   profile:  { name: string | null, phone: string | null, complete: boolean },
   purpose:  { value: 'hobby' | 'startup' | 'learning' | null, complete: boolean },
   ideaChat: { sessionId, status, messageCount, brief, briefComplete },
+  onboardingPath: 'chat' | 'import' | null,
+  importArtifact: { analyzed, projectName, summary, milestones, missingFields } | null,
+  repo: { selected: string | null, skipped: boolean, available: boolean },
   onboardingCompleted: boolean,
 }
 ```
@@ -136,7 +148,64 @@ forth (the reference UI gates it on `chat.messages.length > 2`); it lets the
 user end the interview instead of waiting for the AI to decide it has enough.
 When `chat.status === 'completed'`, disable the input and move on.
 
-### Step 5 — Done
+### Step 4 (fork) — build_plan: chat or import
+
+`build_plan` isn't one step, it's a chooser. Render it while
+`state.currentStep === 'build_plan'`:
+
+```tsx
+savePlanSource.mutate('chat' | 'import')
+```
+
+After that call resolves, `state.currentStep` becomes `'idea_chat'` (existing
+flow, unchanged — see below) or `'import_artifact'` — pick your next
+component off `state.currentStep`, same as everywhere else in this flow.
+
+#### idea_chat (chat path)
+
+Unchanged from before — see "Idea interview" below.
+
+#### import_artifact (import path)
+
+```tsx
+import { useImportArtifact } from '../features/onboarding-v2'
+
+const {
+  importState,      // { analyzed, projectName, summary, milestones, missingFields, truncated? } | undefined
+  milestones,        // importState.milestones, or []
+  analyze,           // analyze.mutate({ text?: string, files?: File[] })
+  apply,             // apply.mutate(briefOverrides?: Record<string, unknown>)
+  isAccepted,        // (index: number) => boolean — defaults to true for every milestone
+  toggleMilestone,   // (index: number) => void — local only, not sent to the server per toggle
+  acceptedCount,
+} = useImportArtifact()
+```
+
+Flow: user pastes text and/or attaches files (`.txt`/`.md`/`.pdf`/`.docx`, up
+to 5 files, 10MB each) → `analyze.mutate(...)` → once `importState.analyzed`
+is true, render one card per milestone with `toggleMilestone` wired to a
+checkbox (defaulting to accepted) → for each `importState.missingFields`
+entry, collect a value and pass it as a key in `apply`'s `briefOverrides` →
+`apply.mutate(overrides)` once `acceptedCount >= 1`. `apply`'s success sets
+the same onboarding state everything else does — no manual navigation needed,
+`state.currentStep` moves on by itself.
+
+### Step 5 — repo_select (skippable)
+
+```tsx
+import { useRepoSelect } from '../features/onboarding-v2'
+
+const { repos, page, setPage, selectRepo, skip } = useRepoSelect()
+// repos.data — GithubRepo[] for the current page
+// selectRepo.mutate(repoFullName)
+// skip.mutate()
+```
+
+Only ever reachable if `state.repo.available` is true (GitHub is actually
+connected) — if it's false, this step is already marked done server-side and
+`currentStep` skips straight past it.
+
+### Step 6 — Done
 
 ```tsx
 await complete.mutateAsync()  // sets onboardingCompleted, then navigate to /app
@@ -149,12 +218,15 @@ call once you're on the `done` step.
 ## Local setup
 
 1. `apps/api/.env` needs (see root `.env.example`): `GITHUB_CLIENT_ID`,
-   `GITHUB_CLIENT_SECRET`, `GITHUB_REDIRECT_URI`, and `ANTHROPIC_API_KEY`
-   (the idea interview needs a working key even before an org saves its own).
-2. The `onboarding_v2` feature flag is **on** in
-   `apps/api/config/features/local.yaml` — nothing to flip locally.
-3. Build against `/onboarding/v2` directly (bypasses the flag check) while
-   the flag is still off in production:
+   `GITHUB_CLIENT_SECRET`, `GITHUB_REDIRECT_URI`, and `GROQ_API_KEY` (the idea
+   interview and artifact-import analysis both run on Groq's platform key,
+   not Anthropic — see the Import Artifacts plan's Implementation Notes for
+   why this doc's older `ANTHROPIC_API_KEY` guidance no longer applies here).
+2. Import Artifacts is gated by `experimental.import_artifacts` in
+   `apps/api/config/features/*.yaml` — **on** in `local.yaml`/`test.yaml`,
+   **off** in `production.yaml`. Nothing to flip locally.
+3. Build against `/onboarding/v2` directly while any onboarding-wide flag is
+   still off in production:
    `http://localhost:5174/onboarding/v2`
 4. `VITE_TEST_MODE=true` skips the Clerk `<SignedIn>` wrapper and lets the
    headless client send a dummy bearer token — useful for Playwright, and for

@@ -9,7 +9,9 @@ import type {
   GithubRedirectResult,
   GithubRepo,
   GithubStatus,
+  ImportArtifactState,
   OnboardingState,
+  PlanSource,
   ProjectBrief,
   ProjectPurpose,
 } from './types'
@@ -66,6 +68,11 @@ export function createOnboardingApi(getToken: GetToken, apiUrl: string = DEFAULT
         method: 'PUT',
         body: JSON.stringify({ purpose }),
       }),
+    savePlanSource: (source: PlanSource) =>
+      request<OnboardingState>('/api/onboarding/v2/plan-source', {
+        method: 'PUT',
+        body: JSON.stringify({ source }),
+      }),
     completeOnboarding: () =>
       request<{ completedAt: string }>('/api/onboarding/v2/complete', { method: 'POST' }),
 
@@ -82,6 +89,39 @@ export function createOnboardingApi(getToken: GetToken, apiUrl: string = DEFAULT
       request<{ disconnected: boolean }>('/api/integrations/github/disconnect', { method: 'DELETE' }),
     listGithubRepos: (page = 1, perPage = 30) =>
       request<GithubRepo[]>(`/api/integrations/github/repos?page=${page}&per_page=${perPage}`),
+    setRepo: (repoFullName: string) =>
+      request<OnboardingState>('/api/onboarding/v2/repo', {
+        method: 'PUT',
+        body: JSON.stringify({ repoFullName }),
+      }),
+    skipRepo: () => request<OnboardingState>('/api/onboarding/v2/repo/skip', { method: 'POST' }),
+
+    // --- import artifacts ---
+    /**
+     * Analyze pasted text and/or uploaded files into a project brief + a
+     * proposed roadmap. The one place this client sends multipart form data
+     * instead of JSON, so it bypasses `request()` (which always sets
+     * Content-Type: application/json).
+     */
+    async analyzeImport(formData: FormData): Promise<ImportArtifactState> {
+      const token = await getToken()
+      if (!token) throw new OnboardingApiError('Not authenticated', 401)
+      const response = await fetch(`${apiUrl}/api/onboarding/v2/import/analyze`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      })
+      if (!response.ok) {
+        throw new OnboardingApiError(await parseErrorDetail(response), response.status)
+      }
+      return response.json() as Promise<ImportArtifactState>
+    },
+    getImportState: () => request<ImportArtifactState>('/api/onboarding/v2/import'),
+    applyImport: (body: { acceptedMilestoneIndexes: number[]; briefOverrides?: Record<string, unknown> }) =>
+      request<OnboardingState>('/api/onboarding/v2/import/apply', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
 
     // --- idea interview chat ---
     startChat: () => request<ChatPayload>('/api/onboarding/v2/chat/start', { method: 'POST' }),

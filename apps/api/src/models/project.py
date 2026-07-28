@@ -35,6 +35,10 @@ class Project(Base):
     status: Mapped[str] = mapped_column(
         String(20), default=ProjectStatus.ACTIVE.value, server_default="active",
     )
+    # Set from onboarding's repo-select step (PUT /repo), either immediately
+    # (import path, once the Project already exists) or copied on at creation
+    # time by roadmap_generator.generate_roadmap (chat path).
+    github_repo_full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

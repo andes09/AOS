@@ -8,3 +8,4 @@ features:
   roadmap_chat: true
   experimental:
     enabled: true
+    import_artifacts: true

@@ -22,6 +22,7 @@ from src.routers import developers as developers_router
 from src.routers.users import users_router
 from src.routers.invitations import invitations_router
 from src.routers.onboarding_v2 import router as onboarding_v2_router
+from src.routers.artifact_import import router as artifact_import_router
 from src.routers.roadmap import router as roadmap_router
 from src.routers.projects import router as projects_router
 from src.routers.capacity import capacity_router
@@ -75,6 +76,7 @@ app.include_router(github_router.router)
 app.include_router(users_router, prefix="/api/users")
 app.include_router(developers_router.router)
 app.include_router(onboarding_v2_router)
+app.include_router(artifact_import_router)
 app.include_router(projects_router)
 app.include_router(roadmap_router)
 app.include_router(invitations_router, prefix="/api/invitations")

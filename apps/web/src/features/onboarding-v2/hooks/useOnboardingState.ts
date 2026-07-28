@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { OnboardingApiError } from '../api'
-import type { OnboardingState, ProjectPurpose } from '../types'
+import type { OnboardingState, PlanSource, ProjectPurpose } from '../types'
 import { useOnboardingApi } from './useOnboardingApi'
 
 export const ONBOARDING_STATE_KEY = ['onboarding-v2-state']
@@ -50,6 +50,11 @@ export function useOnboardingState() {
     onSuccess: setState,
   })
 
+  const savePlanSource = useMutation({
+    mutationFn: (source: PlanSource) => api.savePlanSource(source),
+    onSuccess: setState,
+  })
+
   const complete = useMutation({
     mutationFn: () => api.completeOnboarding(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ONBOARDING_STATE_KEY }),
@@ -64,6 +69,7 @@ export function useOnboardingState() {
     skipGithub,
     saveProfile,
     savePurpose,
+    savePlanSource,
     complete,
   }
 }

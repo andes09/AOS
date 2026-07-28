@@ -1,5 +1,85 @@
 # Import Artifacts — bring an existing plan into Omada
 
+## Implementation Notes (built 2026-07-28)
+
+Built on branch `feature/import-artifacts`, stage 2 of the 5-stage build. This
+doc's text below is the resolved design and was followed closely, but several
+details had drifted from the real current code by the time of implementation
+(consistent with this repo's pattern of plan docs aging fast) — recorded here
+rather than silently "fixed in place":
+
+- **Migration is `0037`, not `0032`.** The real Alembic head at build time was
+  `0036_project_hub.py` (Stage 1, merged just before this branch started).
+  `0037_artifact_import.py` has `down_revision = '0036'`. The doc's own
+  footnote about a `0032`/`0033` collision with `master-dashboard.md` is moot
+  — that plan hadn't claimed a number yet either.
+- **New: `experimental.import_artifacts` feature flag**, not in the original
+  doc. Per a standing instruction covering all 5 stages of this build, the
+  whole `artifact_import.py` router is gated behind
+  `settings.is_feature_enabled("experimental.import_artifacts")` via a
+  router-level `Depends`, returning **404** (not 403) when disabled — chosen
+  so the not-yet-shipped feature is invisible rather than visibly refused.
+  `true` in `local.yaml`/`test.yaml`, `false` in `production.yaml`. Added as a
+  sibling key under the existing `experimental:` block, mirroring
+  `experimental.enabled`.
+- **Biggest deviation — no Anthropic BYOK call here.** The doc assumes
+  artifact analysis "reuses `roadmap_generator.resolve_api_key` — BYOK-first
+  Anthropic, same as roadmap generation." That was already stale: an
+  unrelated commit landed on `main` immediately before this branch started
+  (`feat: switch plan generation to Groq...`) that moved
+  `roadmap_generator.py` fully onto Groq's OpenAI-compatible API, platform-key
+  only, via `idea_interview.resolve_api_key` — there is no
+  `roadmap_generator.resolve_api_key`, and no Anthropic BYOK path in either
+  roadmap generation or the idea interview anymore (verified: no
+  `AsyncAnthropic`/`anthropic.Anthropic(` call site exists in `src/services/`
+  or `src/routers/`; `Organization.encrypted_anthropic_key` is stored via
+  `routers/organizations.py` but nothing reads it for generation). Artifact
+  analysis follows the same Groq-only pattern for consistency: it resolves
+  its key via `idea_interview.resolve_api_key` and makes its forced-tool call
+  through the existing `roadmap_generator._call_planner` (cross-module reuse
+  of a private helper — precedented by `routers/project_common.py`'s
+  `_get_org`/`_owned_project`, imported by both `routers/roadmap.py` and
+  `routers/projects.py`).
+- **`roadmap_shapes.py` extraction went a little wider than the doc's literal
+  list**, because `create_project_with_milestones` transitively needs it:
+  `_weekday_after`, `_add_tasks`, `_persist_milestones`, `_parse_hhmm`,
+  `_clamp_duration`, and the milestone JSON-schema dict (`MILESTONE_SCHEMA`,
+  needed by `artifact_import.py`'s own tool schema) all moved too, alongside
+  the doc-named `MAX_MILESTONES`/`MAX_TASKS_PER_MILESTONE`/`MAX_DAY_OFFSET`
+  and `validated_task`/`validated_milestone`/`validated_milestones`.
+  Deliberately **not** moved: `_call_planner` and its `AsyncOpenAI`
+  instantiation, and `_MAX_TOOL_RETRIES` — those stay in
+  `roadmap_generator.py` because `tests/test_roadmap_generator.py`,
+  `tests/test_roadmap.py`, and `tests/test_projects.py` all patch
+  `src.services.roadmap_generator.AsyncOpenAI`; moving the client
+  construction would silently stop those patches from taking effect.
+  `roadmap_generator.py` re-imports every moved name under its old
+  underscore-prefixed alias, so every existing call site and test keeps
+  working unchanged (verified: `tests/test_roadmap_generator.py` still
+  reaches into `roadmap_generator._weekday_after`, `._MAX_DAY_OFFSET`,
+  `._call_planner`, `._ROADMAP_TOOL`, `._MAX_TOOL_RETRIES` directly).
+- **Not addressed by the doc: `time` objects aren't JSON-serializable.**
+  `validated_milestones()` returns tasks with a real `datetime.time` for
+  `start_time`, but `OnboardingSession.proposed_roadmap` is a JSON/JSONB
+  column — storing the validated shape directly would throw on commit. Added
+  `roadmap_shapes.milestones_to_json`/`milestones_from_json`, which also
+  double as the camelCase view returned to the frontend (so the stored shape
+  and the API response shape are the same thing, not two representations to
+  keep in sync).
+- **`build_plan` step-id backward-compatibility, not in the doc:** a session
+  completed before this feature existed has `onboarding_path = NULL` forever
+  (the column didn't exist yet). Since chat was the only path before this
+  feature, `_build_state` treats `onboarding_path IS NULL AND status ==
+  "completed"` as `idea_chat` for step-labeling purposes, rather than
+  mislabeling an already-finished legacy session as an unstarted `build_plan`.
+- Deps added via `uv add`: `pypdf`, `python-docx`, `python-multipart` (plus
+  `lxml`, a transitive dependency of `python-docx`).
+- Frontend: `apps/web/src/pages/onboarding-v2/SidebarStepper.tsx`'s
+  `STEP_LABELS`/`WHY` maps are exhaustively typed over `OnboardingStepId` and
+  needed new entries for `build_plan`/`import_artifact`/`repo_select` to keep
+  typechecking — not mentioned in the doc's frontend section but required by
+  the existing exhaustiveness.
+
 ## Context
 
 Today the only way to seed a project in Omada is the onboarding chat interview

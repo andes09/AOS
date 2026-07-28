@@ -1,5 +1,5 @@
 import { CSSProperties, useEffect, useState } from 'react'
-import { Trash2 } from 'lucide-react'
+import { Check, Copy, Trash2 } from 'lucide-react'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -10,6 +10,20 @@ import type { FlatTask } from '../../pages/planner/usePlannerData'
 import type { TaskPatch } from '../../pages/planner/usePlannerMutations'
 
 const DURATION_PRESETS = [15, 30, 45, 60, 90, 120, 240]
+
+/** "AOS-142" + "Wire up billing" -> "feature/AOS-142-wire-up-billing". Kept
+ *  short (branch names get unwieldy fast) and filesystem/git-safe. */
+function suggestedBranchName(shortId: string, title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .split('-')
+    .filter(Boolean)
+    .slice(0, 5)
+    .join('-')
+  return slug ? `feature/${shortId}-${slug}` : `feature/${shortId}`
+}
 
 const STATUSES: { value: RoadmapTaskStatus; label: string }[] = [
   { value: 'todo', label: 'To do' },
@@ -40,6 +54,7 @@ export function TaskDetailModal({ task, members, onClose, onSave, onDelete }: Ta
   const [date, setDate] = useState('')
   const [time, setTime] = useState('')
   const [duration, setDuration] = useState<number | null>(null)
+  const [branchCopied, setBranchCopied] = useState(false)
 
   useEffect(() => {
     if (!task) return
@@ -50,6 +65,7 @@ export function TaskDetailModal({ task, members, onClose, onSave, onDelete }: Ta
     setDate(task.scheduledDate ?? '')
     setTime(task.scheduledTime ?? '')
     setDuration(task.durationMinutes)
+    setBranchCopied(false)
   }, [task])
 
   if (!task) return null
@@ -70,9 +86,48 @@ export function TaskDetailModal({ task, members, onClose, onSave, onDelete }: Ta
     onClose()
   }
 
+  const copyBranchName = () => {
+    if (!task.shortId) return
+    navigator.clipboard.writeText(suggestedBranchName(task.shortId, task.title)).then(() => {
+      setBranchCopied(true)
+      setTimeout(() => setBranchCopied(false), 2000)
+    })
+  }
+
   return (
     <Modal open onClose={onClose} title="Task details" width={560}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+        {task.shortId && (
+          <Field label="Task ID">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono, monospace)',
+                  fontSize: 'var(--text-sm)',
+                  padding: '4px 8px',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'var(--color-bg-secondary)',
+                  border: '1px solid var(--color-border-subtle)',
+                  color: 'var(--color-text-secondary)',
+                }}
+              >
+                {task.shortId}
+              </span>
+              <Button size="sm" variant="ghost" onClick={copyBranchName}>
+                {branchCopied ? (
+                  <>
+                    <Check size={13} /> Copied!
+                  </>
+                ) : (
+                  <>
+                    <Copy size={13} /> Copy branch name
+                  </>
+                )}
+              </Button>
+            </div>
+          </Field>
+        )}
+
         <Field label="Title">
           <Input value={title} onChange={e => setTitle(e.target.value)} autoFocus />
         </Field>

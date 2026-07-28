@@ -1,8 +1,15 @@
 from dataclasses import dataclass
+from datetime import datetime
 
 import httpx
 
 GITHUB_API_BASE = "https://api.github.com"
+
+
+def _parse_gh_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
 
 
 @dataclass
@@ -27,3 +34,62 @@ class GithubClient:
             )
             response.raise_for_status()
             return response.json()["repositories"]
+
+    async def list_commits(
+        self,
+        owner: str,
+        repo: str,
+        since: datetime | None = None,
+        branch: str | None = None,
+        page: int = 1,
+        per_page: int = 100,
+    ) -> list[dict]:
+        """List commits, for the reconciliation sweep. `/commits` natively
+        supports `since` server-side, unlike `/pulls` (see `list_pull_requests`)."""
+        params: dict = {"page": page, "per_page": per_page}
+        if since is not None:
+            params["since"] = since.isoformat() + "Z"
+        if branch is not None:
+            params["sha"] = branch
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{GITHUB_API_BASE}/repos/{owner}/{repo}/commits",
+                headers=self._headers,
+                params=params,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def list_pull_requests(
+        self,
+        owner: str,
+        repo: str,
+        state: str = "all",
+        since: datetime | None = None,
+        page: int = 1,
+        per_page: int = 100,
+    ) -> list[dict]:
+        """List pull requests, for the reconciliation sweep.
+
+        GitHub's `/pulls` endpoint has no server-side `since` filter (unlike
+        `/commits`), so we sort by `updated` descending and filter client-side
+        — good enough for a low-frequency reconciliation sweep over a bounded
+        page of recently-updated PRs, not meant for deep historical backfill.
+        """
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls",
+                headers=self._headers,
+                params={
+                    "state": state,
+                    "sort": "updated",
+                    "direction": "desc",
+                    "page": page,
+                    "per_page": per_page,
+                },
+            )
+            response.raise_for_status()
+            prs = response.json()
+        if since is not None:
+            prs = [pr for pr in prs if (_parse_gh_datetime(pr.get("updated_at")) or since) > since]
+        return prs

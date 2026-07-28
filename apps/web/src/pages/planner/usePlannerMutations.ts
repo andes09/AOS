@@ -117,6 +117,9 @@ export function usePlannerMutations() {
       // with the server's version, so it never leaks into a later mutation.
       const optimisticTask: RoadmapTask = {
         id: `optimistic-${crypto.randomUUID()}`,
+        // The server allocates short_id atomically; the settle-time
+        // invalidate replaces this optimistic row with the real one.
+        shortId: null,
         title: input.title,
         description: input.description ?? null,
         status: 'todo',

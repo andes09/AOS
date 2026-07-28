@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.config import settings
 from src.models.milestone import Milestone
 from src.models.onboarding_session import OnboardingSession
+from src.models.organization import Organization
 from src.models.project import Project
 from src.models.task import Task
 from src.models.team import Team
@@ -45,6 +46,7 @@ from src.services.roadmap_shapes import (
     validated_milestones as _validated_milestones,
     validated_task as _validated_task,
 )
+from src.services.task_ids import allocate_short_ids
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +259,8 @@ async def regenerate_roadmap(
         project.name = str(data["projectName"])[:255]
     if data.get("summary"):
         project.summary = data["summary"]
-    await _persist_milestones(project, milestones, db)
+    org = await db.get(Organization, team.organization_id)
+    await _persist_milestones(project, milestones, org, db)
 
     record_generation_cost(
         "roadmap_regenerate", usage, model=_MODEL, session_id=str(session.id)
@@ -299,7 +302,14 @@ async def regenerate_milestone(
     await db.execute(delete(Task).where(Task.milestone_id == milestone.id))
     milestone.title = new["title"]
     milestone.description = new["description"]
-    _add_tasks(milestone.id, new["tasks"], date.today(), db)
+    org = await db.scalar(
+        select(Organization)
+        .join(Team, Team.organization_id == Organization.id)
+        .join(Project, Project.team_id == Team.id)
+        .where(Project.id == milestone.project_id)
+    )
+    short_ids = await allocate_short_ids(org, len(new["tasks"]), db)
+    _add_tasks(milestone.id, new["tasks"], date.today(), short_ids, db)
 
     record_generation_cost(
         "roadmap_regenerate_milestone",

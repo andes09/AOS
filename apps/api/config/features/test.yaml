@@ -9,3 +9,4 @@ features:
   experimental:
     enabled: true
     import_artifacts: true
+    github_autocomplete: true

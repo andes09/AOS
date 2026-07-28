@@ -22,10 +22,13 @@ from sqlalchemy.orm import selectinload
 
 from src.config import settings
 from src.models.milestone import Milestone
+from src.models.organization import Organization
 from src.models.project import Project
 from src.models.task import Task
+from src.models.team import Team
 from src.services import roadmap_generator
 from src.services.cost_tracker import record_generation_cost
+from src.services.task_ids import allocate_short_ids
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +160,14 @@ async def _call_tool(api_key: str, system: str, user_content: str, tool: dict):
         raise RuntimeError("The planner returned malformed output. Please try again.") from exc
 
 
+async def _org_for_project(project: Project, db: AsyncSession) -> Organization:
+    """Task.short_id needs the owning org (for its slug prefix + next_task_seq
+    counter) — Project only carries team_id, so hop through Team."""
+    return await db.scalar(
+        select(Organization).join(Team, Team.organization_id == Organization.id).where(Team.id == project.team_id)
+    )
+
+
 async def _call_adjuster(api_key: str, context: str):
     """One forced-tool Groq call for the feedback re-plan."""
     return await _call_tool(api_key, _SYSTEM_PROMPT, "Current plan and feedback:\n" + context, _ADJUST_TOOL)
@@ -197,6 +208,11 @@ async def adjust_roadmap(
     by_title = {m.title.strip().lower(): m for m in project.milestones}
     next_sort = (max((m.sort_order for m in project.milestones), default=-1)) + 1
 
+    # One atomic batch reservation for every task this adjustment will create.
+    org = await _org_for_project(project, db)
+    total_tasks = sum(len(m["tasks"]) for m in validated)
+    short_ids = iter(await allocate_short_ids(org, total_tasks, db))
+
     for m in validated:
         existing = by_title.get(m["title"].strip().lower())
         if existing is not None:
@@ -206,7 +222,8 @@ async def adjust_roadmap(
             for stale in [t for t in existing.tasks if _status_str(t.status) == "todo"]:
                 await db.delete(stale)
             base_sort = (max((t.sort_order for t in kept), default=-1)) + 1
-            _add_todo_tasks(existing.id, m["tasks"], today, base_sort, db)
+            task_short_ids = [next(short_ids) for _ in m["tasks"]]
+            _add_todo_tasks(existing.id, m["tasks"], today, base_sort, task_short_ids, db)
         else:
             milestone = Milestone(
                 project_id=project.id, title=m["title"], description=m["description"], sort_order=next_sort
@@ -214,7 +231,8 @@ async def adjust_roadmap(
             next_sort += 1
             db.add(milestone)
             await db.flush()
-            _add_todo_tasks(milestone.id, m["tasks"], today, 0, db)
+            task_short_ids = [next(short_ids) for _ in m["tasks"]]
+            _add_todo_tasks(milestone.id, m["tasks"], today, 0, task_short_ids, db)
 
     record_generation_cost("roadmap_adjust", usage, model=_MODEL, session_id=str(project.id))
     await db.commit()
@@ -222,12 +240,15 @@ async def adjust_roadmap(
     return project
 
 
-def _add_todo_tasks(milestone_id, tasks: list[dict], today: date, base_sort: int, db: AsyncSession) -> None:
+def _add_todo_tasks(
+    milestone_id, tasks: list[dict], today: date, base_sort: int, short_ids: list[str], db: AsyncSession
+) -> None:
     """Create validated tasks as `todo`, timed, numbered from `base_sort`."""
     for i, t in enumerate(tasks):
         db.add(
             Task(
                 milestone_id=milestone_id,
+                short_id=short_ids[i],
                 title=t["title"],
                 description=t["description"],
                 status="todo",
@@ -321,10 +342,13 @@ async def extend_day(
 
     target = _milestone_for_day(project, target_date)
     base_sort = (max((t.sort_order for t in target.tasks), default=-1)) + 1
+    org = await _org_for_project(project, db)
+    short_ids = await allocate_short_ids(org, len(validated), db)
     for i, t in enumerate(validated):
         db.add(
             Task(
                 milestone_id=target.id,
+                short_id=short_ids[i],
                 title=t["title"],
                 description=t["description"],
                 status="todo",

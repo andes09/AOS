@@ -26,6 +26,21 @@ class Task(Base):
     milestone_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("milestones.id", ondelete="CASCADE"), index=True
     )
+    # Human-referenceable handle (e.g. "AOS-142") developers put in branch
+    # names / commit messages / PR titles so GitHub activity can auto-complete
+    # this task. Practically unique per org — guaranteed by the atomically-
+    # incremented Organization.next_task_seq counter it's derived from (see
+    # src/services/task_ids.py), NOT by a DB-level constraint here: Task has
+    # no denormalized organization_id column to scope a unique index to, and
+    # two different orgs' slugs can normalize to the same prefix after
+    # alnum-stripping, so a *global* unique constraint would be both the
+    # wrong invariant and a spurious cross-tenant collision risk. Every
+    # lookup (`_find_task` in integrations/github/events.py) is scoped by
+    # organization_id via the Milestone->Project->Team join, so a same-string
+    # short_id in two different orgs is harmless. Nullable because existing
+    # tasks are backfilled by migration 0038 rather than required at the
+    # column level.
+    short_id: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
@@ -62,6 +77,10 @@ class Task(Base):
     )
     github_repo: Mapped[str | None] = mapped_column(String, nullable=True)
     github_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Set when GitHub activity (a merged PR referencing this task's short_id)
+    # auto-completes it, or when a user manually flips status to done. NULL
+    # for a task that's never been done.
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

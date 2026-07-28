@@ -49,6 +49,7 @@ from src.models.task import Task, TaskStatus
 from src.models.team import Team
 from src.routers.project_common import _get_org, _owned_project
 from src.services import idea_interview, roadmap_adjuster, roadmap_generator
+from src.services.task_ids import allocate_short_id
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,7 @@ _MAX_DURATION_MINUTES = 1440
 def _task_json(task: Task) -> dict:
     return {
         "id": str(task.id),
+        "shortId": task.short_id,
         "title": task.title,
         "description": task.description,
         "status": task.status,
@@ -615,6 +617,7 @@ async def create_task(
 
     task = Task(
         milestone_id=milestone.id,
+        short_id=await allocate_short_id(org, db),
         title=body.title,
         description=body.description,
         status=TaskStatus.TODO.value,

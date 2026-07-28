@@ -21,6 +21,7 @@ from src.models.onboarding_session import OnboardingSession, OnboardingMessage, 
 from src.models.project import Project
 from src.models.milestone import Milestone
 from src.models.task import Task, TaskStatus
+from src.models.github_activity_event import GithubActivityEvent
 
 __all__ = [
     "Organization",
@@ -65,4 +66,5 @@ __all__ = [
     "Milestone",
     "Task",
     "TaskStatus",
+    "GithubActivityEvent",
 ]

@@ -31,9 +31,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.milestone import Milestone
 from src.models.onboarding_session import OnboardingSession
+from src.models.organization import Organization
 from src.models.project import Project
 from src.models.task import Task
 from src.models.team import Team
+from src.services.task_ids import allocate_short_ids
 
 # Guardrails so a runaway model can't create an enormous plan. The point is a
 # short-term, finishable roadmap, not an exhaustive backlog.
@@ -205,11 +207,12 @@ def milestones_from_json(milestones: list[dict]) -> list[dict]:
 
 
 # ─── persistence ───────────────────────────────────────────────────────────────
-def _add_tasks(milestone_id, tasks: list[dict], start: date, db: AsyncSession) -> None:
+def _add_tasks(milestone_id, tasks: list[dict], start: date, short_ids: list[str], db: AsyncSession) -> None:
     for t_idx, t in enumerate(tasks):
         db.add(
             Task(
                 milestone_id=milestone_id,
+                short_id=short_ids[t_idx],
                 title=t["title"],
                 description=t["description"],
                 sort_order=t_idx,
@@ -222,9 +225,13 @@ def _add_tasks(milestone_id, tasks: list[dict], start: date, db: AsyncSession) -
 
 
 async def _persist_milestones(
-    project: Project, milestones: list[dict], db: AsyncSession
+    project: Project, milestones: list[dict], org: Organization, db: AsyncSession
 ) -> None:
     start = date.today()
+    # One atomic batch reservation for every task in the plan, rather than one
+    # round trip per task — see src/services/task_ids.py.
+    total_tasks = sum(len(m["tasks"]) for m in milestones)
+    short_ids = iter(await allocate_short_ids(org, total_tasks, db))
     for m_idx, m in enumerate(milestones):
         milestone = Milestone(
             project_id=project.id,
@@ -234,7 +241,8 @@ async def _persist_milestones(
         )
         db.add(milestone)
         await db.flush()  # assign milestone.id
-        _add_tasks(milestone.id, m["tasks"], start, db)
+        task_short_ids = [next(short_ids) for _ in m["tasks"]]
+        _add_tasks(milestone.id, m["tasks"], start, task_short_ids, db)
 
 
 async def create_project_with_milestones(
@@ -263,5 +271,6 @@ async def create_project_with_milestones(
     )
     db.add(project)
     await db.flush()  # assign project.id
-    await _persist_milestones(project, milestones, db)
+    org = await db.get(Organization, team.organization_id)
+    await _persist_milestones(project, milestones, org, db)
     return project

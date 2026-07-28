@@ -13,7 +13,9 @@ def test_local_yaml_loads():
     assert flags["roadmap_generation"] is True
     assert flags["planner"] is True
     assert flags["roadmap_chat"] is True
-    assert flags["experimental"] == {"enabled": True, "import_artifacts": True}
+    assert flags["experimental"] == {
+        "enabled": True, "import_artifacts": True, "github_autocomplete": True,
+    }
 
 
 def test_production_yaml_loads():
@@ -23,7 +25,9 @@ def test_production_yaml_loads():
     assert flags["roadmap_generation"] is True
     assert flags["planner"] is True
     assert flags["roadmap_chat"] is False
-    assert flags["experimental"] == {"enabled": False, "import_artifacts": False}
+    assert flags["experimental"] == {
+        "enabled": False, "import_artifacts": False, "github_autocomplete": False,
+    }
 
 
 def test_is_feature_enabled_supports_dotted_path_for_grouped_flags():

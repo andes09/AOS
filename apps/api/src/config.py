@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     github_app_id: str = ""
     github_app_slug: str = ""
     github_app_private_key: str = ""
+    # Single app-level webhook secret (HMAC-SHA256 over the raw request body,
+    # verified against X-Hub-Signature-256). One GitHub App = one webhook URL
+    # configured once in the App's own settings, so there's no per-connection
+    # secret to generate anymore — see docs/plans/2026-07-20-github-task-autocomplete.md.
+    github_app_webhook_secret: str = ""
 
     # Platform-level Anthropic key used by the main AI features (sprint brain,
     # scope cop, retro, etc.). Org BYOK still wins when present.

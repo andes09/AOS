@@ -114,9 +114,12 @@ export const TaskCard = memo(function TaskCard({
         >
           {task.title}
         </div>
-        {showMilestone && (
+        {(showMilestone || task.shortId) && (
           <div
             style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
               fontSize: 10,
               color: 'var(--color-text-muted)',
               marginTop: 2,
@@ -125,7 +128,10 @@ export const TaskCard = memo(function TaskCard({
               textOverflow: 'ellipsis',
             }}
           >
-            {task.milestoneTitle}
+            {task.shortId && (
+              <span style={{ fontFamily: 'var(--font-mono, monospace)', flexShrink: 0 }}>{task.shortId}</span>
+            )}
+            {showMilestone && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{task.milestoneTitle}</span>}
           </div>
         )}
       </div>

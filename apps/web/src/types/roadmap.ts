@@ -5,6 +5,10 @@ export type RoadmapTaskStatus = 'todo' | 'in_progress' | 'done'
 
 export interface RoadmapTask {
   id: string
+  /** Human-referenceable handle (e.g. "AOS-142"), or null for tasks created
+   *  before this org's org/task got one. Put in branch names / commit
+   *  messages / PR titles so GitHub activity can auto-complete this task. */
+  shortId: string | null
   title: string
   description: string | null
   status: RoadmapTaskStatus

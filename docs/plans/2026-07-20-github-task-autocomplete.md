@@ -1,5 +1,83 @@
 # GitHub-Driven Task Auto-Complete (event-driven, not pure cron)
 
+## Implementation Notes (built 2026-07-28)
+
+This plan was written against a per-repo-webhook / OAuth-token design that predates commit
+`a4c70d0` (GitHub OAuth App → GitHub App migration). It was implemented with a corrected,
+GitHub-App-native design instead. The sections below are kept as-written for history; this note
+records what actually shipped and why it diverges.
+
+**Ingestion model — one app-level webhook, not per-repo registration.** A GitHub App has a single
+webhook URL, configured once in the App's own settings (an infra step — the plan's `create_webhook`
+/ `delete_webhook` client methods and "register hook on connect" flow were never built). That one
+URL receives `push`/`pull_request` events for every installed repo across every org automatically,
+so the entire "does this token have admin rights on this repo → webhook vs. poll" question the
+original plan spent most of its design on doesn't exist anymore. Consequently, dropped entirely:
+- `github_repo_sync_state` table and its `sync_mode` (`'webhook'|'poll'`) split — no table, no column.
+- The 15-min poll-fallback beat job — nothing to fall back *from* per-repo, since coverage is total.
+- Per-connection `webhook_secret` — replaced by one app-level secret, `github_app_webhook_secret` in
+  `apps/api/src/config.py` (env var `GITHUB_APP_WEBHOOK_SECRET`), following the exact pattern of the
+  existing `github_app_id`/`github_app_private_key` settings. Empty locally; tests inject a real
+  value via `patch`, same idiom as `tests/test_github_router.py`.
+
+**Kept, as the plan specified:** `Task.short_id` + `Organization.next_task_seq`, `Task.completed_at`,
+the `github_activity_events` table (its `UNIQUE (organization_id, repo_full_name, event_type,
+external_id)` constraint is the idempotency mechanism for both the webhook and the reconciliation
+sweep), the webhook receiver (signature verification, event parsing, a Celery task, and the
+push→`IN_PROGRESS` / merged-PR→`DONE` matching rules), and a periodic reconciliation sweep as a
+safety net for missed deliveries.
+
+**Reconciliation cursor simplified.** Rather than a `github_repo_sync_state.last_synced_at` row, the
+sweep uses `MAX(occurred_at)` per `(organization_id, repo_full_name)` straight from
+`github_activity_events`, falling back to the `GithubConnection.created_at` when a repo has no
+recorded events yet. One less table, since nothing else needed a persisted per-repo sync-state row
+once there was no `sync_mode` to track. Runs every 6h via Celery beat
+(`github-reconciliation-sweep`).
+
+**Feature flag.** Everything above (webhook router + beat entry) is gated behind
+`experimental.github_autocomplete` (nested under the existing `experimental` block in
+`apps/api/config/features/{local,production,test}.yaml`), off in production, mirroring how
+`routers/artifact_import.py` gates itself behind `experimental.import_artifacts` — the router 404s
+while the flag is off, and the beat entry simply isn't registered.
+
+**Migration.** Real Alembic head at the time this was built was `0037_artifact_import.py`; this
+shipped as `apps/api/alembic/versions/0038_github_task_autocomplete.py` (`down_revision='0037'`) —
+adds `tasks.short_id` (nullable, plain index — see below) and `tasks.completed_at`,
+`organizations.next_task_seq`, and the `github_activity_events` table, with a backfill of `short_id`
+for every pre-existing task in creation order per org.
+
+**Deviations from this plan doc's specifics, found once the real code was read:**
+- `Task.short_id` is **not** a globally-unique DB column, despite "unique per org" in the original
+  spec reading like it might be. `Task` has no denormalized `organization_id` (it's three joins away
+  via `Milestone → Project → Team`), and two different orgs' slugs can normalize to the same prefix
+  after alnum-stripping — so a *global* unique constraint would be the wrong invariant and a spurious
+  cross-tenant collision risk. Uniqueness *within* an org is guaranteed instead by the atomically
+  incremented `Organization.next_task_seq` counter (`src/services/task_ids.py`,
+  `UPDATE ... RETURNING`), and every match lookup is scoped by `organization_id` via that same join,
+  so an identical short_id string existing in two unrelated orgs is harmless.
+- `Task.short_id` allocation was wired into **every** task-creation call site, not just
+  `routers/roadmap.py`'s quick-add endpoint: `services/roadmap_shapes.py` (AI-drafted roadmap
+  persistence, shared by the chat and import-artifact paths), `services/roadmap_adjuster.py`
+  (feedback re-plan + extend-day), and `services/roadmap_generator.py`'s regenerate paths. The
+  quick-add endpoint creates a small minority of real tasks — most come from the AI planner — so
+  only wiring the manual endpoint would have left auto-complete non-functional for most of a plan.
+  `allocate_short_ids(org, count, db)` reserves a whole batch in one `UPDATE ... RETURNING` rather
+  than one round trip per task.
+- `GithubClient.list_pull_requests` has no server-side `since` filter to give it — GitHub's
+  `/pulls` endpoint doesn't support one (unlike `/commits`, which does). It sorts by `updated`
+  descending and filters client-side instead; fine for a low-frequency reconciliation sweep, not
+  meant for deep historical backfill.
+- No pre-existing sync-`Session`/event-loop-bridge pattern to reuse: the Jira sync module this plan
+  pointed to (`src/integrations/jira/sync.py`) had already been deleted (Jira/Ticket phase-out,
+  `docs/plans/2026-07-20-plan-reconciliation.md`). `process_github_event` and
+  `reconcile_org_github` instead bridge via `asyncio.run()` into the existing async
+  `AsyncSessionLocal` — no second, redundant sync engine.
+- Idempotent inserts use `sqlalchemy.dialects.{postgresql,sqlite}.insert(...).on_conflict_do_nothing(...)`,
+  picked by `db.bind.dialect.name` at call time (both dialects expose the same `ON CONFLICT` API
+  shape) rather than being hard-committed to Postgres-only syntax — this repo's tests run against an
+  in-memory SQLite (`tests/conftest.py`'s `tmp_db`), and there's no real Postgres available in this
+  environment to test a Postgres-only upsert against.
+
 ## Context
 
 The ask started as "plan a cron scheduler that tracks GitHub PRs/commits/code changes," but the real goal is an **auto-complete feature**: when a developer pushes commits or merges a PR referencing a roadmap task, that task should check itself off — without a human going back to mark it done. A pure polling cron was the initial instinct, but polling on a timer is wasteful in off-hours and adds latency the rest of the time (you're either burning cycles when nothing happened, or waiting up to a full interval after something did).

@@ -20,6 +20,10 @@ class Organization(Base):
     # routers/projects.py) — archiving is a visibility flag, not a
     # resource-freeing operation, so it must not be a loophole around the cap.
     max_projects: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Monotonic counter behind Task.short_id (e.g. "AOS-142"). Incremented
+    # atomically via UPDATE ... RETURNING (see src/services/task_ids.py) so
+    # concurrent task creation for the same org never collides on a number.
+    next_task_seq: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

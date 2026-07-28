@@ -4,6 +4,7 @@ import type { Roadmap, RoadmapTask } from '../../types/roadmap'
 
 const task = (id: string, over: Partial<RoadmapTask> = {}): RoadmapTask => ({
   id,
+  shortId: null,
   title: `Task ${id}`,
   description: null,
   status: 'todo',

@@ -14,8 +14,8 @@ def test_local_yaml_loads():
     assert flags["planner"] is True
     assert flags["roadmap_chat"] is True
     assert flags["experimental"] == {
-        "enabled": True, "import_artifacts": True, "github_autocomplete": True,
-        "master_dashboard": True, "mcp_server": True,
+        "enabled": False, "import_artifacts": False, "github_autocomplete": False,
+        "master_dashboard": False, "mcp_server": False,
     }
 
 
@@ -34,9 +34,9 @@ def test_production_yaml_loads():
 
 def test_is_feature_enabled_supports_dotted_path_for_grouped_flags():
     local = Settings(environment="local")
-    assert local.is_feature_enabled("experimental") is True
-    assert local.is_feature_enabled("experimental.enabled") is True
-    assert local.is_feature_enabled("experimental.import_artifacts") is True
+    assert local.is_feature_enabled("experimental") is False
+    assert local.is_feature_enabled("experimental.enabled") is False
+    assert local.is_feature_enabled("experimental.import_artifacts") is False
     assert local.is_feature_enabled("experimental.nonexistent_sub_flag") is False
 
     production = Settings(environment="production")

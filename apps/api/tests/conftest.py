@@ -2,7 +2,15 @@ import os
 import pytest
 import pytest_asyncio
 
-# Set required env vars before any app imports
+# Set required env vars before any app imports.
+#
+# ENVIRONMENT must be "test" so feature-flag-gated tests exercise
+# config/features/test.yaml regardless of what a developer's local
+# apps/api/.env happens to set (e.g. ENVIRONMENT=local, which would silently
+# swap in local.yaml's values instead — CI already forces this explicitly via
+# .github/workflows/test.yml; this makes local `pytest` runs match it without
+# requiring every developer's shell to agree).
+os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
 os.environ.setdefault("DATABASE_URL_SYNC", "postgresql://test:test@localhost/test")
 os.environ.setdefault("CLERK_SECRET_KEY", "sk_test_dummy")

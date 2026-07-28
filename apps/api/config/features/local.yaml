@@ -7,8 +7,8 @@ features:
   planner: true
   roadmap_chat: true
   experimental:
-    enabled: true
-    import_artifacts: true
-    github_autocomplete: true
-    master_dashboard: true
-    mcp_server: true
+    enabled: false
+    import_artifacts: false
+    github_autocomplete: false
+    master_dashboard: false
+    mcp_server: false

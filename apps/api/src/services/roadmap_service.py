@@ -206,6 +206,47 @@ async def owned_milestone(milestone_id: str, project: Project, db: AsyncSession)
     return milestone
 
 
+async def task_blocked_by_earlier_sibling(task: Task, project: Project, db: AsyncSession) -> bool:
+    """
+    True if `task` is a sequential (non-parallel) task that can't be completed
+    yet because an earlier sequential task scheduled the same day is still
+    unfinished. Mirrors the "waits its turn" gating the planner UI computes
+    client-side (DayAgenda.tsx) so the server enforces the same rule instead
+    of trusting the UI alone.
+
+    Never blocks parallel tasks or unscheduled ones — there's no day-ordering
+    to gate on without a scheduled_date.
+    """
+    if task.parallel or task.scheduled_date is None:
+        return False
+
+    siblings = (
+        await db.scalars(
+            select(Task)
+            .join(Milestone, Task.milestone_id == Milestone.id)
+            .where(
+                Milestone.project_id == project.id,
+                Task.scheduled_date == task.scheduled_date,
+            )
+            # Mirrors usePlannerData.ts's day ordering: untimed tasks lead
+            # (compareByTime), then milestone order, then position within it.
+            .order_by(
+                Task.scheduled_time.is_(None).desc(),
+                Task.scheduled_time,
+                Milestone.sort_order,
+                Task.sort_order,
+            )
+        )
+    ).all()
+
+    for sibling in siblings:
+        if sibling.id == task.id:
+            return False
+        if not sibling.parallel and _status_str(sibling.status) != TaskStatus.DONE.value:
+            return True
+    return False
+
+
 def require_brief(session: OnboardingSession) -> None:
     if not session.project_brief:
         raise HTTPException(

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Outlet, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { RoleSwitcher } from '../components/RoleSwitcher'
@@ -7,6 +7,7 @@ import { Modal } from '../components/ui/Modal'
 import { TopBar } from '../components/layout/TopBar'
 import { SettingsPage } from '../pages/SettingsPage'
 import { useApi } from '../lib/api'
+import { useFeatureFlags } from '../featureFlags'
 import type { ProjectSummary } from '../features/projects/types'
 import type { PlannerOutletContext, PlannerView } from '../components/planner/plannerViews'
 
@@ -35,6 +36,22 @@ export function DashboardLayout() {
       localStorage.setItem(LANES_KEY, next ? '0' : '1')
       return next
     })
+
+  // Views can be killed per-flag (see TopBar's switcher); if the current one
+  // goes dark — including the default 'day' — fall back to 'list', the one
+  // view with no flag of its own. Only reacts once flags have actually
+  // loaded, so the loading state's default-false reads don't cause a flash.
+  const { data: flags } = useFeatureFlags()
+  useEffect(() => {
+    if (!flags) return
+    const viewEnabled: Record<PlannerView, boolean> = {
+      week: flags.planner.week_view ?? false,
+      day: flags.planner.day_view ?? false,
+      list: true,
+      board: flags.planner.board_view ?? false,
+    }
+    setView(v => (viewEnabled[v] ? v : 'list'))
+  }, [flags])
 
   // An org can have multiple projects now (see docs/plans/2026-07-20-project-hub.md).
   // Only /app/projects/:projectId routes get the planner's view switcher/lanes

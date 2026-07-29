@@ -1,11 +1,13 @@
 features:
   clerk_auth: true
-  slack_alerts: false
-  allow_team_creation_via_api: false
   cost_tracking: true
   roadmap_generation: true
-  planner: true
   roadmap_chat: true
+  planner:
+    enabled: true
+    week_view: false
+    day_view: false
+    board_view: false
   experimental:
     enabled: false
     import_artifacts: false

@@ -4,9 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useApi } from './lib/api'
 
 export type FeatureFlags = {
-  slack_alerts: boolean
   roadmap_generation: boolean
-  planner: boolean
   roadmap_chat: boolean
   experimental: {
     enabled: boolean
@@ -15,6 +13,15 @@ export type FeatureFlags = {
     master_dashboard?: boolean
     mcp_server?: boolean
   }
+  /** The planner's own kill switch, plus one sub-flag per view in the
+   *  switcher (see VIEW_OPTIONS) — 'list' has no flag, it's the fallback
+   *  every view degrades to when its own flag is off. */
+  planner: {
+    enabled: boolean
+    week_view?: boolean
+    day_view?: boolean
+    board_view?: boolean
+  }
 }
 
 type FeaturesResponse = {
@@ -22,16 +29,21 @@ type FeaturesResponse = {
   features: FeatureFlags
 }
 
-type FlatFlag = Exclude<keyof FeatureFlags, 'experimental'>
+type FlatFlag = Exclude<keyof FeatureFlags, 'experimental' | 'planner'>
 type ExperimentalFlag = keyof FeatureFlags['experimental']
+type PlannerFlag = keyof FeatureFlags['planner']
 
-/** "flag_name" for a top-level flag, or "experimental.sub_flag" for a grouped one. */
-export type FlagPath = FlatFlag | `experimental.${ExperimentalFlag}`
+/** "flag_name" for a top-level flag, or "group.sub_flag" for a grouped one. */
+export type FlagPath = FlatFlag | `experimental.${ExperimentalFlag}` | `planner.${PlannerFlag}`
 
 function readFlag(data: FeatureFlags, path: FlagPath): boolean {
   if (path.startsWith('experimental.')) {
     const key = path.slice('experimental.'.length) as ExperimentalFlag
     return data.experimental[key] ?? false
+  }
+  if (path.startsWith('planner.')) {
+    const key = path.slice('planner.'.length) as PlannerFlag
+    return data.planner[key] ?? false
   }
   return data[path as FlatFlag] ?? false
 }

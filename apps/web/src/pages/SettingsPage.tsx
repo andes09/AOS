@@ -1,27 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useClerk } from '@clerk/clerk-react'
-import { useApi, ApiError } from '../lib/api'
+import { useApi } from '../lib/api'
 import { useAppRole } from '../hooks/useAppRole'
 import { Card, CardHeader, CardBody } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
 import { Select } from '../components/ui/Select'
 import { Badge } from '../components/ui/Badge'
-import { useFeature } from '../featureFlags'
-
-interface SlackConfig {
-  configured: boolean
-  channel: string | null
-  alertTypes: string[]
-  isActive: boolean
-}
-
-const ALERT_TYPE_LABELS: Record<string, string> = {
-  high_risk_dependency: 'High-risk dependency',
-  sprint_at_risk: 'Sprint at risk',
-  retro_action_overdue: 'Retro action overdue',
-}
-const ALL_ALERT_TYPES = ['high_risk_dependency', 'sprint_at_risk', 'retro_action_overdue']
 
 interface InviteResponse {
   id: string
@@ -43,19 +28,10 @@ interface InvitationItem {
 }
 
 export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
-  const showSlackAlerts = useFeature('slack_alerts')
   const [anthropicKey, setAnthropicKey] = useState('')
   const [anthropicConfigured, setAnthropicConfigured] = useState<boolean | null>(null)
   const [anthropicSaving, setAnthropicSaving] = useState(false)
   const [anthropicMessage, setAnthropicMessage] = useState<string | null>(null)
-  const [slackConfig, setSlackConfig] = useState<SlackConfig | null>(null)
-  const [slackWebhook, setSlackWebhook] = useState('')
-  const [slackChannel, setSlackChannel] = useState('')
-  const [slackAlertTypes, setSlackAlertTypes] = useState<string[]>(ALL_ALERT_TYPES)
-  const [slackSaving, setSlackSaving] = useState(false)
-  const [slackMsg, setSlackMsg] = useState<string | null>(null)
-  const [slackValidationError, setSlackValidationError] = useState<string | null>(null)
-  const [slackTesting, setSlackTesting] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState('lead')
   const [inviteSending, setInviteSending] = useState(false)
@@ -63,7 +39,7 @@ export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
   const [inviteLink, setInviteLink] = useState<string | null>(null)
   const [invitations, setInvitations] = useState<InvitationItem[]>([])
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const { get, del, post, put } = useApi()
+  const { get, del, post } = useApi()
   const { appRole } = useAppRole()
   const isLead = appRole === 'lead' || appRole === 'exec' || appRole === 'admin'
   const { signOut } = useClerk()
@@ -90,19 +66,6 @@ export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
       setAnthropicConfigured(data.configured)
     } catch {
       setAnthropicConfigured(false)
-    }
-  }
-
-  async function fetchSlackConfig() {
-    try {
-      const data = await get<SlackConfig>('/api/teams/default/slack')
-      setSlackConfig(data)
-      if (data.configured) {
-        setSlackAlertTypes(data.alertTypes)
-        if (data.channel) setSlackChannel(data.channel)
-      }
-    } catch {
-      setSlackConfig({ configured: false, channel: null, alertTypes: [], isActive: false })
     }
   }
 
@@ -151,63 +114,8 @@ export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
 
   useEffect(() => {
     fetchAnthropicStatus()
-    fetchSlackConfig()
     fetchInvitations()
   }, [])
-
-  async function handleSaveSlack() {
-    if (!slackWebhook.trim()) return
-    setSlackSaving(true)
-    setSlackMsg(null)
-    setSlackValidationError(null)
-    try {
-      await put('/api/teams/default/slack', {
-        webhookUrl: slackWebhook.trim(),
-        channel: slackChannel.trim() || null,
-        alertTypes: slackAlertTypes,
-      })
-      setSlackMsg('Slack config saved.')
-      await fetchSlackConfig()
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 422) {
-        setSlackValidationError(err.message)
-      } else {
-        setSlackMsg(err instanceof Error ? err.message : 'Failed to save Slack config')
-      }
-    } finally {
-      setSlackSaving(false)
-    }
-  }
-
-  async function handleTestSlack() {
-    setSlackTesting(true)
-    setSlackMsg(null)
-    try {
-      await post('/api/teams/default/slack/test', {})
-      setSlackMsg('Test message sent')
-    } catch {
-      setSlackMsg('Failed to send test')
-    } finally {
-      setSlackTesting(false)
-    }
-  }
-
-  async function handleDeleteSlack() {
-    setSlackSaving(true)
-    setSlackMsg(null)
-    try {
-      await del('/api/teams/default/slack')
-      setSlackMsg('Slack config removed.')
-      setSlackWebhook('')
-      setSlackChannel('')
-      setSlackAlertTypes(ALL_ALERT_TYPES)
-      await fetchSlackConfig()
-    } catch (err) {
-      setSlackMsg(err instanceof Error ? err.message : 'Failed to remove Slack config')
-    } finally {
-      setSlackSaving(false)
-    }
-  }
 
   async function handleSaveAnthropicKey() {
     if (!anthropicKey.trim()) return
@@ -369,103 +277,6 @@ export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
             )}
           </CardBody>
         </Card>
-      )}
-
-      {/* Slack Alerts */}
-      {showSlackAlerts && (
-      <Card style={sectionGap}>
-        <CardHeader>
-          <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
-            Slack Alerts
-          </span>
-          {slackConfig !== null && (
-            <Badge variant={slackConfig.configured && slackConfig.isActive ? 'success' : 'default'}>
-              {slackConfig.configured && slackConfig.isActive ? 'Active' : 'Not configured'}
-            </Badge>
-          )}
-        </CardHeader>
-        <CardBody>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <Input
-              label="Webhook URL"
-              type="text"
-              placeholder="https://hooks.slack.com/services/..."
-              value={slackWebhook}
-              onChange={e => { setSlackWebhook(e.target.value); setSlackValidationError(null) }}
-              error={slackValidationError ?? undefined}
-            />
-            <Input
-              label="Channel (optional)"
-              type="text"
-              placeholder="#engineering-alerts"
-              value={slackChannel}
-              onChange={e => setSlackChannel(e.target.value)}
-            />
-
-            <div>
-              <div style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', fontWeight: 500, marginBottom: 6 }}>
-                Alert types
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {ALL_ALERT_TYPES.map(type => (
-                  <label key={type} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={slackAlertTypes.includes(type)}
-                      onChange={e => {
-                        if (e.target.checked) setSlackAlertTypes(a => [...a, type])
-                        else setSlackAlertTypes(a => a.filter(t => t !== type))
-                      }}
-                    />
-                    <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)' }}>
-                      {ALERT_TYPE_LABELS[type]}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={handleSaveSlack}
-                disabled={slackSaving || !slackWebhook.trim()}
-              >
-                {slackSaving ? 'Saving...' : 'Save'}
-              </Button>
-              {slackConfig?.configured && (
-                <>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={handleTestSlack}
-                    disabled={slackTesting}
-                  >
-                    {slackTesting ? 'Sending...' : 'Test'}
-                  </Button>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    onClick={handleDeleteSlack}
-                    disabled={slackSaving}
-                  >
-                    Remove
-                  </Button>
-                </>
-              )}
-            </div>
-            {slackMsg && (
-              <div style={{
-                fontSize: 'var(--text-sm)',
-                color: slackMsg.includes('saved') || slackMsg.includes('sent') ? 'var(--color-success)' : 'var(--color-danger)',
-              }}>
-                {slackMsg}
-              </div>
-            )}
-          </div>
-        </CardBody>
-      </Card>
       )}
 
       {/* Delete Account */}

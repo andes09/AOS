@@ -43,9 +43,9 @@ def _require_import_artifacts_enabled() -> None:
     """Feature-flag gate for this entire router. 404s (rather than 403) so the
     feature is invisible, not just refused, while it's off — same posture as
     a not-yet-shipped route. Mirrors the `settings.is_feature_enabled(...)`
-    idiom used elsewhere (see src/auth.py's `clerk_auth` checks, src/routers/
-    teams.py's `allow_team_creation_via_api`), gated on the nested
-    `experimental.import_artifacts` sub-flag rather than a top-level flag.
+    idiom used elsewhere (see src/auth.py's `clerk_auth` checks), gated on
+    the nested `experimental.import_artifacts` sub-flag rather than a
+    top-level flag.
     """
     if not settings.is_feature_enabled("experimental.import_artifacts"):
         raise HTTPException(status_code=404, detail="not_found")

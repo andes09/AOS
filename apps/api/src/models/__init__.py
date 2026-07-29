@@ -10,7 +10,6 @@ from src.models.retro import PatternType, PatternStatus, Retrospective, RetroPat
 from src.models.invitation import Invitation, InvitationStatus
 from src.models.capacity import DeveloperCapacityOverride
 from src.models.team_access import TeamAccessGrant
-from src.models.slack_config import SlackConfig
 from src.models.sprint_plan_override import SprintPlanOverride, OverrideAction, OverrideReason
 from src.models.recalibration_proposal import RecalibrationProposal, ProposalKind, ProposalStatus
 from src.models.ticket_revision import TicketRevision
@@ -51,7 +50,6 @@ __all__ = [
     "InvitationStatus",
     "DeveloperCapacityOverride",
     "TeamAccessGrant",
-    "SlackConfig",
     "SprintPlanOverride",
     "OverrideAction",
     "OverrideReason",

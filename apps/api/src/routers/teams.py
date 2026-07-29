@@ -9,7 +9,7 @@ DELETE /api/teams/{team_id}/access/{developer_id}
 """
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
@@ -17,11 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import get_current_org_id, get_current_user_id
 from src.auth_roles import require_role
-from src.config import settings
 from src.database import get_db
 from src.models.developer import Developer
-from src.models.organization import Organization
-from src.models.team import Team
 from src.models.team_access import TeamAccessGrant
 from src.services.multi_team import get_accessible_teams
 
@@ -47,52 +44,6 @@ class TeamsListResponse(BaseModel):
 class GrantAccessRequest(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
     developer_clerk_user_id: str
-
-
-class CreateTeamDeveloper(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-    name: str
-    role: str | None = None
-
-
-class CreateTeamRequest(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-    name: str
-    developers: list[CreateTeamDeveloper] = []
-
-
-class CreatedDeveloper(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-    developer_id: str
-    name: str
-
-
-class CreateTeamResponse(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-    team_id: str
-    name: str
-    is_new: bool
-    developers: list[CreatedDeveloper]
-
-
-class SeedTicketIn(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-    jira_issue_key: str
-    title: str
-    story_points: float | None = None
-    ticket_type: str | None = None
-    labels: list[str] | None = None
-
-
-class SeedTicketsRequest(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-    tickets: list[SeedTicketIn]
-
-
-class SeedTicketsResponse(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-    created: int
-    updated: int
 
 
 # ---------------------------------------------------------------------------
@@ -129,193 +80,6 @@ async def list_teams(
         for t in teams
     ]
     return TeamsListResponse(teams=items)
-
-
-@teams_router.post("", response_model=CreateTeamResponse)
-async def create_team(
-    body: CreateTeamRequest,
-    response: Response,
-    clerk_org_id: str = Depends(get_current_org_id),
-    db: AsyncSession = Depends(get_db),
-):
-    """Create a Team (and its Developers) under the caller's current org.
-
-    Idempotent on (organization_id, name): if a team with this name already
-    exists in the org, return it with isNew=False. Developers are idempotent
-    on (team_id, name): re-POSTing the same body returns existing devs and
-    does not duplicate rows.
-
-    Gated by the `allow_team_creation_via_api` feature flag.
-    """
-    if not settings.is_feature_enabled("allow_team_creation_via_api"):
-        raise HTTPException(
-            status_code=403,
-            detail="Team creation via API is disabled in this environment.",
-        )
-
-    org = await db.scalar(
-        select(Organization).where(Organization.clerk_org_id == clerk_org_id)
-    )
-    if not org:
-        raise HTTPException(status_code=404, detail="Organisation not found")
-
-    # Idempotency: look up an existing team with this name in the org.
-    team = await db.scalar(
-        select(Team).where(
-            Team.organization_id == org.id,
-            Team.name == body.name,
-        )
-    )
-    is_new = False
-    if team is None:
-        team = Team(
-            id=uuid.uuid4(),
-            organization_id=org.id,
-            name=body.name,
-            sprint_length_days=14,
-        )
-        db.add(team)
-        await db.flush()  # get team.id before creating developers
-        is_new = True
-        response.status_code = 201
-    else:
-        response.status_code = 200
-
-    # Idempotent developer creation: skip names already present on the team.
-    existing_devs = (
-        await db.scalars(
-            select(Developer).where(Developer.team_id == team.id)
-        )
-    ).all()
-    existing_by_name = {d.name: d for d in existing_devs}
-
-    created_or_existing: list[Developer] = []
-    for dev_in in body.developers:
-        existing = existing_by_name.get(dev_in.name)
-        if existing is not None:
-            created_or_existing.append(existing)
-            continue
-        dev = Developer(
-            id=uuid.uuid4(),
-            team_id=team.id,
-            name=dev_in.name,
-            role=dev_in.role,
-        )
-        db.add(dev)
-        created_or_existing.append(dev)
-
-    await db.commit()
-
-    return CreateTeamResponse(
-        team_id=str(team.id),
-        name=team.name,
-        is_new=is_new,
-        developers=[
-            CreatedDeveloper(developer_id=str(d.id), name=d.name)
-            for d in created_or_existing
-        ],
-    )
-
-
-@teams_router.post(
-    "/{team_id}/seed-tickets", response_model=SeedTicketsResponse
-)
-async def seed_tickets(
-    team_id: uuid.UUID,
-    body: SeedTicketsRequest,
-    clerk_org_id: str = Depends(get_current_org_id),
-    db: AsyncSession = Depends(get_db),
-):
-    """Bulk-insert backlog Ticket rows for a team without going through
-    Jira sync.
-
-    The simulator uses this to populate the backlog when
-    `sync_jira_team` can't run (stale OAuth scopes, no Celery worker, etc).
-    Tickets are inserted with sprint_id=None.
-
-    Idempotent on jira_issue_id: existing rows have sprint_id reset to NULL
-    and core fields refreshed (so spillover semantics from a prior run don't
-    pollute the new pool). Gated by `allow_team_creation_via_api`.
-    """
-    from src.models.ticket import Ticket, TicketStatus
-
-    if not settings.is_feature_enabled("allow_team_creation_via_api"):
-        raise HTTPException(
-            status_code=403,
-            detail="Team API disabled in this environment.",
-        )
-
-    org = await db.scalar(
-        select(Organization).where(Organization.clerk_org_id == clerk_org_id)
-    )
-    if not org:
-        raise HTTPException(status_code=404, detail="Organisation not found")
-
-    team = await db.scalar(
-        select(Team).where(
-            Team.id == team_id,
-            Team.organization_id == org.id,
-        )
-    )
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
-
-    from src.models.ticket import Ticket  # local import — avoid app cold-start cost
-    from src.models.sprint import Sprint, SprintStatus
-
-    # Mark any stale ACTIVE/PLANNING sprints from prior sim runs as
-    # COMPLETED. Otherwise push_to_jira's "active sprint in progress" guard
-    # 409s the very first push of a new run. Safe because seed_tickets is
-    # dev-only — we're claiming the team for a fresh sim.
-    stale_sprints = (await db.scalars(
-        select(Sprint).where(
-            Sprint.team_id == team.id,
-            Sprint.status.in_([SprintStatus.ACTIVE, SprintStatus.PLANNING]),
-        )
-    )).all()
-    for s in stale_sprints:
-        s.status = SprintStatus.COMPLETED
-    if stale_sprints:
-        await db.flush()
-
-    created = 0
-    updated = 0
-    for t in body.tickets:
-        # jira_issue_key is unique within a project, so use it as the
-        # synthetic jira_issue_id when the simulator hasn't captured the
-        # real Jira numeric id. Production sync will reconcile if a real
-        # id ever shows up.
-        synthetic_id = t.jira_issue_key
-        existing = await db.scalar(
-            select(Ticket).where(Ticket.jira_issue_id == synthetic_id)
-        )
-        if existing is not None:
-            existing.team_id = team.id
-            existing.sprint_id = None
-            existing.title = t.title
-            existing.story_points_estimated = t.story_points
-            existing.ticket_type = t.ticket_type
-            existing.status = TicketStatus.TODO
-            existing.labels = t.labels
-            updated += 1
-        else:
-            db.add(
-                Ticket(
-                    team_id=team.id,
-                    sprint_id=None,
-                    jira_issue_id=synthetic_id,
-                    jira_issue_key=t.jira_issue_key,
-                    title=t.title,
-                    status=TicketStatus.TODO,
-                    ticket_type=t.ticket_type,
-                    story_points_estimated=t.story_points,
-                    labels=t.labels,
-                )
-            )
-            created += 1
-
-    await db.commit()
-    return SeedTicketsResponse(created=created, updated=updated)
 
 
 @teams_router.post("/{team_id}/access", status_code=201)

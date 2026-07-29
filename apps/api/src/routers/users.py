@@ -121,9 +121,8 @@ async def _wipe_team_data(db: AsyncSession, team_id: uuid.UUID) -> None:
     Many team-scoped tables don't have ondelete CASCADE on their FK to teams
     (sprints, tickets, retros, sprint_alerts, developer_velocity_profiles), so
     we have to walk them by hand. Tables that *do* CASCADE (team_access,
-    ticket_revisions, recalibration_proposal, invitation, slack_config,
-    team_identifiers) clean up automatically when the team row is dropped at
-    the end.
+    ticket_revisions, recalibration_proposal, invitation, team_identifiers)
+    clean up automatically when the team row is dropped at the end.
     """
     # Children of sprints first.
     await db.execute(text(

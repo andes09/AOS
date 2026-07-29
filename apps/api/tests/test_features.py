@@ -9,9 +9,10 @@ from src.main import app
 def test_local_yaml_loads():
     settings = Settings(environment="local")
     flags = settings.feature_flags
-    assert flags["slack_alerts"] is False
     assert flags["roadmap_generation"] is True
-    assert flags["planner"] is True
+    assert flags["planner"] == {
+        "enabled": True, "week_view": True, "day_view": True, "board_view": True,
+    }
     assert flags["roadmap_chat"] is True
     assert flags["experimental"] == {
         "enabled": False, "import_artifacts": False, "github_autocomplete": False,
@@ -22,9 +23,10 @@ def test_local_yaml_loads():
 def test_production_yaml_loads():
     settings = Settings(environment="production")
     flags = settings.feature_flags
-    assert flags["slack_alerts"] is False
     assert flags["roadmap_generation"] is True
-    assert flags["planner"] is True
+    assert flags["planner"] == {
+        "enabled": True, "week_view": True, "day_view": True, "board_view": True,
+    }
     assert flags["roadmap_chat"] is False
     assert flags["experimental"] == {
         "enabled": False, "import_artifacts": False, "github_autocomplete": False,

@@ -308,6 +308,8 @@ async def update_task(
     task = await svc.owned_task(task_id, project, db)
 
     if body.status is not None:
+        if body.status == TaskStatus.DONE.value and await svc.task_blocked_by_earlier_sibling(task, project, db):
+            raise HTTPException(status_code=409, detail="task_blocked_by_earlier_task")
         task.status = body.status
     if body.title is not None:
         task.title = body.title

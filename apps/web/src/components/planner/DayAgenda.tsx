@@ -32,7 +32,7 @@ interface DayAgendaProps {
 
 /** How many upcoming tasks to surface at once; the rest reveal as these are
  *  checked off, keeping the focus on what's immediately next. */
-const VISIBLE_COUNT = 2
+const VISIBLE_COUNT = 3
 
 /** A task's derived state within the day, computed from `parallel` + order. */
 interface Row {
@@ -127,7 +127,7 @@ export function DayAgenda({
               opacity={opacity}
               colorIndex={colorOf(task)}
               member={task.assigneeId ? membersById.get(task.assigneeId) ?? null : null}
-              onToggle={() => onToggleDone(task)}
+              onToggle={waiting ? undefined : () => onToggleDone(task)}
               onFeedback={fb => onFeedback(task, fb)}
               onDelete={() => onDelete(task)}
               onOpen={() => onOpen(task)}
@@ -185,7 +185,8 @@ function TaskRow({
   opacity: number
   colorIndex: number | null
   member: RoadmapMember | null
-  onToggle: () => void
+  /** Undefined while `waiting` — a task can't be checked off out of order. */
+  onToggle: (() => void) | undefined
   onFeedback: (fb: string) => void
   onDelete: () => void
   onOpen: () => void
@@ -215,7 +216,8 @@ function TaskRow({
   const checkbox = (size: number) => (
     <button
       onClick={onToggle}
-      aria-label={done ? 'Mark as not done' : 'Mark as done'}
+      disabled={waiting}
+      aria-label={done ? 'Mark as not done' : waiting ? 'Waiting on an earlier task' : 'Mark as done'}
       aria-pressed={done}
       style={{
         flexShrink: 0,
@@ -227,9 +229,10 @@ function TaskRow({
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: '50%',
-        cursor: 'pointer',
-        border: `2px solid ${done ? 'var(--color-success)' : lane.solid}`,
+        cursor: waiting ? 'not-allowed' : 'pointer',
+        border: `2px solid ${done ? 'var(--color-success)' : waiting ? 'var(--color-border-subtle)' : lane.solid}`,
         background: done ? 'var(--color-success)' : 'transparent',
+        opacity: waiting ? 0.5 : 1,
         transition: 'background 0.15s, border-color 0.15s',
       }}
     >

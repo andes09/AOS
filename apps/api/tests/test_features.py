@@ -11,7 +11,7 @@ def test_local_yaml_loads():
     flags = settings.feature_flags
     assert flags["roadmap_generation"] is True
     assert flags["planner"] == {
-        "enabled": True, "week_view": False, "day_view": False, "board_view": False,
+        "enabled": True, "week_view": False, "daily_calendar_view": False, "board_view": False,
     }
     assert flags["roadmap_chat"] is True
     assert flags["experimental"] == {
@@ -25,7 +25,7 @@ def test_production_yaml_loads():
     flags = settings.feature_flags
     assert flags["roadmap_generation"] is True
     assert flags["planner"] == {
-        "enabled": True, "week_view": True, "day_view": True, "board_view": True,
+        "enabled": True, "week_view": True, "daily_calendar_view": True, "board_view": True,
     }
     assert flags["roadmap_chat"] is False
     assert flags["experimental"] == {

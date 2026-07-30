@@ -15,12 +15,12 @@ export type FeatureFlags = {
     tech_stack_step?: boolean
   }
   /** The planner's own kill switch, plus one sub-flag per view in the
-   *  switcher (see VIEW_OPTIONS) — 'list' has no flag, it's the fallback
+   *  switcher (see VIEW_OPTIONS) — 'day' has no flag, it's the fallback
    *  every view degrades to when its own flag is off. */
   planner: {
     enabled: boolean
     week_view?: boolean
-    day_view?: boolean
+    daily_calendar_view?: boolean
     board_view?: boolean
   }
 }

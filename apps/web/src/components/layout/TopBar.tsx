@@ -1,4 +1,4 @@
-import { CSSProperties, useMemo } from 'react'
+import { CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { UserButton } from '@clerk/clerk-react'
 import { ArrowLeft, PanelLeft, Settings } from 'lucide-react'
@@ -6,8 +6,7 @@ import { SegmentedControl } from '../ui/SegmentedControl'
 import { IconButton } from '../ui/IconButton'
 import { ThemeToggle } from '../ui/ThemeToggle'
 import { TeamSwitcher } from '../TeamSwitcher'
-import { useFeature } from '../../featureFlags'
-import { VIEW_OPTIONS, type PlannerView } from '../planner/plannerViews'
+import { usePlannerViewOptions, type PlannerView } from '../planner/plannerViews'
 
 interface PlannerTopBarControls {
   view: PlannerView
@@ -31,20 +30,7 @@ interface TopBarProps {
  * (optional, project-scoped) view switcher, and the utility cluster.
  */
 export function TopBar({ onOpenSettings, planner }: TopBarProps) {
-  // 'list' has no flag — it's the switcher's permanent fallback view.
-  const weekEnabled = useFeature('planner.week_view')
-  const dayEnabled = useFeature('planner.day_view')
-  const boardEnabled = useFeature('planner.board_view')
-  const viewOptions = useMemo(
-    () =>
-      VIEW_OPTIONS.filter(o => {
-        if (o.value === 'week') return weekEnabled
-        if (o.value === 'day') return dayEnabled
-        if (o.value === 'board') return boardEnabled
-        return true
-      }),
-    [weekEnabled, dayEnabled, boardEnabled],
-  )
+  const viewOptions = usePlannerViewOptions()
 
   return (
     <header style={barStyle}>

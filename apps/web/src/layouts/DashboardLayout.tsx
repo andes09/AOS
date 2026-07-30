@@ -9,7 +9,7 @@ import { SettingsPage } from '../pages/SettingsPage'
 import { useApi } from '../lib/api'
 import { useFeatureFlags } from '../featureFlags'
 import type { ProjectSummary } from '../features/projects/types'
-import type { PlannerOutletContext, PlannerView } from '../components/planner/plannerViews'
+import { usePlannerViewOptions, type PlannerOutletContext, type PlannerView } from '../components/planner/plannerViews'
 
 /**
  * The app shell: a single top bar over an immersive content area. There is no
@@ -38,20 +38,17 @@ export function DashboardLayout() {
     })
 
   // Views can be killed per-flag (see TopBar's switcher); if the current one
-  // goes dark — including the default 'day' — fall back to 'list', the one
-  // view with no flag of its own. Only reacts once flags have actually
-  // loaded, so the loading state's default-false reads don't cause a flash.
+  // goes dark, fall back to 'day', the one view with no flag of its own.
+  // Only reacts once flags have actually loaded (via `flags`, not just the
+  // hook below), so the loading state's default-false reads don't cause a
+  // flash away from a view that's actually enabled.
   const { data: flags } = useFeatureFlags()
+  const enabledViews = usePlannerViewOptions()
   useEffect(() => {
     if (!flags) return
-    const viewEnabled: Record<PlannerView, boolean> = {
-      week: flags.planner.week_view ?? false,
-      day: flags.planner.day_view ?? false,
-      list: true,
-      board: flags.planner.board_view ?? false,
-    }
-    setView(v => (viewEnabled[v] ? v : 'list'))
-  }, [flags])
+    const isEnabled = new Set(enabledViews.map(o => o.value))
+    setView(v => (isEnabled.has(v) ? v : 'day'))
+  }, [flags, enabledViews])
 
   // An org can have multiple projects now (see docs/plans/2026-07-20-project-hub.md).
   // Only /app/projects/:projectId routes get the planner's view switcher/lanes

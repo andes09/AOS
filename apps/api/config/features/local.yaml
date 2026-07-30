@@ -6,7 +6,7 @@ features:
   planner:
     enabled: true
     week_view: false
-    day_view: false
+    daily_calendar_view: false
     board_view: false
   experimental:
     enabled: false

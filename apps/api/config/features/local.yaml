@@ -14,3 +14,4 @@ features:
     github_autocomplete: false
     master_dashboard: false
     mcp_server: false
+    tech_stack_step: false

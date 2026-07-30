@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { PROJECTS_KEY } from '../../projects/hooks/useProjects'
 import { OnboardingApiError } from '../api'
-import type { OnboardingState, PlanSource, ProjectPurpose } from '../types'
+import type { OnboardingState, PlanSource, ProjectPurpose, TechExperience } from '../types'
 import { useOnboardingApi } from './useOnboardingApi'
 
 export const ONBOARDING_STATE_KEY = ['onboarding-v2-state']
@@ -51,6 +51,12 @@ export function useOnboardingState() {
     onSuccess: setState,
   })
 
+  const saveTechStack = useMutation({
+    mutationFn: ({ stack, experience }: { stack: string[]; experience: TechExperience }) =>
+      api.saveTechStack(stack, experience),
+    onSuccess: setState,
+  })
+
   const savePlanSource = useMutation({
     mutationFn: (source: PlanSource) => api.savePlanSource(source),
     onSuccess: setState,
@@ -75,6 +81,7 @@ export function useOnboardingState() {
     skipGithub,
     saveProfile,
     savePurpose,
+    saveTechStack,
     savePlanSource,
     complete,
   }

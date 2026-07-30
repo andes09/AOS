@@ -9,6 +9,7 @@ export type OnboardingStepId =
   | 'github_connect'
   | 'profile'
   | 'purpose'
+  | 'tech_stack'
   | 'build_plan'
   | 'idea_chat'
   | 'import_artifact'
@@ -16,6 +17,14 @@ export type OnboardingStepId =
 export type OnboardingStepStatus = 'complete' | 'current' | 'pending'
 
 export type PlanSource = 'chat' | 'import'
+
+/**
+ * What the founder already knows, collected via an explicit step (like
+ * ProjectPurpose) so the roadmap generator can prefer familiar tools or,
+ * for 'new', build in setup/learning tasks instead of assuming prior
+ * knowledge. Gated behind the experimental.tech_stack_step flag.
+ */
+export type TechExperience = 'experienced' | 'new'
 
 /**
  * What the project is for. Collected explicitly (not chat-extracted) because
@@ -63,6 +72,11 @@ export type OnboardingState = {
   }
   purpose: {
     value: ProjectPurpose | null
+    complete: boolean
+  }
+  techStack: {
+    stack: string[]
+    experience: TechExperience | null
     complete: boolean
   }
   ideaChat: {

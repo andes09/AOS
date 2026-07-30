@@ -12,6 +12,7 @@ export type FeatureFlags = {
     github_autocomplete?: boolean
     master_dashboard?: boolean
     mcp_server?: boolean
+    tech_stack_step?: boolean
   }
   /** The planner's own kill switch, plus one sub-flag per view in the
    *  switcher (see VIEW_OPTIONS) — 'list' has no flag, it's the fallback

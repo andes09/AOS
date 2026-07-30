@@ -10,6 +10,7 @@ GET    /api/onboarding/v2/state          → full flow state (single source of t
 POST   /api/onboarding/v2/github/skip    → mark the GitHub step skipped
 PUT    /api/onboarding/v2/profile        → save name + phone on the caller's Developer
 PUT    /api/onboarding/v2/purpose        → save the project's purpose (hobby/startup/learning)
+PUT    /api/onboarding/v2/tech-stack     → save known tech stack, or that the founder is new (flag-gated)
 POST   /api/onboarding/v2/chat/start     → idempotently start the idea interview
 GET    /api/onboarding/v2/chat           → full transcript + extracted brief
 POST   /api/onboarding/v2/chat/message   → send a message; SSE-streamed assistant reply
@@ -26,11 +27,12 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import get_current_user_id, get_current_org_id
+from src.config import settings
 from src.database import get_db
 from src.integrations.github.router import get_active_connection
 from src.models.developer import Developer
@@ -50,6 +52,10 @@ _PHONE_RE = re.compile(r"^\+?[0-9][0-9\s\-().]{5,30}$")
 STEP_GITHUB = "github_connect"
 STEP_PROFILE = "profile"
 STEP_PURPOSE = "purpose"
+# Gated behind experimental.tech_stack_step (see PUT /tech-stack below) — only
+# inserted into _build_state's step list when the flag is on, so sessions
+# started while it's off see the unchanged legacy step order.
+STEP_TECH_STACK = "tech_stack"
 STEP_IDEA_CHAT = "idea_chat"
 # The 4th step's id while no build_plan sub-flow has been chosen yet (see
 # PUT /plan-source below). Additive, not a rename: STEP_IDEA_CHAT's own
@@ -63,6 +69,7 @@ STEP_REPO_SELECT = "repo_select"
 
 PROJECT_PURPOSES = ("hobby", "startup", "learning")
 PLAN_SOURCES = ("chat", "import")
+TECH_EXPERIENCES = ("experienced", "new")
 
 
 async def _get_org(clerk_org_id: str, db: AsyncSession) -> Organization:
@@ -166,6 +173,8 @@ async def _build_state(
     github_done = (bool(connection) and connection.installation_id is not None) or github_skipped
     profile_done = _profile_complete(developer)
     purpose_done = bool(session and session.project_purpose)
+    tech_stack_step_enabled = settings.is_feature_enabled("experimental.tech_stack_step")
+    tech_stack_done = bool(session and session.tech_experience)
     # Unifies both the chat and import paths on one signal: session.status ==
     # "completed" is already set by /chat/complete (chat) and now also by
     # artifact_import's /import/apply (import).
@@ -207,6 +216,7 @@ async def _build_state(
         (STEP_GITHUB, github_done, True),
         (STEP_PROFILE, profile_done, False),
         (STEP_PURPOSE, purpose_done, False),
+        *([(STEP_TECH_STACK, tech_stack_done, False)] if tech_stack_step_enabled else []),
         (fourth_step_id, chat_done, False),
         (STEP_REPO_SELECT, repo_done, True),
     ]
@@ -242,6 +252,11 @@ async def _build_state(
         "purpose": {
             "value": session.project_purpose if session else None,
             "complete": purpose_done,
+        },
+        "techStack": {
+            "stack": (session.known_tech_stack if session else None) or [],
+            "experience": session.tech_experience if session else None,
+            "complete": tech_stack_done,
         },
         "ideaChat": {
             "sessionId": str(session.id) if session else None,
@@ -357,6 +372,58 @@ async def put_purpose(
     org = await _get_org(clerk_org_id, db)
     session = await _get_or_create_session(org, user_id, db)
     session.project_purpose = body.purpose
+    await db.commit()
+    return await _build_state(org, user_id, db)
+
+
+class TechStackRequest(BaseModel):
+    stack: list[str]
+    experience: str
+
+    @field_validator("experience")
+    @classmethod
+    def _experience_valid(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in TECH_EXPERIENCES:
+            raise ValueError(f"experience must be one of {TECH_EXPERIENCES}")
+        return v
+
+    @field_validator("stack")
+    @classmethod
+    def _stack_valid(cls, v: list[str]) -> list[str]:
+        return [s.strip() for s in v if s.strip()]
+
+    @model_validator(mode="after")
+    def _mutually_exclusive(self) -> "TechStackRequest":
+        # "new" (I'm new to this) and a picked stack are mutually exclusive —
+        # enforced here, not just in the UI, since this deterministically
+        # steers the roadmap generator's prompt (see _tech_stack_prompt).
+        if self.experience == "new" and self.stack:
+            raise ValueError("stack must be empty when experience is 'new'")
+        if self.experience == "experienced" and not self.stack:
+            raise ValueError("stack must be non-empty when experience is 'experienced'")
+        return self
+
+
+def _require_tech_stack_step_enabled() -> None:
+    if not settings.is_feature_enabled("experimental.tech_stack_step"):
+        raise HTTPException(status_code=404, detail="not_found")
+
+
+@router.put("/tech-stack", dependencies=[Depends(_require_tech_stack_step_enabled)])
+async def put_tech_stack(
+    body: TechStackRequest,
+    user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save the founder's known tech stack, or that they're new to this.
+    Collected explicitly (not chat-extracted), same reasoning as PUT /purpose —
+    too load-bearing for the roadmap generator to leave to LLM inference."""
+    org = await _get_org(clerk_org_id, db)
+    session = await _get_or_create_session(org, user_id, db)
+    session.known_tech_stack = body.stack
+    session.tech_experience = body.experience
     await db.commit()
     return await _build_state(org, user_id, db)
 

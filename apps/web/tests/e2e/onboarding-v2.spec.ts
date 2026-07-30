@@ -131,6 +131,91 @@ test.describe('Onboarding v2 flow', () => {
     await expect(page.getByRole('heading', { name: "You're all set" })).toBeVisible()
   })
 
+  test('tech_stack step: picking known tools advances to build_plan', async ({ page }) => {
+    let state: Record<string, unknown> = {
+      currentStep: 'tech_stack',
+      steps: [
+        { id: 'github_connect', status: 'complete', skippable: true },
+        { id: 'profile', status: 'complete', skippable: false },
+        { id: 'purpose', status: 'complete', skippable: false },
+        { id: 'tech_stack', status: 'current', skippable: false },
+        { id: 'build_plan', status: 'pending', skippable: false },
+        { id: 'repo_select', status: 'complete', skippable: true },
+      ],
+      github: { connected: false, login: null, skipped: true },
+      profile: { name: 'Ada Lovelace', phone: '+1 555 123 4567', complete: true },
+      purpose: { value: 'startup', complete: true },
+      techStack: { stack: [], experience: null, complete: false },
+      ideaChat: { sessionId: null, status: 'not_started', messageCount: 0, brief: null, briefComplete: false },
+      onboardingPath: null,
+      importArtifact: null,
+      repo: { selected: null, skipped: false, available: false },
+      onboardingCompleted: false,
+    }
+
+    await page.route('**/api/onboarding/v2/state', route =>
+      route.fulfill({ status: 200, body: JSON.stringify(state) }),
+    )
+
+    let putBody: unknown = null
+    await page.route('**/api/onboarding/v2/tech-stack', route => {
+      putBody = route.request().postDataJSON()
+      state = {
+        ...state,
+        currentStep: 'build_plan',
+        techStack: { stack: putBody.stack, experience: putBody.experience, complete: true },
+      }
+      return route.fulfill({ status: 200, body: JSON.stringify(state) })
+    })
+
+    await page.goto('/onboarding/v2')
+
+    await expect(page.getByRole('heading', { name: 'What do you already know?' })).toBeVisible()
+    await page.getByRole('button', { name: 'React', exact: true }).click()
+    await page.getByRole('button', { name: 'Node.js', exact: true }).click()
+    await page.getByRole('button', { name: /Continue/ }).click()
+
+    await expect.poll(() => putBody).toEqual({ stack: ['React', 'Node.js'], experience: 'experienced' })
+  })
+
+  test('tech_stack step: "I\'m new" is mutually exclusive with picked tools', async ({ page }) => {
+    const state = {
+      currentStep: 'tech_stack',
+      steps: [{ id: 'tech_stack', status: 'current', skippable: false }],
+      github: { connected: false, login: null, skipped: true },
+      profile: { name: 'Ada Lovelace', phone: '+1 555 123 4567', complete: true },
+      purpose: { value: 'learning', complete: true },
+      techStack: { stack: [], experience: null, complete: false },
+      ideaChat: { sessionId: null, status: 'not_started', messageCount: 0, brief: null, briefComplete: false },
+      onboardingPath: null,
+      importArtifact: null,
+      repo: { selected: null, skipped: false, available: false },
+      onboardingCompleted: false,
+    }
+    await page.route('**/api/onboarding/v2/state', route =>
+      route.fulfill({ status: 200, body: JSON.stringify(state) }),
+    )
+    let putBody: unknown = null
+    await page.route('**/api/onboarding/v2/tech-stack', route => {
+      putBody = route.request().postDataJSON()
+      return route.fulfill({ status: 200, body: JSON.stringify(state) })
+    })
+
+    await page.goto('/onboarding/v2')
+    await expect(page.getByRole('heading', { name: 'What do you already know?' })).toBeVisible()
+
+    // Pick a chip, then flip to "I'm new" — the chip selection must clear.
+    await page.getByRole('button', { name: 'React', exact: true }).click()
+    await page.getByRole('radio', { name: /None of these/ }).click()
+    await page.getByRole('button', { name: /Continue/ }).click()
+    await expect.poll(() => putBody).toEqual({ stack: [], experience: 'new' })
+
+    // Picking a chip afterwards should clear "I'm new" back off.
+    await expect(page.getByRole('radio', { name: /None of these/ })).toHaveAttribute('aria-checked', 'true')
+    await page.getByRole('button', { name: 'Vue', exact: true }).click()
+    await expect(page.getByRole('radio', { name: /None of these/ })).toHaveAttribute('aria-checked', 'false')
+  })
+
   test('surfaces a GitHub OAuth error redirect', async ({ page }) => {
     await page.route('**/api/onboarding/v2/state', route =>
       route.fulfill({ status: 200, body: JSON.stringify(makeState('github_connect')) }),

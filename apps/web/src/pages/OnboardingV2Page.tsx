@@ -2,7 +2,7 @@
  * Onboarding v2 — the real, styled flow.
  *
  * Composes the presentational pieces in `./onboarding-v2` (theme atoms,
- * SidebarStepper, and the five step components) over the headless hooks in
+ * SidebarStepper, and the step components) over the headless hooks in
  * `src/features/onboarding-v2`. Nothing here calls `fetch` or hardcodes step
  * order — it renders whatever `state.currentStep` says, so reordering or adding
  * a step on the backend needs no change here (see
@@ -14,6 +14,7 @@ import { SidebarStepper } from './onboarding-v2/SidebarStepper'
 import { GithubStep } from './onboarding-v2/steps/GithubStep'
 import { ProfileStep } from './onboarding-v2/steps/ProfileStep'
 import { PurposeStep } from './onboarding-v2/steps/PurposeStep'
+import { TechStackStep } from './onboarding-v2/steps/TechStackStep'
 import { PlanSourceStep } from './onboarding-v2/steps/PlanSourceStep'
 import { IdeaChatStep } from './onboarding-v2/steps/IdeaChatStep'
 import { ImportArtifactStep } from './onboarding-v2/steps/ImportArtifactStep'
@@ -23,8 +24,9 @@ import { DoneStep } from './onboarding-v2/steps/DoneStep'
 const shellFont = "'Inter', system-ui, sans-serif"
 
 export function OnboardingV2Page() {
-  const { state, isLoading, error, skipGithub, saveProfile, savePurpose, savePlanSource, complete } =
-    useOnboardingState()
+  const {
+    state, isLoading, error, skipGithub, saveProfile, savePurpose, saveTechStack, savePlanSource, complete,
+  } = useOnboardingState()
 
   if (isLoading) {
     return (
@@ -101,6 +103,13 @@ export function OnboardingV2Page() {
             <PurposeStep
               onSave={purpose => savePurpose.mutate(purpose)}
               saving={savePurpose.isPending}
+            />
+          )}
+          {state.currentStep === 'tech_stack' && (
+            <TechStackStep
+              onSave={(stack, experience) => saveTechStack.mutate({ stack, experience })}
+              saving={saveTechStack.isPending}
+              saveError={saveTechStack.error?.message ?? null}
             />
           )}
           {state.currentStep === 'build_plan' && (

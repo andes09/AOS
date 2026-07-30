@@ -119,8 +119,39 @@ _MILESTONE_TOOL = {
 }
 
 
+def _tech_stack_prompt(session: OnboardingSession) -> str | None:
+    """Renders the founder's explicit tech-stack answer (see PUT /tech-stack
+    in onboarding_v2.py) as prompt guidance. Returns None when unset — either
+    the tech_stack_step flag was off for this session, or it predates the
+    feature — so older sessions keep generating exactly as before.
+
+    Distinct from ProjectBrief.tech_constraints (chat-extracted, free text
+    about hard requirements/integrations): this is about tool familiarity.
+    """
+    experience = session.tech_experience
+    if experience == "experienced":
+        stack = ", ".join(session.known_tech_stack or [])
+        return (
+            f"The founder already knows: {stack}. Prefer these tools; only introduce "
+            "something new if there's a clear, well-justified gap in what they listed, "
+            "and say why in the task description."
+        )
+    if experience == "new":
+        return (
+            "The founder is new to building software — this may be their first project. "
+            "Recommend a simple, well-documented, beginner-friendly stack, and make the "
+            "early setup/installation/account-creation steps explicit tasks in the first "
+            "milestone, not assumed prior knowledge."
+        )
+    return None
+
+
 def _brief_prompt(session: OnboardingSession) -> str:
-    return f"Project brief (JSON):\n{json.dumps(session.project_brief or {})}"
+    parts = [f"Project brief (JSON):\n{json.dumps(session.project_brief or {})}"]
+    tech_stack_guidance = _tech_stack_prompt(session)
+    if tech_stack_guidance:
+        parts.append(tech_stack_guidance)
+    return "\n\n".join(parts)
 
 
 def _milestone_prompt(

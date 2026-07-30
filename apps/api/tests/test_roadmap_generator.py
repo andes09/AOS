@@ -170,6 +170,32 @@ async def test_call_planner_gives_up_after_max_tool_use_failures():
     assert create_mock.await_count == roadmap_generator._MAX_TOOL_RETRIES + 1
 
 
+# ─── _tech_stack_prompt / _brief_prompt ────────────────────────────────────────
+
+def test_tech_stack_prompt_none_when_unset():
+    session = OnboardingSession(project_brief={"projectName": "Trail Buddy"})
+    assert roadmap_generator._tech_stack_prompt(session) is None
+    assert "Project brief" in roadmap_generator._brief_prompt(session)
+
+
+def test_tech_stack_prompt_experienced_names_the_stack():
+    session = OnboardingSession(
+        tech_experience="experienced", known_tech_stack=["React", "Postgres"],
+    )
+    prompt = roadmap_generator._tech_stack_prompt(session)
+    assert "React, Postgres" in prompt
+    assert "already knows" in prompt
+    assert prompt in roadmap_generator._brief_prompt(session)
+
+
+def test_tech_stack_prompt_new_asks_for_beginner_setup():
+    session = OnboardingSession(tech_experience="new", known_tech_stack=[])
+    prompt = roadmap_generator._tech_stack_prompt(session)
+    assert "new to building software" in prompt
+    assert "setup" in prompt
+    assert prompt in roadmap_generator._brief_prompt(session)
+
+
 # ─── generate_roadmap ──────────────────────────────────────────────────────────
 
 async def test_generate_roadmap_happy_path(roadmap_db):

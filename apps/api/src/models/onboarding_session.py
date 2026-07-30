@@ -35,6 +35,15 @@ class OnboardingSession(Base):
     # Collected via an explicit step (not chat-extracted) since it deterministically
     # steers the interview's system prompt — too load-bearing to leave to LLM inference.
     project_purpose: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Explicit tech-stack step (not chat-extracted, same reasoning as project_purpose
+    # above): what the founder already knows, or "new" for "I'm new to this". Feeds the
+    # roadmap generator's prompt directly (see roadmap_generator._tech_stack_prompt).
+    # Distinct from ProjectBrief.tech_constraints, which is chat-extracted free text
+    # about hard requirements/integrations, not tool familiarity.
+    known_tech_stack: Mapped[list[str] | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True
+    )
+    tech_experience: Mapped[str | None] = mapped_column(String(20), nullable=True)
     project_brief: Mapped[dict | None] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"), nullable=True
     )

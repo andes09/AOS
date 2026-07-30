@@ -14,6 +14,7 @@ import type {
   PlanSource,
   ProjectBrief,
   ProjectPurpose,
+  TechExperience,
 } from './types'
 
 export type GetToken = () => Promise<string | null>
@@ -67,6 +68,11 @@ export function createOnboardingApi(getToken: GetToken, apiUrl: string = DEFAULT
       request<OnboardingState>('/api/onboarding/v2/purpose', {
         method: 'PUT',
         body: JSON.stringify({ purpose }),
+      }),
+    saveTechStack: (stack: string[], experience: TechExperience) =>
+      request<OnboardingState>('/api/onboarding/v2/tech-stack', {
+        method: 'PUT',
+        body: JSON.stringify({ stack, experience }),
       }),
     savePlanSource: (source: PlanSource) =>
       request<OnboardingState>('/api/onboarding/v2/plan-source', {

@@ -124,18 +124,21 @@ async def test_state_initial(tmp_db):
     assert resp.status_code == 200
     body = resp.json()
     assert body["currentStep"] == "github_connect"
+    # tech_stack only appears when experimental.tech_stack_step is on (true in
+    # the test environment — see conftest.py).
     assert [s["id"] for s in body["steps"]] == [
-        "github_connect", "profile", "purpose", "build_plan", "repo_select",
+        "github_connect", "profile", "purpose", "tech_stack", "build_plan", "repo_select",
     ]
     # repo_select auto-completes when there's no GitHub connection to pick a
     # repo from at all yet (see docs/plans/2026-07-20-import-artifacts.md) —
     # it's "complete" out of order here, ahead of steps still pending.
     assert [s["status"] for s in body["steps"]] == [
-        "current", "pending", "pending", "pending", "complete",
+        "current", "pending", "pending", "pending", "pending", "complete",
     ]
     assert body["github"] == {"connected": False, "login": None, "skipped": False, "needsReconnect": False}
     assert body["profile"] == {"name": None, "phone": None, "complete": False}
     assert body["purpose"] == {"value": None, "complete": False}
+    assert body["techStack"] == {"stack": [], "experience": None, "complete": False}
     assert body["ideaChat"]["status"] == "not_started"
     assert body["onboardingPath"] is None
     assert body["importArtifact"] is None
@@ -153,7 +156,7 @@ async def test_github_skip_advances_flow(tmp_db):
     assert body["github"]["skipped"] is True
     assert body["currentStep"] == "profile"
     assert [s["status"] for s in body["steps"]] == [
-        "complete", "current", "pending", "pending", "complete",
+        "complete", "current", "pending", "pending", "pending", "complete",
     ]
 
 
@@ -304,15 +307,83 @@ async def test_purpose_completes_step_and_advances_flow(tmp_db):
             )
     body = resp.json()
     assert body["purpose"] == {"value": "hobby", "complete": True}
-    # No plan-source chosen yet, so the 4th step is still "build_plan" (the
-    # chooser), not "idea_chat" — see PUT /plan-source.
-    assert body["currentStep"] == "build_plan"
+    # tech_stack (flag-gated, on in test env) is required and comes right
+    # after purpose, before the plan-source chooser.
+    assert body["currentStep"] == "tech_stack"
     assert [s["id"] for s in body["steps"]] == [
-        "github_connect", "profile", "purpose", "build_plan", "repo_select",
+        "github_connect", "profile", "purpose", "tech_stack", "build_plan", "repo_select",
     ]
     assert [s["status"] for s in body["steps"]] == [
-        "complete", "complete", "complete", "current", "complete",
+        "complete", "complete", "complete", "current", "pending", "complete",
     ]
+
+
+# ─── tech stack ─────────────────────────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_tech_stack_experienced_completes_step(tmp_db):
+    await _seed_org_and_team()
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.put(
+                "/api/onboarding/v2/tech-stack",
+                json={"stack": ["React", "Node.js"], "experience": "experienced"},
+                headers=AUTH,
+            )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["techStack"] == {
+        "stack": ["React", "Node.js"], "experience": "experienced", "complete": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_tech_stack_new_completes_step_with_empty_stack(tmp_db):
+    await _seed_org_and_team()
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.put(
+                "/api/onboarding/v2/tech-stack",
+                json={"stack": [], "experience": "new"},
+                headers=AUTH,
+            )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["techStack"] == {"stack": [], "experience": "new", "complete": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"stack": ["React"], "experience": "new"},  # can't pick tools AND be new
+        {"stack": [], "experience": "experienced"},  # experienced needs >=1 tool
+        {"stack": ["React"], "experience": "expert"},  # not a valid experience value
+    ],
+)
+async def test_tech_stack_rejects_inconsistent_payloads(tmp_db, payload):
+    await _seed_org_and_team()
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.put(
+                "/api/onboarding/v2/tech-stack", json=payload, headers=AUTH
+            )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_tech_stack_404s_when_flag_off(tmp_db):
+    await _seed_org_and_team()
+    # settings is a pydantic model instance — patch the class method, not the
+    # instance attribute (pydantic rejects arbitrary instance setattr).
+    with patch("src.config.Settings.is_feature_enabled", return_value=False):
+        with _patch_clerk():
+            async with _client() as client:
+                resp = await client.put(
+                    "/api/onboarding/v2/tech-stack",
+                    json={"stack": ["React"], "experience": "experienced"},
+                    headers=AUTH,
+                )
+    assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -440,6 +511,11 @@ async def test_plan_source_chat_advances_to_idea_chat_step(tmp_db):
                 headers=AUTH,
             )
             await client.put("/api/onboarding/v2/purpose", json={"purpose": "hobby"}, headers=AUTH)
+            await client.put(
+                "/api/onboarding/v2/tech-stack",
+                json={"stack": ["React"], "experience": "experienced"},
+                headers=AUTH,
+            )
             resp = await client.put(
                 "/api/onboarding/v2/plan-source", json={"source": "chat"}, headers=AUTH
             )
@@ -447,7 +523,7 @@ async def test_plan_source_chat_advances_to_idea_chat_step(tmp_db):
     assert body["onboardingPath"] == "chat"
     assert body["currentStep"] == "idea_chat"
     assert [s["id"] for s in body["steps"]] == [
-        "github_connect", "profile", "purpose", "idea_chat", "repo_select",
+        "github_connect", "profile", "purpose", "tech_stack", "idea_chat", "repo_select",
     ]
 
 
@@ -462,6 +538,11 @@ async def test_plan_source_import_advances_to_import_artifact_step(tmp_db):
                 headers=AUTH,
             )
             await client.put("/api/onboarding/v2/purpose", json={"purpose": "startup"}, headers=AUTH)
+            await client.put(
+                "/api/onboarding/v2/tech-stack",
+                json={"stack": [], "experience": "new"},
+                headers=AUTH,
+            )
             resp = await client.put(
                 "/api/onboarding/v2/plan-source", json={"source": "import"}, headers=AUTH
             )
@@ -469,7 +550,7 @@ async def test_plan_source_import_advances_to_import_artifact_step(tmp_db):
     assert body["onboardingPath"] == "import"
     assert body["currentStep"] == "import_artifact"
     assert [s["id"] for s in body["steps"]] == [
-        "github_connect", "profile", "purpose", "import_artifact", "repo_select",
+        "github_connect", "profile", "purpose", "tech_stack", "import_artifact", "repo_select",
     ]
 
 

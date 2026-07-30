@@ -19,7 +19,6 @@ interface DayColumnProps {
   endHour: number
   colorOf: (task: FlatTask) => number | null
   onToggle: (task: FlatTask) => void
-  onDelete: (task: FlatTask) => void
   onOpen: (task: FlatTask) => void
 }
 
@@ -40,7 +39,6 @@ export function DayColumn({
   endHour,
   colorOf,
   onToggle,
-  onDelete,
   onOpen,
 }: DayColumnProps) {
   const untimed = tasks.filter(t => !t.scheduledTime)
@@ -89,7 +87,6 @@ export function DayColumn({
         tasks={untimed}
         colorOf={colorOf}
         onToggle={onToggle}
-        onDelete={onDelete}
         onOpen={onOpen}
       />
 
@@ -126,7 +123,6 @@ export function DayColumn({
               colorIndex={colorOf(task)}
               showMilestone={box.height > 56}
               onToggle={() => onToggle(task)}
-              onDelete={() => onDelete(task)}
               onOpen={() => onOpen(task)}
               style={{
                 position: 'absolute',
@@ -173,14 +169,12 @@ function AllDayStrip({
   tasks,
   colorOf,
   onToggle,
-  onDelete,
   onOpen,
 }: {
   iso: string
   tasks: FlatTask[]
   colorOf: (t: FlatTask) => number | null
   onToggle: (t: FlatTask) => void
-  onDelete: (t: FlatTask) => void
   onOpen: (t: FlatTask) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `day:${iso}`, data: { type: 'day', iso } })
@@ -205,7 +199,6 @@ function AllDayStrip({
           colorIndex={colorOf(t)}
           showMilestone={false}
           onToggle={() => onToggle(t)}
-          onDelete={() => onDelete(t)}
           onOpen={() => onOpen(t)}
         />
       ))}

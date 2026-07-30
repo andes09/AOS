@@ -17,7 +17,6 @@ GET    /api/projects/{project_id}/roadmap/members                      → team 
 POST   /api/projects/{project_id}/roadmap/generate                     → idempotent repair: regenerate from brief only if no milestones exist yet
 POST   /api/projects/{project_id}/roadmap/regenerate                   → replan the whole roadmap
 POST   /api/projects/{project_id}/roadmap/adjust                       → non-destructive re-plan from per-task feedback
-POST   /api/projects/{project_id}/roadmap/extend-day                   → generate a few more todo tasks for one day
 POST   /api/projects/{project_id}/roadmap/milestones/{id}/regenerate   → replan one milestone
 POST   /api/projects/{project_id}/roadmap/tasks                        → create a task
 POST   /api/projects/{project_id}/roadmap/tasks/reschedule             → bulk move/reassign (drag-drop)
@@ -179,40 +178,6 @@ async def adjust(
 
     try:
         await roadmap_adjuster.adjust_roadmap(project, api_key, db)
-    except ValueError as exc:  # bad key
-        raise HTTPException(status_code=402, detail=str(exc))
-    except RuntimeError as exc:  # upstream / model failure
-        raise HTTPException(status_code=502, detail=str(exc))
-
-    project = await _owned_project(project_id, org, db)
-    return svc.project_json(project)
-
-
-class ExtendDayRequest(BaseModel):
-    date: date
-
-
-@router.post("/extend-day")
-async def extend_day(
-    project_id: uuid.UUID,
-    body: ExtendDayRequest,
-    clerk_org_id: str = Depends(get_current_org_id),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Generate a few more `todo` tasks for a single day, once the user has cleared
-    everything scheduled on it and wants to keep going. Non-destructive: existing
-    tasks are untouched. See services/roadmap_adjuster.extend_day.
-    """
-    org = await _get_org(clerk_org_id, db)
-    project = await _owned_project(project_id, org, db)
-    if not project.milestones:
-        raise HTTPException(status_code=409, detail="no_roadmap")
-
-    api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
-
-    try:
-        await roadmap_adjuster.extend_day(project, body.date, api_key, db)
     except ValueError as exc:  # bad key
         raise HTTPException(status_code=402, detail=str(exc))
     except RuntimeError as exc:  # upstream / model failure

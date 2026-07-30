@@ -11,7 +11,7 @@ import { useParams } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useApi } from '../../lib/api'
 import type { Roadmap, RoadmapTask, TaskRescheduleItem } from '../../types/roadmap'
-import { addTask, mapTask, mapTasks, removeTask } from './plannerCache'
+import { addTask, mapTask, mapTasks } from './plannerCache'
 import { MEMBERS_KEY, ROADMAP_KEY } from './usePlannerData'
 
 /** Fields a single-task PATCH may carry. Omitted keys mean "leave alone". */
@@ -32,7 +32,7 @@ export interface TaskCreateInput extends TaskPatch {
 }
 
 export function usePlannerMutations() {
-  const { post, patch, del } = useApi()
+  const { post, patch } = useApi()
   const qc = useQueryClient()
   const { projectId } = useParams<{ projectId: string }>()
   if (!projectId) throw new Error('usePlannerMutations must be used within a /projects/:projectId route')
@@ -86,26 +86,11 @@ export function usePlannerMutations() {
     onSettled: settleBoth,
   })
 
-  // Ask the AI for a few more todo tasks on a day the user has cleared. Like
-  // adjust, it's non-destructive — the server appends tasks to that day.
-  const extendDay = useMutation({
-    mutationFn: (isoDate: string) => post<Roadmap>(`${base}/extend-day`, { date: isoDate }),
-    onSuccess: data => qc.setQueryData(roadmapKey, data),
-    onSettled: settleBoth,
-  })
-
   const updateTask = useMutation({
     mutationFn: ({ id, patch: body }: { id: string; patch: TaskPatch }) =>
       patch<RoadmapTask>(`${base}/tasks/${id}`, body),
     onMutate: ({ id, patch: body }) =>
       optimistic(rm => mapTask(rm, id, t => ({ ...t, ...body }))),
-    onError: (_e, _v, ctx) => rollback(ctx),
-    onSettled: settleBoth,
-  })
-
-  const deleteTask = useMutation({
-    mutationFn: (id: string) => del<void>(`${base}/tasks/${id}`),
-    onMutate: (id: string) => optimistic(rm => removeTask(rm, id)),
     onError: (_e, _v, ctx) => rollback(ctx),
     onSettled: settleBoth,
   })
@@ -153,5 +138,5 @@ export function usePlannerMutations() {
     })
   }
 
-  return { generate, regenerate, adjust, extendDay, updateTask, deleteTask, createTask, rescheduleTasks, toggleDone }
+  return { generate, regenerate, adjust, updateTask, createTask, rescheduleTasks, toggleDone }
 }

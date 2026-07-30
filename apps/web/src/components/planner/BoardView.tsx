@@ -12,12 +12,11 @@ interface BoardViewProps {
   tasks: FlatTask[]
   colorOf: (task: FlatTask) => number | null
   onToggle: (task: FlatTask) => void
-  onDelete: (task: FlatTask) => void
   onOpen: (task: FlatTask) => void
 }
 
 /** Kanban by status. Cards keep their assignee color, so lanes read across columns. */
-export function BoardView({ tasks, colorOf, onToggle, onDelete, onOpen }: BoardViewProps) {
+export function BoardView({ tasks, colorOf, onToggle, onOpen }: BoardViewProps) {
   return (
     <div
       style={{
@@ -64,7 +63,6 @@ export function BoardView({ tasks, colorOf, onToggle, onDelete, onOpen }: BoardV
                   task={t}
                   colorIndex={colorOf(t)}
                   onToggle={() => onToggle(t)}
-                  onDelete={() => onDelete(t)}
                   onOpen={() => onOpen(t)}
                 />
               ))}

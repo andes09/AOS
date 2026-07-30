@@ -13,7 +13,6 @@ interface CalendarGridProps {
   endHour: number
   colorOf: (task: FlatTask) => number | null
   onToggle: (task: FlatTask) => void
-  onDelete: (task: FlatTask) => void
   onOpen: (task: FlatTask) => void
 }
 
@@ -30,7 +29,6 @@ export function CalendarGrid({
   endHour,
   colorOf,
   onToggle,
-  onDelete,
   onOpen,
 }: CalendarGridProps) {
   const days = Array.from({ length: dayCount }, (_, i) => addDays(anchor, i))
@@ -66,7 +64,6 @@ export function CalendarGrid({
               endHour={endHour}
               colorOf={colorOf}
               onToggle={onToggle}
-              onDelete={onDelete}
               onOpen={onOpen}
             />
           )

@@ -13,17 +13,18 @@ export type PlannerView = 'week' | 'day' | 'list' | 'board'
  */
 export const VIEW_OPTIONS: readonly SegmentedOption<PlannerView>[] = [
   { value: 'week', label: 'Week view', icon: <CalendarDays size={14} /> },
-  { value: 'day', label: 'Day view', icon: <Rows3 size={14} /> },
+  { value: 'day', label: 'Up next', icon: <Rows3 size={14} /> },
   { value: 'list', label: 'List view', icon: <List size={14} /> },
   { value: 'board', label: 'Board view', icon: <Columns3 size={14} /> },
 ]
 
 /**
  * The subset of VIEW_OPTIONS actually available given current feature flags.
- * 'day' (DayAgenda, the "Up next" queue) is never gated — it's the permanent
- * fallback every other view degrades to when its own flag is off. Shared by
- * TopBar (filters the switcher) and DashboardLayout (validates/corrects the
- * active view) so neither duplicates the useFeature calls or the filter.
+ * 'day' (DayAgenda, the unlimited "Up next" stream over the whole plan) is
+ * never gated — it's the permanent fallback every other view degrades to
+ * when its own flag is off. Shared by TopBar (filters the switcher) and
+ * DashboardLayout (validates/corrects the active view) so neither duplicates
+ * the useFeature calls or the filter.
  */
 export function usePlannerViewOptions(): readonly SegmentedOption<PlannerView>[] {
   const weekEnabled = useFeature('planner.week_view')

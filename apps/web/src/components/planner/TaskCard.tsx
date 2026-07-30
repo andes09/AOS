@@ -1,7 +1,6 @@
 import { CSSProperties, memo } from 'react'
 import { useDraggable } from '@dnd-kit/core'
-import { Check, GripVertical, Trash2 } from 'lucide-react'
-import { IconButton } from '../ui/IconButton'
+import { Check, GripVertical } from 'lucide-react'
 import { laneVars } from '../../lib/laneColors'
 import { formatDuration, formatTime12h } from '../../lib/date'
 import type { FlatTask } from '../../pages/planner/usePlannerData'
@@ -11,7 +10,6 @@ export interface TaskCardProps {
   /** Assignee's palette slot; null renders the neutral unassigned treatment. */
   colorIndex: number | null
   onToggle: () => void
-  onDelete: () => void
   onOpen?: () => void
   /** Show the milestone name under the title. Off in dense timed blocks. */
   showMilestone?: boolean
@@ -30,7 +28,6 @@ export const TaskCard = memo(function TaskCard({
   task,
   colorIndex,
   onToggle,
-  onDelete,
   onOpen,
   showMilestone = true,
   draggable = true,
@@ -136,8 +133,8 @@ export const TaskCard = memo(function TaskCard({
         )}
       </div>
 
-      <div className="pl-task-actions" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {draggable && (
+      {draggable && (
+        <div className="pl-task-actions" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span
             {...attributes}
             {...listeners}
@@ -147,18 +144,8 @@ export const TaskCard = memo(function TaskCard({
           >
             <GripVertical size={12} />
           </span>
-        )}
-        <IconButton
-          label="Delete task"
-          size={16}
-          onClick={e => {
-            e.stopPropagation()
-            onDelete()
-          }}
-        >
-          <Trash2 size={11} />
-        </IconButton>
-      </div>
+        </div>
+      )}
     </div>
   )
 })

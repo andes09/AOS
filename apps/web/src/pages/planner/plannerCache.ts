@@ -3,9 +3,9 @@
 // Immutable transforms over the cached Roadmap, used by every optimistic
 // mutation. Pure and dependency-free so they can be unit-tested directly.
 //
-// `mapTask` and `removeTask` were moved here unchanged from
-// PlannerCalendarPage — they are the load-bearing primitive behind every
-// optimistic update in the planner, and they already work.
+// `mapTask` was moved here unchanged from PlannerCalendarPage — it's the
+// load-bearing primitive behind every optimistic update in the planner, and
+// it already works.
 
 import type { Roadmap, RoadmapTask, TaskRescheduleItem } from '../../types/roadmap'
 
@@ -24,15 +24,6 @@ export function mapTask(
   }
 }
 
-export function removeTask(rm: Roadmap, taskId: string): Roadmap {
-  return {
-    ...rm,
-    milestones: rm.milestones.map(m => ({
-      ...m,
-      tasks: m.tasks.filter(t => t.id !== taskId),
-    })),
-  }
-}
 
 /**
  * Apply a batch of partial updates in one pass.

@@ -1,5 +1,5 @@
 import { CSSProperties, useEffect, useState } from 'react'
-import { Check, Copy, Trash2 } from 'lucide-react'
+import { Check, Copy } from 'lucide-react'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -36,7 +36,6 @@ interface TaskDetailModalProps {
   members: RoadmapMember[]
   onClose: () => void
   onSave: (patch: TaskPatch) => void
-  onDelete: () => void
 }
 
 /**
@@ -46,7 +45,7 @@ interface TaskDetailModalProps {
  * optimistic updates rewrite the whole roadmap object, so a per-keystroke save
  * would fight the user's cursor.
  */
-export function TaskDetailModal({ task, members, onClose, onSave, onDelete }: TaskDetailModalProps) {
+export function TaskDetailModal({ task, members, onClose, onSave }: TaskDetailModalProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [status, setStatus] = useState<RoadmapTaskStatus>('todo')
@@ -209,29 +208,18 @@ export function TaskDetailModal({ task, members, onClose, onSave, onDelete }: Ta
         <div
           style={{
             display: 'flex',
-            justifyContent: 'space-between',
+            justifyContent: 'flex-end',
             gap: 'var(--space-2)',
             paddingTop: 'var(--space-2)',
             borderTop: '1px solid var(--color-border-subtle)',
           }}
         >
-          <Button
-            variant="danger"
-            onClick={() => {
-              onDelete()
-              onClose()
-            }}
-          >
-            <Trash2 size={14} /> Delete
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
           </Button>
-          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-            <Button variant="ghost" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button variant="primary" onClick={save} disabled={!title.trim()}>
-              Save
-            </Button>
-          </div>
+          <Button variant="primary" onClick={save} disabled={!title.trim()}>
+            Save
+          </Button>
         </div>
       </div>
     </Modal>

@@ -598,9 +598,10 @@ async def test_patch_task_parallel_exempt_from_blocking(tmp_db):
 
 
 @pytest.mark.asyncio
-async def test_patch_task_unscheduled_never_blocked(tmp_db):
-    """No scheduled_date means no day-ordering to gate on, regardless of the
-    other sequential sibling's status."""
+async def test_patch_task_blocked_by_earlier_unscheduled_sibling(tmp_db):
+    """Blocking now spans the whole plan, not a single calendar day — an
+    unscheduled task is still gated by an earlier unfinished non-parallel
+    task in plan order, same as a scheduled one."""
     org_id, team_id = await _seed_org()
     session_id = await _seed_session(org_id)
     project_id, _ = await _seed_roadmap(team_id, session_id)
@@ -609,6 +610,29 @@ async def test_patch_task_unscheduled_never_blocked(tmp_db):
         async with _client() as client:
             roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
             t1_id = roadmap["milestones"][0]["tasks"][1]["id"]
+
+            resp = await client.patch(
+                _url(project_id, f"/tasks/{t1_id}"), json={"status": "done"}, headers=AUTH
+            )
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "task_blocked_by_earlier_task"
+
+
+@pytest.mark.asyncio
+async def test_patch_task_unscheduled_allowed_after_earlier_sibling_done(tmp_db):
+    org_id, team_id = await _seed_org()
+    session_id = await _seed_session(org_id)
+    project_id, _ = await _seed_roadmap(team_id, session_id)
+
+    with _patch_clerk():
+        async with _client() as client:
+            roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
+            t0_id, t1_id = (t["id"] for t in roadmap["milestones"][0]["tasks"])
+
+            resp = await client.patch(
+                _url(project_id, f"/tasks/{t0_id}"), json={"status": "done"}, headers=AUTH
+            )
+            assert resp.status_code == 200
 
             resp = await client.patch(
                 _url(project_id, f"/tasks/{t1_id}"), json={"status": "done"}, headers=AUTH

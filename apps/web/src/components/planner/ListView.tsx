@@ -7,12 +7,11 @@ interface ListViewProps {
   tasks: FlatTask[]
   colorOf: (task: FlatTask) => number | null
   onToggle: (task: FlatTask) => void
-  onDelete: (task: FlatTask) => void
   onOpen: (task: FlatTask) => void
 }
 
 /** Flat chronological agenda, grouped by day. Unscheduled work sorts last. */
-export function ListView({ tasks, colorOf, onToggle, onDelete, onOpen }: ListViewProps) {
+export function ListView({ tasks, colorOf, onToggle, onOpen }: ListViewProps) {
   const groups = useMemo(() => {
     const byDate = new Map<string, FlatTask[]>()
     for (const t of tasks) {
@@ -62,7 +61,6 @@ export function ListView({ tasks, colorOf, onToggle, onDelete, onOpen }: ListVie
                   task={t}
                   colorIndex={colorOf(t)}
                   onToggle={() => onToggle(t)}
-                  onDelete={() => onDelete(t)}
                   onOpen={() => onOpen(t)}
                 />
               ))}

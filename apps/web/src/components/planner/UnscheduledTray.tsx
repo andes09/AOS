@@ -9,7 +9,6 @@ interface UnscheduledTrayProps {
   onToggleCollapse: () => void
   colorOf: (task: FlatTask) => number | null
   onToggle: (task: FlatTask) => void
-  onDelete: (task: FlatTask) => void
   onOpen: (task: FlatTask) => void
 }
 
@@ -23,7 +22,6 @@ export function UnscheduledTray({
   onToggleCollapse,
   colorOf,
   onToggle,
-  onDelete,
   onOpen,
 }: UnscheduledTrayProps) {
   const { setNodeRef, isOver } = useDroppable({ id: 'unscheduled', data: { type: 'unscheduled' } })
@@ -76,7 +74,6 @@ export function UnscheduledTray({
                   task={t}
                   colorIndex={colorOf(t)}
                   onToggle={() => onToggle(t)}
-                  onDelete={() => onDelete(t)}
                   onOpen={() => onOpen(t)}
                 />
               </div>

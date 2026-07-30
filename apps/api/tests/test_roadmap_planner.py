@@ -157,15 +157,18 @@ async def test_members_scheduled_count_ignores_done_and_unscheduled(tmp_db):
 
     with _patch_clerk():
         async with _client() as client:
+            # Earliest date first: sequential blocking now spans the whole
+            # plan, so the task we mark done must have nothing earlier in
+            # schedule order still open.
+            # not counted: done
+            r = await _create_task(client, project_id, assigneeId=dev_id, scheduledDate="2026-02-14")
+            await client.patch(
+                _url(project_id, f"/tasks/{r.json()['id']}"), json={"status": "done"}, headers=AUTH
+            )
             # counted: scheduled + not done
             await _create_task(client, project_id, assigneeId=dev_id, scheduledDate="2026-02-15")
             # not counted: no date
             await _create_task(client, project_id, assigneeId=dev_id)
-            # not counted: done
-            r = await _create_task(client, project_id, assigneeId=dev_id, scheduledDate="2026-02-16")
-            await client.patch(
-                _url(project_id, f"/tasks/{r.json()['id']}"), json={"status": "done"}, headers=AUTH
-            )
 
             resp = await client.get(_url(project_id, "/members"), headers=AUTH)
 

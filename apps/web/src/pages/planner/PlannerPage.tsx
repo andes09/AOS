@@ -64,20 +64,20 @@ export function PlannerPage() {
   // `rescheduleTasks` is intentionally not destructured here — a single drag is
   // one task, so it goes through updateTask. The bulk endpoint is wired up in
   // the hook and waits for multi-select.
-  const { generate, regenerate, adjust, extendDay, updateTask, deleteTask, createTask, toggleDone } =
-    usePlannerMutations()
+  const { generate, regenerate, adjust, updateTask, createTask, toggleDone } = usePlannerMutations()
 
-  // Require a real drag before starting one, or the checkbox and delete button
-  // on each card stop being clickable.
+  // Require a real drag before starting one, or the checkbox on each card
+  // stops being clickable.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
+  // Only the week view has a calendar concept now — the day view is an
+  // unlimited "Up next" stream over the whole plan, with no anchor date.
   const anchor = useMemo(() => {
     if (anchorOverride) return anchorOverride
-    const base = data.firstDate ? parseISO(data.firstDate) : new Date()
-    return view === 'day' ? base : mondayOf(base)
-  }, [anchorOverride, data.firstDate, view])
+    return mondayOf(data.firstDate ? parseISO(data.firstDate) : new Date())
+  }, [anchorOverride, data.firstDate])
 
-  const dayCount = view === 'day' ? 1 : 5
+  const dayCount = 5
   const rangeEnd = addDays(anchor, dayCount - 1)
 
   const colorOf = (task: FlatTask) =>
@@ -85,8 +85,8 @@ export function PlannerPage() {
 
   const openTask = openTaskId ? data.allTasks.find(t => t.id === openTaskId) ?? null : null
 
-  // Completion for the days currently in view (one day in Day view, the week in
-  // Week view) — the toolbar bar tracks the visible range, not the whole plan.
+  // Completion for the week currently in view — only Week view uses this;
+  // every other view's toolbar tracks the whole plan (data.stats) instead.
   const rangeStats = useMemo(() => {
     let total = 0
     let done = 0
@@ -219,7 +219,7 @@ export function PlannerPage() {
     )
   }
 
-  const isCalendar = view === 'week' || view === 'day'
+  const isCalendar = view === 'week'
 
   // The date nav lives in the sidebar only — it collapses away with the panel.
   const dateNav = isCalendar ? (
@@ -228,7 +228,7 @@ export function PlannerPage() {
       rangeEnd={rangeEnd}
       onPrev={() => setAnchorOverride(addDays(anchor, -dayCount))}
       onNext={() => setAnchorOverride(addDays(anchor, dayCount))}
-      onToday={() => setAnchorOverride(view === 'day' ? new Date() : mondayOf(new Date()))}
+      onToday={() => setAnchorOverride(mondayOf(new Date()))}
     />
   ) : null
 
@@ -254,7 +254,6 @@ export function PlannerPage() {
                   colorIndex={colorOf(t)}
                   showMilestone={false}
                   onToggle={() => toggleDone(t)}
-                  onDelete={() => deleteTask.mutate(t.id)}
                   onOpen={() => setOpenTaskId(t.id)}
                 />
               )}
@@ -295,16 +294,14 @@ export function PlannerPage() {
 
             {view === 'day' && (
               <DayAgenda
-                iso={toISO(anchor)}
-                tasks={data.byDate.get(toISO(anchor)) ?? []}
+                tasks={data.allTasks}
                 membersById={data.membersById}
                 colorOf={colorOf}
-                done={rangeStats.done}
-                total={rangeStats.total}
+                done={data.stats.done}
+                total={data.stats.total}
                 currentMilestoneTitle={currentMilestoneTitle}
                 onToggleDone={toggleDone}
                 onFeedback={handleTaskFeedback}
-                onDelete={t => deleteTask.mutate(t.id)}
                 onOpen={t => setOpenTaskId(t.id)}
                 isAdjusting={adjust.isPending}
                 adjustError={
@@ -312,15 +309,6 @@ export function PlannerPage() {
                     ? adjust.error instanceof Error
                       ? adjust.error.message
                       : 'Could not update the plan.'
-                    : null
-                }
-                onExtendDay={() => extendDay.mutate(toISO(anchor))}
-                isExtending={extendDay.isPending}
-                extendError={
-                  extendDay.isError
-                    ? extendDay.error instanceof Error
-                      ? extendDay.error.message
-                      : 'Could not add more tasks.'
                     : null
                 }
                 onOpenPlanMap={() => setPlanMapOpen(true)}
@@ -335,7 +323,6 @@ export function PlannerPage() {
                 endHour={END_HOUR}
                 colorOf={colorOf}
                 onToggle={toggleDone}
-                onDelete={t => deleteTask.mutate(t.id)}
                 onOpen={t => setOpenTaskId(t.id)}
               />
             )}
@@ -344,7 +331,6 @@ export function PlannerPage() {
                 tasks={data.allTasks}
                 colorOf={colorOf}
                 onToggle={toggleDone}
-                onDelete={t => deleteTask.mutate(t.id)}
                 onOpen={t => setOpenTaskId(t.id)}
               />
             )}
@@ -353,7 +339,6 @@ export function PlannerPage() {
                 tasks={data.allTasks}
                 colorOf={colorOf}
                 onToggle={toggleDone}
-                onDelete={t => deleteTask.mutate(t.id)}
                 onOpen={t => setOpenTaskId(t.id)}
               />
             )}
@@ -367,7 +352,6 @@ export function PlannerPage() {
                 onToggleCollapse={() => setTrayCollapsed(c => !c)}
                 colorOf={colorOf}
                 onToggle={toggleDone}
-                onDelete={t => deleteTask.mutate(t.id)}
                 onOpen={t => setOpenTaskId(t.id)}
               />
             )}
@@ -385,7 +369,6 @@ export function PlannerPage() {
                 colorIndex={colorOf(draggingTask)}
                 draggable={false}
                 onToggle={() => {}}
-                onDelete={() => {}}
               />
             </div>
           )}
@@ -397,7 +380,6 @@ export function PlannerPage() {
         members={data.members}
         onClose={() => setOpenTaskId(null)}
         onSave={patch => openTask && updateTask.mutate({ id: openTask.id, patch })}
-        onDelete={() => openTask && deleteTask.mutate(openTask.id)}
       />
 
       <Modal open={planMapOpen} onClose={() => setPlanMapOpen(false)} title="The plan" width={880}>

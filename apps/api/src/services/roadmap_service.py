@@ -209,28 +209,30 @@ async def owned_milestone(milestone_id: str, project: Project, db: AsyncSession)
 async def task_blocked_by_earlier_sibling(task: Task, project: Project, db: AsyncSession) -> bool:
     """
     True if `task` is a sequential (non-parallel) task that can't be completed
-    yet because an earlier sequential task scheduled the same day is still
-    unfinished. Mirrors the "waits its turn" gating the planner UI computes
-    client-side (DayAgenda.tsx) so the server enforces the same rule instead
-    of trusting the UI alone.
+    yet because an earlier sequential task in the plan is still unfinished.
+    Mirrors the "waits its turn" gating the planner UI computes client-side
+    (DayAgenda.tsx's continuous "Up next" stream) so the server enforces the
+    same rule instead of trusting the UI alone.
 
-    Never blocks parallel tasks or unscheduled ones — there's no day-ordering
-    to gate on without a scheduled_date.
+    "Earlier" spans the whole project now, not a single calendar day — the
+    planner has one unlimited queue rather than day-by-day silos. Same
+    ordering convention as `claim_next_task` below: scheduled_date ascending
+    (nulls last), then scheduled_time (untimed leads), then plan order.
+
+    Never blocks parallel tasks — those have no dependency on what's before
+    them, scheduled or not.
     """
-    if task.parallel or task.scheduled_date is None:
+    if task.parallel:
         return False
 
     siblings = (
         await db.scalars(
             select(Task)
             .join(Milestone, Task.milestone_id == Milestone.id)
-            .where(
-                Milestone.project_id == project.id,
-                Task.scheduled_date == task.scheduled_date,
-            )
-            # Mirrors usePlannerData.ts's day ordering: untimed tasks lead
-            # (compareByTime), then milestone order, then position within it.
+            .where(Milestone.project_id == project.id)
             .order_by(
+                Task.scheduled_date.is_(None),
+                Task.scheduled_date,
                 Task.scheduled_time.is_(None).desc(),
                 Task.scheduled_time,
                 Milestone.sort_order,

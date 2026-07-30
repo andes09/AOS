@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { addTask, mapTask, mapTasks, removeTask } from './plannerCache'
+import { addTask, mapTask, mapTasks } from './plannerCache'
 import type { Roadmap, RoadmapTask } from '../../types/roadmap'
 
 const task = (id: string, over: Partial<RoadmapTask> = {}): RoadmapTask => ({
@@ -54,20 +54,6 @@ describe('mapTask', () => {
   it('is a no-op for an unknown id', () => {
     const next = mapTask(roadmap(), 'nope', t => ({ ...t, status: 'done' }))
     expect(next.milestones.flatMap(m => m.tasks).every(t => t.status === 'todo')).toBe(true)
-  })
-})
-
-describe('removeTask', () => {
-  it('drops only the named task', () => {
-    const next = removeTask(roadmap(), 'a')
-    expect(next.milestones[0].tasks.map(t => t.id)).toEqual(['b'])
-    expect(next.milestones[1].tasks.map(t => t.id)).toEqual(['c'])
-  })
-
-  it('does not mutate the input', () => {
-    const rm = roadmap()
-    removeTask(rm, 'a')
-    expect(rm.milestones[0].tasks).toHaveLength(2)
   })
 })
 

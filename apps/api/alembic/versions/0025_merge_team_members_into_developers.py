@@ -70,7 +70,11 @@ def upgrade() -> None:
         ON CONFLICT DO NOTHING
     """)
 
-    # ── 5. Remap tickets.assignee_id for matched team_members ───────────────
+    # ── 5. Drop the old FK so the remap below isn't checked against
+    #      team_members while assignee_id is briefly holding developer ids ──
+    op.execute("ALTER TABLE tickets DROP CONSTRAINT IF EXISTS tickets_assignee_id_fkey")
+
+    # ── 6. Remap tickets.assignee_id for matched team_members ───────────────
     # (Unmatched ones reused their UUID above, so no update needed for them.)
     op.execute("""
         UPDATE tickets
@@ -79,15 +83,14 @@ def upgrade() -> None:
         WHERE  tickets.assignee_id = m.tm_id
     """)
 
-    # ── 6. Swap the FK on tickets.assignee_id ────────────────────────────────
-    op.execute("ALTER TABLE tickets DROP CONSTRAINT IF EXISTS tickets_assignee_id_fkey")
+    # ── 7. Add the FK on tickets.assignee_id, now pointing at developers ────
     op.execute("""
         ALTER TABLE tickets
         ADD CONSTRAINT tickets_assignee_id_fkey
         FOREIGN KEY (assignee_id) REFERENCES developers(id) ON DELETE SET NULL
     """)
 
-    # ── 7. Drop team_members (no longer referenced) ──────────────────────────
+    # ── 8. Drop team_members (no longer referenced) ──────────────────────────
     op.execute("DROP TABLE IF EXISTS team_members")
 
 

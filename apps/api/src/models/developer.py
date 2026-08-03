@@ -43,6 +43,13 @@ class Developer(Base):
         SmallInteger, default=0, nullable=False, server_default="0"
     )
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Last time this person did something in the product (loaded their roadmap,
+    # moved a task, completed one). Fed by src/services/activity.py from every
+    # activity source, read by the anti-dormancy re-engagement banner and the
+    # dormancy-detection job. Nullable: a fresh account has no activity yet, and
+    # the dormancy read COALESCEs to Organization.onboarding_completed_at.
+    # See docs/plans/2026-07-20-anti-dormancy-mvp.md.
+    last_active_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     team: Mapped["Team"] = relationship(back_populates="developers")

@@ -2,6 +2,29 @@
 
 ---
 
+## 🚧 IN PROGRESS — Anti-Dormancy MVP, Milestone 1 (branch: feature/onboarding-tech-stack)
+
+Spec: `docs/plans/2026-07-20-anti-dormancy-mvp.md` (Milestone 1 only, per user).
+Plan reconciled against current code (roadmap router is project-scoped; slack.py
+deleted; Task.completed_at already exists; frontend has no features/roadmap —
+landing is ProjectHubPage). Summary is **org-scoped**, banner lands on ProjectHub.
+
+- [x] Migration `0046`: `developers.last_active_at` (nullable DateTime), chains 0045→0046 (single head confirmed via `alembic heads`)
+- [x] `services/activity.py` (new): `touch_developer_activity()`, `touch_by_clerk_user()`, `re_engagement_summary()`
+- [x] `dependencies.py`: `mark_developer_active` (filters clerk_user_id IS NOT NULL; commits the touch itself so a GET's activity signal doesn't ride on an implicit end-of-request commit)
+- [x] `routers/roadmap.py`: attach `mark_developer_active` router-level; PATCH→done touches assignee's clock
+- [x] `routers/roadmap.py`: PATCH→done sets `completed_at`, reopen clears it (latent manual-flip gap — summary's "completed since last visit" needs it)
+- [x] `routers/activity.py` (new): `GET /api/activity/summary`, registered in main.py
+- [x] Frontend: `features/activity/{types,index,hooks/useActivitySummary}` + `components/activity/WelcomeBackBanner.tsx` (self-hides unless returning; dismissable), mounted atop ProjectHubPage
+- [x] Verify: `tests/test_activity.py` — 6 tests pass (returning counts+next_up, touch overwrites so 2nd call not returning, recently-active & first-visit not returning, completed_at stamp + assignee touch, reopen clears). No regressions (8 failures are pre-existing, confirmed via stash). tsc + vite build clean.
+
+### Review — Milestone 1 complete (2026-08-03)
+- **Reconciliation deltas from the 2026-07-20 doc**: summary is org-scoped (not `/api/roadmap/summary`) since roadmap is now project-scoped w/ multiple projects per org → new `GET /api/activity/summary`; banner lands on `ProjectHubPage` (the real `/app` landing), not a `RoadmapPage`; `slack.py` gone so the never-raises pattern is plain `httpx`-style but M1 needs no external call; `Task.completed_at` already existed but the **manual PATCH path never stamped it** — fixed here because the summary depends on it.
+- **One remaining manual step**: `alembic upgrade head` against the real DB (adds `developers.last_active_at`). Not run unprompted — it's a schema change on the live dev DB, same posture as the 0031 note above.
+- **Deferred (per user)**: Milestone 2 (dormancy Celery job) and Milestone 3 (Resend email). The `touch_developer_activity()` seam is standalone so both compose without changes.
+
+---
+
 ## ✅ DONE — Stage 5: Omada MCP Server (branch: feature/omada-mcp-server, merged to main)
 
 Spec: `docs/plans/2026-07-20-omada-mcp-server.md` + corrections in the task prompt

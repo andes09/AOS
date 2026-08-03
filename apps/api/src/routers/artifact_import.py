@@ -300,6 +300,10 @@ async def apply_import(
 
     project = await roadmap_shapes.create_project_with_milestones(
         session, team, name, proposed.get("summary"), session.project_purpose, selected, db,
+        # Accepting only a subset of proposed milestones legitimately leaves
+        # dangling dependsOn references into the rejected ones — drop them
+        # rather than failing the whole import.
+        strict=False,
     )
 
     # Not reachable through normal step order (repo-select comes after

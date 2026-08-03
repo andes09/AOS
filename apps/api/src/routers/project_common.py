@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 from src.models.milestone import Milestone
 from src.models.organization import Organization
 from src.models.project import Project
+from src.models.task import Task
 from src.models.team import Team
 
 
@@ -36,7 +37,7 @@ async def _owned_project(project_id: uuid.UUID, org: Organization, db: AsyncSess
         .join(Team, Project.team_id == Team.id)
         .where(Project.id == project_id, Team.organization_id == org.id)
         .options(
-            selectinload(Project.milestones).selectinload(Milestone.tasks),
+            selectinload(Project.milestones).selectinload(Milestone.tasks).selectinload(Task.depends_on),
             selectinload(Project.onboarding_session),
         )
     )

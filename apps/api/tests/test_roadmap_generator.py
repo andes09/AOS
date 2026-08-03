@@ -16,6 +16,7 @@ import pytest_asyncio
 from openai import BadRequestError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.orm import selectinload
 
 from src.database import Base
 import src.models  # noqa: F401 — registers all models so relationship() string refs resolve
@@ -24,7 +25,7 @@ from src.models.team import Team
 from src.models.onboarding_session import OnboardingSession
 from src.models.project import Project
 from src.models.milestone import Milestone
-from src.models.task import Task
+from src.models.task import Task, task_dependencies
 from src.services import roadmap_generator
 from src.services.idea_interview import _PURPOSE_GUIDANCE
 
@@ -35,6 +36,7 @@ _REQUIRED_TABLES = [
     Project.__table__,
     Milestone.__table__,
     Task.__table__,
+    task_dependencies,
 ]
 
 _BRIEF = {"projectName": "Brief Name", "problemStatement": "Founders lack plans"}
@@ -121,8 +123,13 @@ _ROADMAP_PAYLOAD = {
             "title": "Foundations",
             "description": "Set up the skeleton",
             "tasks": [
-                {"title": "Init repo", "dayOffset": 0},
-                {"title": "Pick stack", "description": "Keep it boring", "dayOffset": 1, "parallel": True},
+                {"title": "Init repo", "dayOffset": 0, "key": "init-repo"},
+                {
+                    "title": "Pick stack",
+                    "description": "Keep it boring",
+                    "dayOffset": 1,
+                    "dependsOn": ["init-repo"],
+                },
             ],
         },
         {
@@ -228,12 +235,16 @@ async def test_generate_roadmap_happy_path(roadmap_db):
         assert [m.sort_order for m in milestones] == [0, 1]
 
         tasks = (await db.execute(
-            select(Task).where(Task.milestone_id == milestones[0].id).order_by(Task.sort_order)
+            select(Task)
+            .where(Task.milestone_id == milestones[0].id)
+            .order_by(Task.sort_order)
+            .options(selectinload(Task.depends_on))
         )).scalars().all()
         assert [t.title for t in tasks] == ["Init repo", "Pick stack"]
         assert [t.sort_order for t in tasks] == [0, 1]
-        # `parallel` is parsed from the tool output; absent defaults to False.
-        assert [bool(t.parallel) for t in tasks] == [False, True]
+        # "Pick stack" declared dependsOn: ["init-repo"] — resolved to a real edge.
+        assert tasks[0].depends_on == []
+        assert tasks[1].depends_on == [tasks[0]]
         for t in tasks:
             assert t.scheduled_date is not None
             assert t.scheduled_date.weekday() < 5  # only weekdays
@@ -275,6 +286,132 @@ async def test_generate_roadmap_empty_milestones_persists_nothing(roadmap_db):
     async with roadmap_db() as db:
         assert (await db.execute(select(Project))).scalars().all() == []
         assert (await db.execute(select(Milestone))).scalars().all() == []
+
+
+async def test_generate_roadmap_cyclic_dependency_persists_nothing(roadmap_db):
+    """A cyclic dependsOn graph in the model output is rejected outright —
+    the same failure class as other malformed-output cases (surfaced by the
+    router as a 502), and nothing partial is left behind."""
+    team_id, session_id = await _seed(roadmap_db)
+    payload = {
+        "projectName": "Cyclic",
+        "milestones": [
+            {
+                "title": "M0",
+                "tasks": [
+                    {"title": "A", "dayOffset": 0, "key": "a", "dependsOn": ["b"]},
+                    {"title": "B", "dayOffset": 0, "key": "b", "dependsOn": ["a"]},
+                ],
+            },
+        ],
+    }
+    fake = _fake_groq(payload)
+
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_groq(fake):
+            try:
+                await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
+                raise AssertionError("expected RuntimeError")
+            except RuntimeError as exc:
+                assert "invalid task dependency graph" in str(exc)
+
+    async with roadmap_db() as db:
+        assert (await db.execute(select(Project))).scalars().all() == []
+
+
+async def test_generate_roadmap_dangling_dependency_persists_nothing(roadmap_db):
+    """A dependsOn reference to a key that doesn't exist in the response is
+    rejected the same way — never silently dropped on the strict (fresh
+    generation) path."""
+    team_id, session_id = await _seed(roadmap_db)
+    payload = {
+        "projectName": "Dangling",
+        "milestones": [
+            {
+                "title": "M0",
+                "tasks": [{"title": "A", "dayOffset": 0, "key": "a", "dependsOn": ["ghost"]}],
+            },
+        ],
+    }
+    fake = _fake_groq(payload)
+
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_groq(fake):
+            try:
+                await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
+                raise AssertionError("expected RuntimeError")
+            except RuntimeError as exc:
+                assert "doesn't exist in this batch" in str(exc)
+
+    async with roadmap_db() as db:
+        assert (await db.execute(select(Project))).scalars().all() == []
+
+
+async def test_generate_roadmap_cross_milestone_dependency_persists(roadmap_db):
+    """dependsOn can reference a task in an earlier milestone, not just a
+    same-milestone sibling."""
+    team_id, session_id = await _seed(roadmap_db)
+    payload = {
+        "projectName": "Cross-milestone",
+        "milestones": [
+            {"title": "M0", "tasks": [{"title": "Setup", "dayOffset": 0, "key": "setup"}]},
+            {
+                "title": "M1",
+                "tasks": [{"title": "Deploy", "dayOffset": 1, "dependsOn": ["setup"]}],
+            },
+        ],
+    }
+    fake = _fake_groq(payload)
+
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_groq(fake):
+            await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
+
+    async with roadmap_db() as db:
+        tasks = (
+            await db.execute(select(Task).options(selectinload(Task.depends_on)))
+        ).scalars().all()
+        setup = next(t for t in tasks if t.title == "Setup")
+        deploy = next(t for t in tasks if t.title == "Deploy")
+        assert deploy.depends_on == [setup]
+
+
+async def test_generate_roadmap_convergent_dependency_persists_both_edges(roadmap_db):
+    """A task with two independent prerequisites persists both edges."""
+    team_id, session_id = await _seed(roadmap_db)
+    payload = {
+        "projectName": "Convergent",
+        "milestones": [
+            {
+                "title": "M0",
+                "tasks": [
+                    {"title": "Backend", "dayOffset": 0, "key": "backend"},
+                    {"title": "Frontend", "dayOffset": 0, "key": "frontend"},
+                    {"title": "Integrate", "dayOffset": 1, "dependsOn": ["backend", "frontend"]},
+                ],
+            },
+        ],
+    }
+    fake = _fake_groq(payload)
+
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_groq(fake):
+            await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
+
+    async with roadmap_db() as db:
+        tasks = (
+            await db.execute(select(Task).options(selectinload(Task.depends_on)))
+        ).scalars().all()
+        integrate = next(t for t in tasks if t.title == "Integrate")
+        assert {t.title for t in integrate.depends_on} == {"Backend", "Frontend"}
 
 
 async def test_generate_roadmap_clamps_and_defaults(roadmap_db):

@@ -295,6 +295,7 @@ export function PlannerPage() {
             {view === 'day' && (
               <DayAgenda
                 tasks={data.allTasks}
+                tasksById={data.tasksById}
                 membersById={data.membersById}
                 colorOf={colorOf}
                 done={data.stats.done}

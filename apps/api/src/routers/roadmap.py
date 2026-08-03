@@ -202,12 +202,18 @@ async def regenerate_milestone_endpoint(
     api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
 
     try:
-        milestone = await roadmap_generator.regenerate_milestone(milestone, session, api_key, db)
+        await roadmap_generator.regenerate_milestone(milestone, session, api_key, db)
     except ValueError as exc:  # bad key
         raise HTTPException(status_code=402, detail=str(exc))
     except RuntimeError as exc:  # upstream / model failure
         raise HTTPException(status_code=502, detail=str(exc))
 
+    # Re-fetch (rather than trust the object regenerate_milestone returns):
+    # its new tasks' `depends_on` was set in-memory via `resolve_task_dependencies`,
+    # but the `await db.refresh(milestone)` inside it doesn't reliably keep that
+    # nested relationship eager-loaded — same reasoning as every other endpoint
+    # here re-fetching via a helper that explicitly selectinloads depends_on.
+    milestone = await svc.owned_milestone(milestone_id, project, db)
     return svc.milestone_json(milestone)
 
 
@@ -273,8 +279,8 @@ async def update_task(
     task = await svc.owned_task(task_id, project, db)
 
     if body.status is not None:
-        if body.status == TaskStatus.DONE.value and await svc.task_blocked_by_earlier_sibling(task, project, db):
-            raise HTTPException(status_code=409, detail="task_blocked_by_earlier_task")
+        if body.status == TaskStatus.DONE.value and svc.task_is_blocked(task):
+            raise HTTPException(status_code=409, detail="task_blocked_by_dependency")
         task.status = body.status
     if body.title is not None:
         task.title = body.title
@@ -297,8 +303,12 @@ async def update_task(
     if body.sortOrder is not None:
         await _reorder_task(task, body.sortOrder, db)
 
+    # No db.refresh(): the session is expire_on_commit=False and every field
+    # above was already set in Python, so the in-memory object is already
+    # correct — refresh() would additionally *expire* task.depends_on
+    # (relationship attributes reset unconditionally on refresh, regardless
+    # of expire_on_commit), forcing a lazy reload that raises under asyncio.
     await db.commit()
-    await db.refresh(task)
     return svc.task_json(task)
 
 
@@ -366,9 +376,15 @@ async def create_task(
         duration_minutes=body.durationMinutes,
         assignee_id=body.assigneeId,
     )
+    # Set while still transient, before it's ever persistent: a manually
+    # created task always starts with zero prerequisites (no dependency-
+    # editing UI exists), and setting it now — rather than after commit —
+    # avoids a diff-against-current-state query that a persistent object's
+    # collection assignment would need (and that has no sync fallback under
+    # asyncio). No db.refresh() either, for the same reason as update_task.
+    task.depends_on = []
     db.add(task)
     await db.commit()
-    await db.refresh(task)
     return svc.task_json(task)
 
 
@@ -426,9 +442,9 @@ async def reschedule_tasks(
         if "assigneeId" in fields:
             task.assignee_id = update.assigneeId
 
+    # No db.refresh() loop: see update_task's comment — expire_on_commit=False
+    # already keeps these in sync, and refresh() would re-expire depends_on.
     await db.commit()
-    for task in found.values():
-        await db.refresh(task)
     return {"tasks": [svc.task_json(found[u.id]) for u in body.updates]}
 
 

@@ -12,7 +12,7 @@ from src.models.team import Team
 from src.models.onboarding_session import OnboardingSession
 from src.models.project import Project
 from src.models.milestone import Milestone
-from src.models.task import Task, TaskStatus
+from src.models.task import Task, TaskStatus, task_dependencies
 
 
 _REQUIRED_TABLES = [
@@ -22,6 +22,7 @@ _REQUIRED_TABLES = [
     Project.__table__,
     Milestone.__table__,
     Task.__table__,
+    task_dependencies,
 ]
 
 

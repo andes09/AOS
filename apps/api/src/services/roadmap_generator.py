@@ -42,6 +42,7 @@ from src.services.roadmap_shapes import (
     _persist_milestones,
     _weekday_after,
     create_project_with_milestones,
+    resolve_task_dependencies,
     validated_milestone as _validated_milestone,
     validated_milestones as _validated_milestones,
     validated_task as _validated_task,
@@ -74,8 +75,13 @@ of weekdays where possible.
 between 09:00 and 18:00) and a `durationMinutes` (15–240). Order tasks within a day by time \
 and don't overlap them — a developer should be able to follow the day top to bottom.
 - Order milestones and tasks the way they should actually be tackled (dependencies first).
-- Set `parallel: true` on tasks that don't depend on the task before them and could be \
-picked up alongside their siblings; leave it false for work that must wait on earlier tasks.
+- Give every task a `key` (short, unique in this response, e.g. "setup-db"). When a task \
+genuinely depends on other specific work finishing first, list those tasks' `key`s in \
+`dependsOn` — reference the actual prerequisite tasks, not just "the one before it". \
+Independent tasks (e.g. two unrelated setup steps that both feed into a later integration \
+task) should have no `dependsOn` between them, so they can be worked in parallel; a task that \
+only needs to happen after everything before it in its own track should list that specific \
+task, not its whole history.
 - Ground everything in THIS project and its stated stack/constraints. Never invent facts the \
 brief doesn't support; where the brief is silent, make a sensible, clearly-reasonable technical \
 choice and state it."""
@@ -319,7 +325,17 @@ async def regenerate_milestone(
     """Re-plan a single milestone; every other milestone is untouched. The
     target's tasks are replaced wholesale (statuses reset) and its title/
     description updated; its position (`sort_order`) is kept. Validation
-    happens before any delete, so a failed call changes nothing."""
+    happens before any delete, so a failed call changes nothing.
+
+    Known limitation: because `_MILESTONE_TOOL`'s schema only returns this
+    one milestone's tasks, a single-milestone regenerate can only express
+    dependencies *within* it — there's no way for the model to reference a
+    sibling milestone's task keys. And because this wholesale-deletes the
+    milestone's old tasks, any pre-existing edges from other milestones'
+    tasks into this milestone's old tasks are cascade-deleted along with
+    them. This mirrors how the old `parallel` flag was reset the same way on
+    regenerate — not a new regression, just worth calling out.
+    """
     siblings = (
         (
             await db.execute(
@@ -355,7 +371,9 @@ async def regenerate_milestone(
     ).first()
     org, milestone_team_id = org_row
     short_ids = await allocate_short_ids(org, len(new["tasks"]), db)
-    _add_tasks(milestone.id, new["tasks"], date.today(), short_ids, db)
+    tasks_by_key = _add_tasks(milestone.id, new["tasks"], date.today(), short_ids, db)
+    edges_by_key = {t.get("key"): t.get("depends_on") or [] for t in new["tasks"]}
+    resolve_task_dependencies(tasks_by_key, edges_by_key, strict=True)
 
     await record_generation_cost(
         "roadmap_regenerate_milestone",

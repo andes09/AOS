@@ -28,6 +28,7 @@ from src.models.task import Task
 from src.models.team import Team
 from src.services import roadmap_generator
 from src.services.cost_tracker import record_generation_cost
+from src.services.roadmap_shapes import resolve_task_dependencies
 from src.services.task_ids import allocate_short_ids
 
 logger = logging.getLogger(__name__)
@@ -50,8 +51,11 @@ genuinely new work.
 - Every returned task needs a detailed technical `description` (3-6 sentences), a 0-based \
 `dayOffset` (weekdays from today; 0 = today/next weekday), a `startTime` (24h "HH:MM", 09:00-18:00), \
 and a `durationMinutes` (15-240). Lay each day out as a realistic, non-overlapping schedule.
-- Set `parallel: true` on tasks that don't depend on the task before them and could be picked \
-up alongside their siblings; leave it false for work that must wait on earlier tasks.
+- Give every task a `key` (short, unique in this response). When a task genuinely depends on \
+other specific work finishing first, list those tasks' `key`s in `dependsOn` — you may also \
+reference an existing task's `id` (given in the current plan below) if new work depends on \
+already-done or in-progress history. Independent tasks should have no `dependsOn` between \
+them, so they can be worked in parallel.
 - Keep it a short, finishable near-term plan (the next ~2 weeks of weekdays), not a backlog."""
 
 # OpenAI/Groq function-tool form (mirrors idea_interview._BRIEF_TOOL).
@@ -80,7 +84,17 @@ _ADJUST_TOOL = {
                                         "dayOffset": {"type": "integer", "description": "0-based weekday index from today"},
                                         "startTime": {"type": "string", "description": '24h "HH:MM"'},
                                         "durationMinutes": {"type": "integer"},
-                                        "parallel": {"type": "boolean", "description": "True if this task has no dependency on the task before it and can run alongside its siblings."},
+                                        "key": {
+                                            "type": "string",
+                                            "description": "Short, unique-within-this-response id for this task.",
+                                        },
+                                        "dependsOn": {
+                                            "type": "array",
+                                            "items": {"type": "string"},
+                                            "description": "Keys of other new tasks in this response, or "
+                                            "`id`s of existing tasks from the current plan, that must "
+                                            "complete before this one can start.",
+                                        },
                                     },
                                     "required": ["title", "dayOffset"],
                                 },
@@ -115,6 +129,7 @@ def _plan_context(project: Project) -> str:
                 "title": m.title,
                 "tasks": [
                     {
+                        "id": str(t.id),
                         "title": t.title,
                         "status": _status_str(t.status),
                         "date": t.scheduled_date.isoformat() if t.scheduled_date else None,
@@ -208,11 +223,22 @@ async def adjust_roadmap(
     by_title = {m.title.strip().lower(): m for m in project.milestones}
     next_sort = (max((m.sort_order for m in project.milestones), default=-1)) + 1
 
+    # Already-persisted, non-todo tasks a new todo task may declare a
+    # dependency on (via its real id) — fixed history, never deleted below.
+    existing_tasks_by_id = {
+        str(t.id): t
+        for m in project.milestones
+        for t in m.tasks
+        if _status_str(t.status) != "todo"
+    }
+
     # One atomic batch reservation for every task this adjustment will create.
     org = await _org_for_project(project, db)
     total_tasks = sum(len(m["tasks"]) for m in validated)
     short_ids = iter(await allocate_short_ids(org, total_tasks, db))
 
+    tasks_by_key: dict[str, Task] = {}
+    edges_by_key: dict[str, list[str]] = {}
     for m in validated:
         existing = by_title.get(m["title"].strip().lower())
         if existing is not None:
@@ -223,7 +249,7 @@ async def adjust_roadmap(
                 await db.delete(stale)
             base_sort = (max((t.sort_order for t in kept), default=-1)) + 1
             task_short_ids = [next(short_ids) for _ in m["tasks"]]
-            _add_todo_tasks(existing.id, m["tasks"], today, base_sort, task_short_ids, db)
+            tasks_by_key.update(_add_todo_tasks(existing.id, m["tasks"], today, base_sort, task_short_ids, db))
         else:
             milestone = Milestone(
                 project_id=project.id, title=m["title"], description=m["description"], sort_order=next_sort
@@ -232,7 +258,13 @@ async def adjust_roadmap(
             db.add(milestone)
             await db.flush()
             task_short_ids = [next(short_ids) for _ in m["tasks"]]
-            _add_todo_tasks(milestone.id, m["tasks"], today, 0, task_short_ids, db)
+            tasks_by_key.update(_add_todo_tasks(milestone.id, m["tasks"], today, 0, task_short_ids, db))
+        for t in m["tasks"]:
+            edges_by_key[t.get("key")] = t.get("depends_on") or []
+
+    resolve_task_dependencies(
+        tasks_by_key, edges_by_key, existing_tasks_by_id=existing_tasks_by_id, strict=False
+    )
 
     await record_generation_cost(
         "roadmap_adjust",
@@ -250,20 +282,27 @@ async def adjust_roadmap(
 
 def _add_todo_tasks(
     milestone_id, tasks: list[dict], today: date, base_sort: int, short_ids: list[str], db: AsyncSession
-) -> None:
-    """Create validated tasks as `todo`, timed, numbered from `base_sort`."""
+) -> dict[str, Task]:
+    """Create validated tasks as `todo`, timed, numbered from `base_sort`.
+    Returns {key: Task} for `resolve_task_dependencies`."""
+    tasks_by_key: dict[str, Task] = {}
     for i, t in enumerate(tasks):
-        db.add(
-            Task(
-                milestone_id=milestone_id,
-                short_id=short_ids[i],
-                title=t["title"],
-                description=t["description"],
-                status="todo",
-                sort_order=base_sort + i,
-                scheduled_date=roadmap_generator._weekday_after(today, t["day_offset"]),
-                scheduled_time=t.get("start_time"),
-                duration_minutes=t.get("duration_minutes"),
-                parallel=t.get("parallel", False),
-            )
+        task = Task(
+            milestone_id=milestone_id,
+            short_id=short_ids[i],
+            title=t["title"],
+            description=t["description"],
+            status="todo",
+            sort_order=base_sort + i,
+            scheduled_date=roadmap_generator._weekday_after(today, t["day_offset"]),
+            scheduled_time=t.get("start_time"),
+            duration_minutes=t.get("duration_minutes"),
         )
+        # See roadmap_shapes._add_tasks's comment: force depends_on "loaded"
+        # before this task can ever become persistent (adjust_roadmap flushes
+        # per-milestone), so the later resolve_task_dependencies().append()
+        # never triggers an async-incompatible lazy load.
+        task.depends_on = []
+        db.add(task)
+        tasks_by_key[t.get("key") or f"t{i}"] = task
+    return tasks_by_key

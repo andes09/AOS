@@ -48,6 +48,10 @@ export interface PlannerData {
   byAssignee: Map<string | null, FlatTask[]>
   unscheduled: FlatTask[]
   allTasks: FlatTask[]
+  /** Every task (unfiltered) by id, for resolving `dependsOn` lookups —
+   *  built from the full plan, not `allTasks`, since a task's dependency may
+   *  belong to a milestone/assignee the current filters hide. */
+  tasksById: Map<string, FlatTask>
   stats: PlannerStats
   /** Earliest scheduled date, for the initial week anchor. */
   firstDate: string | null
@@ -78,6 +82,7 @@ export function usePlannerData(filters: PlannerFilters): PlannerData {
     const byAssignee = new Map<string | null, FlatTask[]>()
     const unscheduled: FlatTask[] = []
     const allTasks: FlatTask[] = []
+    const tasksById = new Map<string, FlatTask>()
     let total = 0
     let done = 0
     let firstDate: string | null = null
@@ -90,6 +95,10 @@ export function usePlannerData(filters: PlannerFilters): PlannerData {
           milestoneTitle: m.title,
           milestoneIndex: mi,
         }
+
+        // Unfiltered, so a dependency hidden by the current filters still
+        // resolves correctly instead of reading as permanently "not done".
+        tasksById.set(flat.id, flat)
 
         // Stats count the whole plan, deliberately ignoring filters — a
         // progress bar that moves when you filter would be lying about scope.
@@ -143,6 +152,7 @@ export function usePlannerData(filters: PlannerFilters): PlannerData {
       byAssignee,
       unscheduled,
       allTasks,
+      tasksById,
       stats: { total, done, pct: total > 0 ? Math.round((done / total) * 100) : 0 },
       firstDate,
       isLoading: roadmapQuery.isLoading || membersQuery.isLoading,

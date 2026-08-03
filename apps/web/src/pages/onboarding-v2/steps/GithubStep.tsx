@@ -9,7 +9,7 @@ import { Btn, C, GithubMark, OmadaMark, Spinner, WARM } from '../theme'
 const SCOPES: [string, string][] = [
   ['Read your repositories', 'So the roadmap AI can plan around the code you already have'],
   ['See languages & structure', 'To ground milestones in your real stack, not guesses'],
-  ['Read-only access', 'Omada never writes to your repos, and you can revoke anytime'],
+  ['Create a repo when you ask', 'Omada can set up a new repo for you during onboarding — it never changes the code in repos you already have, and you can revoke access anytime'],
 ]
 
 export function GithubStep({ onSkip, skipping, needsReconnect }: { onSkip: () => void; skipping: boolean; needsReconnect: boolean }) {

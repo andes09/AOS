@@ -152,6 +152,7 @@ async def github_callback(
         installation_id=str(installation_id),
         github_user_id=str(account.get("id", "")),
         github_login=account.get("login", ""),
+        account_type=account.get("type"),
         avatar_url=account.get("avatar_url"),
         encrypted_access_token=encrypt(token_data["token"]),
         encrypted_refresh_token=None,

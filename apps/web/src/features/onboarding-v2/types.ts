@@ -14,6 +14,9 @@ export type OnboardingStepId =
   | 'idea_chat'
   | 'import_artifact'
   | 'repo_select'
+  // Gated behind experimental.plan_review — review/regenerate the drafted
+  // roadmap before it's committed. The last step before 'done'.
+  | 'plan_review'
 export type OnboardingStepStatus = 'complete' | 'current' | 'pending'
 
 export type PlanSource = 'chat' | 'import'
@@ -89,6 +92,10 @@ export type OnboardingState = {
   onboardingPath: PlanSource | null
   importArtifact: ImportArtifactState | null
   repo: RepoState
+  /** The drafted project's id — which roadmap the plan-review step shows. Null
+   *  until a project exists (chat path drafts it in the plan-review step). */
+  projectId: string | null
+  planReview: { confirmed: boolean }
   onboardingCompleted: boolean
 }
 
@@ -123,6 +130,12 @@ export type RepoState = {
   skipped: boolean
   /** True once GitHub is actually connected — repo_select auto-completes when false. */
   available: boolean
+  /** Whether the chat path can offer "create a new repo": an Organization
+   *  install with experimental.repo_create on. Personal-account installs are
+   *  connect-only (see github_app_repo_create_constraint). */
+  canCreate: boolean
+  /** The account (org) login new repos would be created under, or null. */
+  ownerLogin: string | null
 }
 
 export type ChatMessage = {

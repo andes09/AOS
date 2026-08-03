@@ -14,6 +14,8 @@ def test_local_yaml_loads():
         "enabled": True, "week_view": False, "daily_calendar_view": False, "board_view": False,
     }
     assert flags["roadmap_chat"] is True
+    assert flags["plan_review"] is True
+    assert flags["repo_create"] is True
     assert flags["experimental"] == {
         "enabled": False, "import_artifacts": False, "github_autocomplete": False,
         "master_dashboard": False, "mcp_server": False, "tech_stack_step": False,
@@ -28,6 +30,8 @@ def test_production_yaml_loads():
         "enabled": True, "week_view": True, "daily_calendar_view": True, "board_view": True,
     }
     assert flags["roadmap_chat"] is False
+    assert flags["plan_review"] is True
+    assert flags["repo_create"] is True
     assert flags["experimental"] == {
         "enabled": False, "import_artifacts": False, "github_autocomplete": False,
         "master_dashboard": False, "mcp_server": False, "tech_stack_step": False,

@@ -69,6 +69,12 @@ class OnboardingSession(Base):
     import_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     selected_github_repo_full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     repo_select_skipped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Set when the founder accepts (or "continue anyway" past) the drafted
+    # roadmap in the plan-review step (see POST /plan/confirm). This is the
+    # step's completion signal — distinct from status == "completed" (the idea
+    # interview ended) and from org.onboarding_completed_at (the whole flow
+    # finished). Only meaningful when the plan_review flag is enabled.
+    plan_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

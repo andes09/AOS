@@ -31,5 +31,11 @@ export function useRepoSelect() {
     onSuccess: state => queryClient.setQueryData(ONBOARDING_STATE_KEY, state),
   })
 
-  return { repos, page, setPage, selectRepo, skip }
+  const createRepo = useMutation({
+    mutationFn: ({ name, isPrivate }: { name: string; isPrivate: boolean }) =>
+      api.createRepo(name, isPrivate),
+    onSuccess: state => queryClient.setQueryData(ONBOARDING_STATE_KEY, state),
+  })
+
+  return { repos, page, setPage, selectRepo, skip, createRepo }
 }

@@ -3,6 +3,8 @@ features:
   cost_tracking: true
   roadmap_generation: true
   roadmap_chat: true
+  plan_review: true
+  repo_create: true
   planner:
     enabled: true
     week_view: false

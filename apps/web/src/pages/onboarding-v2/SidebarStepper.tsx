@@ -17,6 +17,7 @@ const STEP_LABELS: Record<OnboardingStepId, string> = {
   idea_chat: 'Your idea',
   import_artifact: 'Import your plan',
   repo_select: 'Connect a repo',
+  plan_review: 'Review your plan',
 }
 
 const WHY: Partial<Record<OnboardingState['currentStep'], string>> = {
@@ -28,6 +29,7 @@ const WHY: Partial<Record<OnboardingState['currentStep'], string>> = {
   idea_chat: 'The more the AI understands your idea, the sharper your first roadmap. Answer a few questions and we build the brief live.',
   import_artifact: 'We extract a project brief and draft a roadmap from what you upload. Review each proposed milestone before anything is created.',
   repo_select: 'Connecting a specific repo lets Omada tie tasks to real code later — you can also skip this and connect one anytime.',
+  plan_review: 'This is your roadmap before anything is locked in. Regenerate it if it misses the mark, or accept it and start building.',
 }
 
 function labelFor(id: string): string {

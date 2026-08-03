@@ -85,6 +85,14 @@ export function createOnboardingApi(getToken: GetToken, apiUrl: string = DEFAULT
         { method: 'POST' },
       ),
 
+    // --- plan review (experimental.plan_review) ---
+    /** Ensure a drafted roadmap exists and return its projectId. Idempotent. */
+    draftPlan: () =>
+      request<{ projectId: string }>('/api/onboarding/v2/plan/draft', { method: 'POST' }),
+    /** Accept the drafted roadmap, completing the plan-review step. */
+    confirmPlan: () =>
+      request<OnboardingState>('/api/onboarding/v2/plan/confirm', { method: 'POST' }),
+
     /** Self-heal for direct navigation before the org row exists (409 org_not_provisioned). */
     provisionOrganization: () => request<unknown>('/api/organizations', { method: 'POST' }),
 
@@ -104,6 +112,12 @@ export function createOnboardingApi(getToken: GetToken, apiUrl: string = DEFAULT
         body: JSON.stringify({ repoFullName }),
       }),
     skipRepo: () => request<OnboardingState>('/api/onboarding/v2/repo/skip', { method: 'POST' }),
+    /** Create a new repo (org installs only) and select it. */
+    createRepo: (name: string, isPrivate: boolean) =>
+      request<OnboardingState>('/api/onboarding/v2/repo/create', {
+        method: 'POST',
+        body: JSON.stringify({ name, private: isPrivate }),
+      }),
 
     // --- import artifacts ---
     /**

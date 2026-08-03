@@ -19,6 +19,7 @@ import { PlanSourceStep } from './onboarding-v2/steps/PlanSourceStep'
 import { IdeaChatStep } from './onboarding-v2/steps/IdeaChatStep'
 import { ImportArtifactStep } from './onboarding-v2/steps/ImportArtifactStep'
 import { RepoSelectStep } from './onboarding-v2/steps/RepoSelectStep'
+import { PlanReviewStep } from './onboarding-v2/steps/PlanReviewStep'
 import { DoneStep } from './onboarding-v2/steps/DoneStep'
 
 const shellFont = "'Inter', system-ui, sans-serif"
@@ -121,8 +122,14 @@ export function OnboardingV2Page() {
           {state.currentStep === 'idea_chat' && <IdeaChatStep />}
           {state.currentStep === 'import_artifact' && <ImportArtifactStep />}
           {state.currentStep === 'repo_select' && (
-            <RepoSelectStep repoAvailable={state.repo.available} />
+            <RepoSelectStep
+              repoAvailable={state.repo.available}
+              onboardingPath={state.onboardingPath}
+              canCreate={state.repo.canCreate}
+              ownerLogin={state.repo.ownerLogin}
+            />
           )}
+          {state.currentStep === 'plan_review' && <PlanReviewStep />}
           {state.currentStep === 'done' && <DoneStep onFinish={() => complete.mutateAsync()} />}
         </div>
       </div>

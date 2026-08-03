@@ -14,6 +14,12 @@ class GithubConnection(Base):
     installation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     github_user_id: Mapped[str] = mapped_column(String(255))
     github_login: Mapped[str] = mapped_column(String(255))
+    # The installation account's type: "User" or "Organization" (from the
+    # GitHub installation object's account.type). Null for connections made
+    # before this was captured. Gates API repo-creation: only "Organization"
+    # installs can create repos with the installation token (see
+    # onboarding_v2.create_repo / integrations/github/client.create_repo).
+    account_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # Tokens stored encrypted. GitHub App installation tokens expire hourly and
     # are refreshed via installation_id (see router._get_valid_access_token);

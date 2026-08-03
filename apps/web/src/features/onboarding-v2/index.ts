@@ -11,7 +11,7 @@
 //   const repoSelect = useRepoSelect()  // list repos + setRepo/skipRepo
 //
 // state.currentStep walks: github_connect -> profile -> purpose -> tech_stack (flag-gated)
-// -> build_plan -> repo_select -> done. build_plan forks on state.onboardingPath
+// -> build_plan -> repo_select -> plan_review (flag-gated) -> done. build_plan forks on state.onboardingPath
 // ('chat' | 'import' | null): its step id in state.steps is 'build_plan' while
 // unset, then 'idea_chat' or 'import_artifact' once chosen via savePlanSource.
 // repo_select is skippable and auto-completes when GitHub was never connected.

@@ -76,9 +76,11 @@ def _patch_api_key():
 
 
 async def _complete_profile_and_chat(org_id, team_id, brief):
-    """Fast-forwards past github/profile/purpose/plan-source and stamps the
-    idea-chat session as completed with `brief`, bypassing the real SSE chat
-    turns — mirrors how test_projects.py sets up its own generate tests."""
+    """Fast-forwards past github/profile/purpose/tech-stack/plan-source and
+    stamps the idea-chat session as completed with `brief`, bypassing the real
+    SSE chat turns — mirrors how test_projects.py sets up its own generate
+    tests. tech_stack is flag-gated (on in the test env), so it's completed here
+    too; otherwise the derived flow parks there and never reaches later steps."""
     from src.database import get_db
     from src.models.onboarding_session import OnboardingSession
 
@@ -90,6 +92,11 @@ async def _complete_profile_and_chat(org_id, team_id, brief):
                 headers=AUTH,
             )
             await client.put("/api/onboarding/v2/purpose", json={"purpose": "startup"}, headers=AUTH)
+            await client.put(
+                "/api/onboarding/v2/tech-stack",
+                json={"stack": ["React"], "experience": "experienced"},
+                headers=AUTH,
+            )
             await client.put(
                 "/api/onboarding/v2/plan-source", json={"source": "chat"}, headers=AUTH
             )
@@ -126,14 +133,16 @@ async def test_state_initial(tmp_db):
     assert body["currentStep"] == "github_connect"
     # tech_stack only appears when experimental.tech_stack_step is on (true in
     # the test environment — see conftest.py).
+    # plan_review (flag-gated, on in test env) is appended as the last step.
     assert [s["id"] for s in body["steps"]] == [
         "github_connect", "profile", "purpose", "tech_stack", "build_plan", "repo_select",
+        "plan_review",
     ]
     # repo_select auto-completes when there's no GitHub connection to pick a
     # repo from at all yet (see docs/plans/2026-07-20-import-artifacts.md) —
     # it's "complete" out of order here, ahead of steps still pending.
     assert [s["status"] for s in body["steps"]] == [
-        "current", "pending", "pending", "pending", "pending", "complete",
+        "current", "pending", "pending", "pending", "pending", "complete", "pending",
     ]
     assert body["github"] == {"connected": False, "login": None, "skipped": False, "needsReconnect": False}
     assert body["profile"] == {"name": None, "phone": None, "complete": False}
@@ -142,7 +151,10 @@ async def test_state_initial(tmp_db):
     assert body["ideaChat"]["status"] == "not_started"
     assert body["onboardingPath"] is None
     assert body["importArtifact"] is None
-    assert body["repo"] == {"selected": None, "skipped": False, "available": False}
+    assert body["repo"] == {
+        "selected": None, "skipped": False, "available": False,
+        "canCreate": False, "ownerLogin": None,
+    }
     assert body["onboardingCompleted"] is False
 
 
@@ -156,7 +168,7 @@ async def test_github_skip_advances_flow(tmp_db):
     assert body["github"]["skipped"] is True
     assert body["currentStep"] == "profile"
     assert [s["status"] for s in body["steps"]] == [
-        "complete", "current", "pending", "pending", "pending", "complete",
+        "complete", "current", "pending", "pending", "pending", "complete", "pending",
     ]
 
 
@@ -312,9 +324,10 @@ async def test_purpose_completes_step_and_advances_flow(tmp_db):
     assert body["currentStep"] == "tech_stack"
     assert [s["id"] for s in body["steps"]] == [
         "github_connect", "profile", "purpose", "tech_stack", "build_plan", "repo_select",
+        "plan_review",
     ]
     assert [s["status"] for s in body["steps"]] == [
-        "complete", "complete", "complete", "current", "pending", "complete",
+        "complete", "complete", "complete", "current", "pending", "complete", "pending",
     ]
 
 
@@ -524,6 +537,7 @@ async def test_plan_source_chat_advances_to_idea_chat_step(tmp_db):
     assert body["currentStep"] == "idea_chat"
     assert [s["id"] for s in body["steps"]] == [
         "github_connect", "profile", "purpose", "tech_stack", "idea_chat", "repo_select",
+        "plan_review",
     ]
 
 
@@ -551,6 +565,7 @@ async def test_plan_source_import_advances_to_import_artifact_step(tmp_db):
     assert body["currentStep"] == "import_artifact"
     assert [s["id"] for s in body["steps"]] == [
         "github_connect", "profile", "purpose", "tech_stack", "import_artifact", "repo_select",
+        "plan_review",
     ]
 
 
@@ -568,7 +583,10 @@ async def test_repo_select_before_project_exists_only_sets_session(tmp_db):
             )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["repo"] == {"selected": "octocat/hello-world", "skipped": False, "available": False}
+    assert body["repo"] == {
+        "selected": "octocat/hello-world", "skipped": False, "available": False,
+        "canCreate": False, "ownerLogin": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -646,7 +664,10 @@ async def test_repo_select_required_when_github_connected(tmp_db):
         async with _client() as client:
             resp = await client.get("/api/onboarding/v2/state", headers=AUTH)
     body = resp.json()
-    assert body["repo"] == {"selected": None, "skipped": False, "available": True}
+    assert body["repo"] == {
+        "selected": None, "skipped": False, "available": True,
+        "canCreate": False, "ownerLogin": "octocat",
+    }
     repo_step = next(s for s in body["steps"] if s["id"] == "repo_select")
     assert repo_step["status"] != "complete"
 
@@ -718,3 +739,250 @@ async def test_complete_still_finishes_onboarding_when_generation_fails(tmp_db):
         async with _client() as client:
             state = (await client.get("/api/onboarding/v2/state", headers=AUTH)).json()
     assert state["onboardingCompleted"] is True
+
+
+# ─── plan review (plan_review flag) ─────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_plan_draft_generates_project_for_chat_path(tmp_db):
+    """On the chat path the roadmap is now drafted here (moved out of
+    /complete), so the founder can review it. State exposes the new projectId
+    and the plan_review step."""
+    org_id, team_id = await _seed_org_and_team()
+    await _complete_profile_and_chat(
+        org_id, team_id, {"projectName": "Draft Co", "problemStatement": "Real"},
+    )
+    fake_groq = _fake_groq({
+        "projectName": "Draft Co",
+        "milestones": [{"title": "Kickoff", "tasks": [{"title": "Set up repo", "dayOffset": 0}]}],
+    })
+
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake_groq):
+        async with _client() as client:
+            resp = await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)
+            assert resp.status_code == 200
+            project_id = resp.json()["projectId"]
+            assert project_id is not None
+
+            state = (await client.get("/api/onboarding/v2/state", headers=AUTH)).json()
+    assert state["projectId"] == project_id
+    assert state["currentStep"] == "plan_review"
+    assert state["planReview"] == {"confirmed": False}
+
+
+@pytest.mark.asyncio
+async def test_plan_draft_is_idempotent(tmp_db):
+    """A second draft returns the same project without regenerating."""
+    org_id, team_id = await _seed_org_and_team()
+    await _complete_profile_and_chat(org_id, team_id, {"projectName": "Draft Co"})
+    fake_groq = _fake_groq({
+        "projectName": "Draft Co",
+        "milestones": [{"title": "M", "tasks": [{"title": "T", "dayOffset": 0}]}],
+    })
+
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake_groq):
+        async with _client() as client:
+            first = (await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)).json()
+            second = (await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)).json()
+    assert first["projectId"] == second["projectId"]
+    assert fake_groq.chat.completions.create.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_plan_draft_502_when_generation_fails(tmp_db):
+    """Unlike /complete's best-effort generation, /plan/draft surfaces a
+    failure as 502 so the review UI can offer 'continue anyway'."""
+    org_id, team_id = await _seed_org_and_team()
+    await _complete_profile_and_chat(org_id, team_id, {"projectName": "Draft Co"})
+    fake_groq = _fake_groq(tool_calls=[])  # no tool call -> RuntimeError inside
+
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake_groq):
+        async with _client() as client:
+            resp = await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)
+    assert resp.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_plan_draft_409_when_brief_incomplete(tmp_db):
+    """No completed brief means nothing to draft from."""
+    await _seed_org_and_team()
+    with _patch_clerk():
+        async with _client() as client:
+            await client.post("/api/onboarding/v2/github/skip", headers=AUTH)
+            resp = await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_plan_confirm_completes_step_and_advances_to_done(tmp_db):
+    """Confirm marks the drafted plan accepted; the flow advances to done."""
+    org_id, team_id = await _seed_org_and_team()
+    await _complete_profile_and_chat(org_id, team_id, {"projectName": "Draft Co"})
+    fake_groq = _fake_groq({
+        "projectName": "Draft Co",
+        "milestones": [{"title": "M", "tasks": [{"title": "T", "dayOffset": 0}]}],
+    })
+
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake_groq):
+        async with _client() as client:
+            await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)
+            resp = await client.post("/api/onboarding/v2/plan/confirm", headers=AUTH)
+    body = resp.json()
+    assert body["planReview"] == {"confirmed": True}
+    assert body["currentStep"] == "done"
+    review_step = next(s for s in body["steps"] if s["id"] == "plan_review")
+    assert review_step["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_plan_confirm_works_without_a_draft(tmp_db):
+    """The 'continue anyway' path: confirm is safe even if drafting failed and
+    no project exists — it just advances the flow."""
+    org_id, team_id = await _seed_org_and_team()
+    await _complete_profile_and_chat(org_id, team_id, {"projectName": "Draft Co"})
+
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.post("/api/onboarding/v2/plan/confirm", headers=AUTH)
+    body = resp.json()
+    assert body["planReview"] == {"confirmed": True}
+    assert body["projectId"] is None
+    assert body["currentStep"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_plan_endpoints_404_when_flag_off(tmp_db):
+    await _seed_org_and_team()
+    with patch("src.config.Settings.is_feature_enabled", return_value=False):
+        with _patch_clerk():
+            async with _client() as client:
+                draft = await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)
+                confirm = await client.post("/api/onboarding/v2/plan/confirm", headers=AUTH)
+    assert draft.status_code == 404
+    assert confirm.status_code == 404
+
+
+# ─── repo create (repo_create flag) ─────────────────────────────────────────────
+async def _seed_connection(org_id, account_type="Organization", login="octo-org"):
+    """Seed an active GitHub connection with a non-expired token (so
+    _get_valid_access_token returns it without a network refresh)."""
+    from datetime import datetime, timedelta
+    from src.database import get_db
+    from src.models.github_connection import GithubConnection
+    from src.services.encryption import encrypt
+
+    async for db in app.dependency_overrides[get_db]():
+        db.add(GithubConnection(
+            organization_id=org_id,
+            installation_id="inst_1",
+            github_user_id="42",
+            github_login=login,
+            account_type=account_type,
+            encrypted_access_token=encrypt("tok"),
+            token_expires_at=datetime.utcnow() + timedelta(hours=1),
+            is_active=True,
+        ))
+        await db.commit()
+        break
+
+
+def _fake_github_client(full_name="octo-org/new-repo"):
+    return SimpleNamespace(create_repo=AsyncMock(return_value={"full_name": full_name}))
+
+
+@pytest.mark.asyncio
+async def test_state_exposes_can_create_for_org_install(tmp_db):
+    org_id, _ = await _seed_org_and_team()
+    await _seed_connection(org_id, account_type="Organization", login="octo-org")
+    with _patch_clerk():
+        async with _client() as client:
+            body = (await client.get("/api/onboarding/v2/state", headers=AUTH)).json()
+    assert body["repo"]["canCreate"] is True
+    assert body["repo"]["ownerLogin"] == "octo-org"
+
+
+@pytest.mark.asyncio
+async def test_state_can_create_false_for_personal_install(tmp_db):
+    org_id, _ = await _seed_org_and_team()
+    await _seed_connection(org_id, account_type="User", login="octocat")
+    with _patch_clerk():
+        async with _client() as client:
+            body = (await client.get("/api/onboarding/v2/state", headers=AUTH)).json()
+    assert body["repo"]["canCreate"] is False
+    assert body["repo"]["ownerLogin"] == "octocat"
+
+
+@pytest.mark.asyncio
+async def test_repo_create_succeeds_for_org_install(tmp_db):
+    org_id, _ = await _seed_org_and_team()
+    await _seed_connection(org_id, account_type="Organization", login="octo-org")
+    fake = _fake_github_client("octo-org/new-repo")
+
+    with _patch_clerk(), patch("src.routers.onboarding_v2.GithubClient", return_value=fake):
+        async with _client() as client:
+            resp = await client.post(
+                "/api/onboarding/v2/repo/create",
+                json={"name": "new-repo", "private": True},
+                headers=AUTH,
+            )
+    assert resp.status_code == 200
+    assert resp.json()["repo"]["selected"] == "octo-org/new-repo"
+    fake.create_repo.assert_awaited_once_with("octo-org", "new-repo", True)
+
+
+@pytest.mark.asyncio
+async def test_repo_create_rejected_for_personal_install(tmp_db):
+    """Personal-account installation tokens can't create repos — 422, and the
+    GitHub client is never called."""
+    org_id, _ = await _seed_org_and_team()
+    await _seed_connection(org_id, account_type="User", login="octocat")
+
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.post(
+                "/api/onboarding/v2/repo/create",
+                json={"name": "new-repo", "private": True},
+                headers=AUTH,
+            )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "repo_create_requires_org_install"
+
+
+@pytest.mark.asyncio
+async def test_repo_create_409_without_connection(tmp_db):
+    await _seed_org_and_team()
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.post(
+                "/api/onboarding/v2/repo/create",
+                json={"name": "new-repo", "private": True},
+                headers=AUTH,
+            )
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_repo_create_rejects_invalid_name(tmp_db):
+    org_id, _ = await _seed_org_and_team()
+    await _seed_connection(org_id, account_type="Organization")
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.post(
+                "/api/onboarding/v2/repo/create",
+                json={"name": "bad name!", "private": True},
+                headers=AUTH,
+            )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_repo_create_404_when_flag_off(tmp_db):
+    await _seed_org_and_team()
+    with patch("src.config.Settings.is_feature_enabled", return_value=False):
+        with _patch_clerk():
+            async with _client() as client:
+                resp = await client.post(
+                    "/api/onboarding/v2/repo/create",
+                    json={"name": "new-repo", "private": True},
+                    headers=AUTH,
+                )
+    assert resp.status_code == 404

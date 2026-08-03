@@ -25,6 +25,7 @@ import re
 import uuid
 from datetime import datetime
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator, model_validator
@@ -34,7 +35,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.auth import get_current_user_id, get_current_org_id
 from src.config import settings
 from src.database import get_db
-from src.integrations.github.router import get_active_connection
+from src.integrations.github.client import GithubClient
+from src.integrations.github.router import _get_valid_access_token, get_active_connection
 from src.models.developer import Developer
 from src.models.github_connection import GithubConnection
 from src.models.onboarding_session import OnboardingMessage, OnboardingSession
@@ -66,6 +68,12 @@ STEP_IMPORT_ARTIFACT = "import_artifact"
 # New, genuinely separate step after build_plan — skippable, mirrors
 # github_connect (see docs/plans/2026-07-20-import-artifacts.md).
 STEP_REPO_SELECT = "repo_select"
+# Gated behind the plan_review flag — the last step before "done". The
+# founder reviews (and can regenerate) the drafted roadmap before it's
+# committed, instead of it being generated silently at POST /complete. Only
+# inserted into _build_state's step list when the flag is on, so sessions
+# started while it's off finish exactly as before.
+STEP_PLAN_REVIEW = "plan_review"
 
 PROJECT_PURPOSES = ("hobby", "startup", "learning")
 PLAN_SOURCES = ("chat", "import")
@@ -201,6 +209,25 @@ async def _build_state(
     repo_skipped = bool(session and session.repo_select_skipped_at)
     repo_done = repo_selected or repo_skipped or not repo_available
 
+    # The project drafted for this session, if any. On the chat path it doesn't
+    # exist until the plan-review step drafts it (POST /plan/draft) or, with the
+    # step off, until POST /complete; on the import path it already exists.
+    project = None
+    if session:
+        project = await db.scalar(
+            select(Project).where(Project.onboarding_session_id == session.id)
+        )
+    plan_review_enabled = settings.is_feature_enabled("plan_review")
+    plan_confirmed = bool(session and session.plan_confirmed_at)
+
+    # API repo-creation is only possible on Organization installs (see
+    # create_repo / integrations/github/client.create_repo). Personal-account
+    # installs fall back to connect-only. Gated behind the repo_create flag.
+    repo_create_enabled = settings.is_feature_enabled("repo_create")
+    can_create_repo = (
+        repo_create_enabled and bool(connection) and connection.account_type == "Organization"
+    )
+
     message_count = 0
     if session:
         message_count = (
@@ -219,6 +246,7 @@ async def _build_state(
         *([(STEP_TECH_STACK, tech_stack_done, False)] if tech_stack_step_enabled else []),
         (fourth_step_id, chat_done, False),
         (STEP_REPO_SELECT, repo_done, True),
+        *([(STEP_PLAN_REVIEW, plan_confirmed, False)] if plan_review_enabled else []),
     ]
     steps = []
     current_assigned = False
@@ -271,6 +299,16 @@ async def _build_state(
             "selected": session.selected_github_repo_full_name if session else None,
             "skipped": repo_skipped,
             "available": repo_available,
+            # Whether the chat path can offer "create a new repo" (org install
+            # + flag on), and the org login repos would be created under.
+            "canCreate": can_create_repo,
+            "ownerLogin": connection.github_login if connection else None,
+        },
+        # The drafted project's id, so the plan-review step knows which
+        # roadmap to fetch/regenerate. Null until a project exists.
+        "projectId": str(project.id) if project else None,
+        "planReview": {
+            "confirmed": plan_confirmed,
         },
         "onboardingCompleted": org.onboarding_completed_at is not None,
     }
@@ -407,6 +445,16 @@ class TechStackRequest(BaseModel):
 
 def _require_tech_stack_step_enabled() -> None:
     if not settings.is_feature_enabled("experimental.tech_stack_step"):
+        raise HTTPException(status_code=404, detail="not_found")
+
+
+def _require_plan_review_enabled() -> None:
+    if not settings.is_feature_enabled("plan_review"):
+        raise HTTPException(status_code=404, detail="not_found")
+
+
+def _require_repo_create_enabled() -> None:
+    if not settings.is_feature_enabled("repo_create"):
         raise HTTPException(status_code=404, detail="not_found")
 
 
@@ -751,5 +799,129 @@ async def skip_repo(
     session = await _get_or_create_session(org, user_id, db)
     if session.repo_select_skipped_at is None:
         session.repo_select_skipped_at = datetime.utcnow()
+    await db.commit()
+    return await _build_state(org, user_id, db)
+
+
+class RepoCreateRequest(BaseModel):
+    name: str
+    private: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def _name_valid(cls, v: str) -> str:
+        v = v.strip()
+        if not v or len(v) > 100:
+            raise ValueError("name must be 1-100 characters")
+        if not re.match(r"^[A-Za-z0-9._-]+$", v):
+            raise ValueError("name may only contain letters, numbers, '.', '_' and '-'")
+        return v
+
+
+@router.post("/repo/create", dependencies=[Depends(_require_repo_create_enabled)])
+async def create_repo(
+    body: RepoCreateRequest,
+    user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new GitHub repo and select it for the project (greenfield chat
+    path). Only works on Organization installs — a personal-account
+    installation token can't create repos, so those are rejected with 422 and
+    the UI falls back to connect-only (see the repo.canCreate flag in
+    _build_state, and github_app_repo_create_constraint). Stamps the new repo
+    onto the session/Project exactly like PUT /repo.
+    """
+    org = await _get_org(clerk_org_id, db)
+    connection = await get_active_connection(org, db)
+    if connection is None or connection.installation_id is None:
+        raise HTTPException(status_code=409, detail="github_not_connected")
+    if connection.account_type != "Organization":
+        raise HTTPException(status_code=422, detail="repo_create_requires_org_install")
+
+    session = await _get_or_create_session(org, user_id, db)
+    token = await _get_valid_access_token(connection, db)
+    client = GithubClient(token)
+    try:
+        repo = await client.create_repo(connection.github_login, body.name, body.private)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 422:
+            # Name already taken / invalid on GitHub's side.
+            raise HTTPException(status_code=422, detail="repo_name_unavailable")
+        raise HTTPException(status_code=502, detail="github_repo_create_failed")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="github_repo_create_failed")
+
+    full_name = repo["full_name"]
+    session.selected_github_repo_full_name = full_name
+    project = await db.scalar(
+        select(Project).where(Project.onboarding_session_id == session.id)
+    )
+    if project is not None:
+        project.github_repo_full_name = full_name
+
+    await db.commit()
+    return await _build_state(org, user_id, db)
+
+
+@router.post("/plan/draft", dependencies=[Depends(_require_plan_review_enabled)])
+async def draft_plan(
+    user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ensure a drafted roadmap exists so the plan-review step can show it, and
+    return its projectId.
+
+    Idempotent. On the import path the Project already exists (created by
+    /import/apply), so this is a no-op lookup. On the chat path no Project
+    exists yet, so this is where generation actually happens — moved out of
+    POST /complete so the founder reviews the plan *before* it's committed.
+
+    Unlike /complete's best-effort generation, a failure here raises 502: the
+    review UI surfaces it and offers "continue anyway", which falls through to
+    /complete's own generation as a second chance (and the project-hub fallback
+    if that also fails). The flow still never bricks.
+    """
+    org = await _get_org(clerk_org_id, db)
+    session = await _get_session(org, db)
+    if session is None:
+        raise HTTPException(status_code=409, detail="no_session")
+
+    project = await db.scalar(
+        select(Project).where(Project.onboarding_session_id == session.id)
+    )
+    if project is None:
+        if session.status != "completed" or not session.project_brief:
+            raise HTTPException(status_code=409, detail="brief_incomplete")
+        try:
+            team = await _resolve_team(org, db)
+            api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
+            project = await roadmap_generator.generate_roadmap(session, team, api_key, db)
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception(
+                "[onboarding] plan draft generation failed for session %s", session.id
+            )
+            await db.rollback()
+            raise HTTPException(status_code=502, detail="roadmap_generation_failed")
+
+    return {"projectId": str(project.id)}
+
+
+@router.post("/plan/confirm", dependencies=[Depends(_require_plan_review_enabled)])
+async def confirm_plan(
+    user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark the drafted roadmap accepted, completing the plan-review step. Safe
+    to call even if the draft failed (the "continue anyway" path) — it just
+    advances the flow to `done`."""
+    org = await _get_org(clerk_org_id, db)
+    session = await _get_or_create_session(org, user_id, db)
+    if session.plan_confirmed_at is None:
+        session.plan_confirmed_at = datetime.utcnow()
     await db.commit()
     return await _build_state(org, user_id, db)

@@ -62,6 +62,15 @@ export function useOnboardingState() {
     onSuccess: setState,
   })
 
+  const draftPlan = useMutation({
+    mutationFn: () => api.draftPlan(),
+  })
+
+  const confirmPlan = useMutation({
+    mutationFn: () => api.confirmPlan(),
+    onSuccess: setState,
+  })
+
   const complete = useMutation({
     mutationFn: () => api.completeOnboarding(),
     onSuccess: () => {
@@ -83,6 +92,8 @@ export function useOnboardingState() {
     savePurpose,
     saveTechStack,
     savePlanSource,
+    draftPlan,
+    confirmPlan,
     complete,
   }
 }

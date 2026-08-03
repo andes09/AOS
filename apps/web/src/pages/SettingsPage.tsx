@@ -28,10 +28,6 @@ interface InvitationItem {
 }
 
 export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
-  const [anthropicKey, setAnthropicKey] = useState('')
-  const [anthropicConfigured, setAnthropicConfigured] = useState<boolean | null>(null)
-  const [anthropicSaving, setAnthropicSaving] = useState(false)
-  const [anthropicMessage, setAnthropicMessage] = useState<string | null>(null)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState('lead')
   const [inviteSending, setInviteSending] = useState(false)
@@ -57,15 +53,6 @@ export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'Failed to delete account')
       setDeleting(false)
-    }
-  }
-
-  async function fetchAnthropicStatus() {
-    try {
-      const data = await get<{ configured: boolean }>('/api/settings/anthropic-key/status')
-      setAnthropicConfigured(data.configured)
-    } catch {
-      setAnthropicConfigured(false)
     }
   }
 
@@ -113,25 +100,8 @@ export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
   }
 
   useEffect(() => {
-    fetchAnthropicStatus()
     fetchInvitations()
   }, [])
-
-  async function handleSaveAnthropicKey() {
-    if (!anthropicKey.trim()) return
-    setAnthropicSaving(true)
-    setAnthropicMessage(null)
-    try {
-      await post('/api/settings/anthropic-key', { key: anthropicKey.trim() })
-      setAnthropicMessage('API key saved.')
-      setAnthropicKey('')
-      setAnthropicConfigured(true)
-    } catch (err) {
-      setAnthropicMessage(err instanceof Error ? err.message : 'Failed to save key')
-    } finally {
-      setAnthropicSaving(false)
-    }
-  }
 
   const sectionGap = { marginTop: 16 }
 
@@ -145,54 +115,9 @@ export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
         </h1>
       )}
 
-      {/* Anthropic API Key */}
-      <Card>
-        <CardHeader>
-          <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
-            Anthropic API Key
-          </span>
-          {anthropicConfigured !== null && (
-            <Badge variant={anthropicConfigured ? 'success' : 'default'}>
-              {anthropicConfigured ? 'Configured' : 'Not configured'}
-            </Badge>
-          )}
-        </CardHeader>
-        <CardBody>
-          <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: '0 0 12px' }}>
-            Required for Sprint Planning and Retro Prep.
-          </p>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Input
-              type="password"
-              placeholder="sk-ant-..."
-              value={anthropicKey}
-              onChange={e => setAnthropicKey(e.target.value)}
-              containerStyle={{ flex: 1 }}
-            />
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={handleSaveAnthropicKey}
-              disabled={anthropicSaving || !anthropicKey.trim()}
-            >
-              {anthropicSaving ? 'Saving...' : 'Save Key'}
-            </Button>
-          </div>
-          {anthropicMessage && (
-            <div style={{
-              color: anthropicMessage === 'API key saved.' ? 'var(--color-success)' : 'var(--color-danger)',
-              fontSize: 'var(--text-sm)',
-              marginTop: 8,
-            }}>
-              {anthropicMessage}
-            </div>
-          )}
-        </CardBody>
-      </Card>
-
       {/* Invite Team Members */}
       {isLead && (
-        <Card style={sectionGap}>
+        <Card>
           <CardHeader>
             <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
               Invite Team Members
@@ -280,7 +205,7 @@ export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
       )}
 
       {/* Delete Account */}
-      <Card style={{ ...sectionGap, borderColor: 'var(--color-danger)' }}>
+      <Card style={{ ...(isLead ? sectionGap : {}), borderColor: 'var(--color-danger)' }}>
         <CardHeader>
           <span style={{ color: 'var(--color-danger)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
             Delete Account

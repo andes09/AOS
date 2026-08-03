@@ -141,3 +141,74 @@ async def test_delete_account_wipes_onboarding_and_github_rows(fk_enforced_db):
             await db.scalar(select(GithubConnection).where(GithubConnection.organization_id == org_id))
         ) is None
         break
+
+
+async def _seed_project_and_usage_rows(org_id, team_id):
+    from src.models.onboarding_session import OnboardingSession
+    from src.models.project import Project
+    from src.models.milestone import Milestone
+    from src.models.task import Task
+    from src.models.ai_usage_event import AIUsageEvent
+    from src.models.github_activity_event import GithubActivityEvent
+
+    async for db in app.dependency_overrides[get_db]():
+        session = OnboardingSession(organization_id=org_id)
+        db.add(session)
+        await db.flush()
+        project = Project(team_id=team_id, onboarding_session_id=session.id, name="Test Project")
+        db.add(project)
+        await db.flush()
+        milestone = Milestone(project_id=project.id, title="M1", sort_order=0)
+        db.add(milestone)
+        await db.flush()
+        db.add(Task(milestone_id=milestone.id, title="T1", sort_order=0))
+        # Team-scoped usage row.
+        db.add(AIUsageEvent(
+            organization_id=org_id, team_id=team_id, provider="anthropic",
+            operation="roadmap_generate", cost_usd=0.01,
+        ))
+        # Org-level usage row with no team (e.g. platform-level call).
+        db.add(AIUsageEvent(
+            organization_id=org_id, team_id=None, provider="groq",
+            operation="idea_interview", cost_usd=0.02,
+        ))
+        db.add(GithubActivityEvent(
+            organization_id=org_id, repo_full_name="octocat/hello-world",
+            event_type="push", external_id="sha123", occurred_at=__import__("datetime").datetime.utcnow(),
+        ))
+        await db.commit()
+        return project.id
+
+
+@pytest.mark.asyncio
+async def test_delete_account_wipes_project_and_usage_rows(fk_enforced_db):
+    """Regression test: projects/ai_usage_events/github_activity_events all FK to
+    teams.id or organizations.id without ondelete CASCADE, and weren't cleaned up
+    by _wipe_team_data or the org teardown — every real account (which always has
+    a project) hit a Postgres FK violation and a 500 on DELETE /api/users/me.
+    """
+    org_id, team_id, _ = await _seed_org_team_developer()
+    project_id = await _seed_project_and_usage_rows(org_id, team_id)
+
+    with _patch_clerk(), patch("src.auth._clerk.users.delete_async", new=AsyncMock()):
+        async with _client() as client:
+            resp = await client.delete("/api/users/me", headers=AUTH)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted": True}
+
+    from src.models.project import Project
+    from src.models.milestone import Milestone
+    from src.models.ai_usage_event import AIUsageEvent
+    from src.models.github_activity_event import GithubActivityEvent
+
+    async for db in app.dependency_overrides[get_db]():
+        assert (await db.scalar(select(Project).where(Project.id == project_id))) is None
+        assert (await db.scalar(select(Milestone).where(Milestone.project_id == project_id))) is None
+        assert (
+            await db.scalar(select(AIUsageEvent).where(AIUsageEvent.organization_id == org_id))
+        ) is None
+        assert (
+            await db.scalar(select(GithubActivityEvent).where(GithubActivityEvent.organization_id == org_id))
+        ) is None
+        break

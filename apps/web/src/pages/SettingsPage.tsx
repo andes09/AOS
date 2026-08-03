@@ -100,8 +100,10 @@ export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
   }
 
   useEffect(() => {
-    fetchInvitations()
-  }, [])
+    if (isLead) {
+      fetchInvitations()
+    }
+  }, [isLead])
 
   const sectionGap = { marginTop: 16 }
 

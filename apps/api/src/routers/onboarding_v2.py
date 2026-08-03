@@ -122,6 +122,23 @@ async def _resolve_team(org: Organization, db: AsyncSession) -> Team:
     return team
 
 
+def _maybe_prewarm_roadmap(session: OnboardingSession) -> None:
+    """Fire a background roadmap generation the moment the interview
+    completes, so POST /plan/draft usually finds it already sitting there
+    instead of paying for the Groq call on the review step's critical path
+    (see services/roadmap_generator.prewarm_roadmap). Best-effort: an enqueue
+    failure (e.g. Redis briefly down) must never break onboarding.
+    """
+    if not settings.is_feature_enabled("plan_review") or not session.project_brief:
+        return
+    try:
+        roadmap_generator.prewarm_roadmap.delay(str(session.id))
+    except Exception:
+        logger.exception(
+            "[onboarding] failed to enqueue roadmap prewarm for session %s", session.id
+        )
+
+
 async def _get_or_create_session(
     org: Organization, user_id: str, db: AsyncSession
 ) -> OnboardingSession:
@@ -622,6 +639,8 @@ async def _chat_event_stream(
                 "messageId": result["message_id"],
                 "status": result["status"],
             }))
+            if result["status"] == "completed":
+                _maybe_prewarm_roadmap(session)
         except Exception as e:
             logger.exception("[idea-chat] turn failed for session %s", session.id)
             await queue.put(("error", {"message": str(e) or "Interview turn failed"}))
@@ -690,6 +709,7 @@ async def complete_chat(
         session.status = "completed"
         session.completed_at = datetime.utcnow()
         await db.commit()
+        _maybe_prewarm_roadmap(session)
     return await _build_state(org, user_id, db)
 
 
@@ -897,7 +917,7 @@ async def draft_plan(
         try:
             team = await _resolve_team(org, db)
             api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
-            project = await roadmap_generator.generate_roadmap(session, team, api_key, db)
+            project = await roadmap_generator.generate_roadmap_once(session, team, api_key, db)
         except HTTPException:
             raise
         except Exception:

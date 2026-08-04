@@ -83,6 +83,11 @@ export function PlanReviewStep() {
   // the generation (see _plan_draft_event_stream): nothing is wrong with the
   // brief, so the step offers a retry rather than only "continue anyway".
   const rateLimited = draftFailed && (draftPlan.error as Error | null)?.message === 'rate_limited'
+  // Landed here with a "completed" session but an empty brief — normally
+  // prevented client-side (IdeaChatStep gates "finish up" on having some
+  // brief content), but still reachable if extraction failed on every turn.
+  // See POST /plan/draft's brief_incomplete 409.
+  const briefIncomplete = draftFailed && (draftPlan.error as Error | null)?.message === 'brief_incomplete'
   const busy = confirmPlan.isPending
 
   // Draft in flight, or drafted but roadmap still loading.
@@ -126,7 +131,9 @@ export function PlanReviewStep() {
           <Alert>
             {rateLimited
               ? "Omada's planner is rate-limited right now — nothing's wrong with your brief. Give it a moment and try again, or continue and we'll draft it as you finish up."
-              : "We couldn't draft your roadmap just now. You can continue — we'll try again as you finish up, and you can always generate it from your project."}
+              : briefIncomplete
+                ? "We didn't get enough from the interview to draft a plan. Go back and share a bit more about what you're building, or continue and we'll draft it once there's enough to work with."
+                : "We couldn't draft your roadmap just now. You can continue — we'll try again as you finish up, and you can always generate it from your project."}
           </Alert>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, alignSelf: 'flex-start' }}>
             {rateLimited && (

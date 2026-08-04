@@ -77,13 +77,24 @@ export function IdeaChatStep() {
         <BriefPanel brief={chat.brief} complete={chat.briefComplete} />
       </div>
 
-      {chat.status !== 'completed' && !chat.awaitingConfirmation && chat.messages.length > 2 && (
+      {chat.status !== 'completed' && !chat.awaitingConfirmation && chat.messages.length > 2 && hasBriefContent(chat.brief) && (
         <div>
           <Btn variant="outline" size="sm" onClick={() => void chat.complete()}>That's enough — finish up</Btn>
         </div>
       )}
     </div>
   )
+}
+
+// Ending the interview early ("finish up") sets the session's status to
+// "completed" without any server-side check that a brief actually exists —
+// that override is intentional (see useIdeaChat.complete). Gating the button
+// here on some real extracted content stops a founder from producing a
+// completed session with an empty brief, which /plan/draft can't generate
+// from (see PlanReviewStep's "brief_incomplete" case).
+function hasBriefContent(brief: ProjectBrief | null): boolean {
+  if (!brief) return false
+  return Object.values(brief).some(v => (Array.isArray(v) ? v.length > 0 : !!v))
 }
 
 function Bubble({ role, text, busy }: { role: 'user' | 'assistant'; text: string; busy?: boolean }) {

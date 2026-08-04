@@ -28,7 +28,7 @@ from src.models.task import Task
 from src.models.team import Team
 from src.services import roadmap_generator
 from src.services.cost_tracker import record_generation_cost
-from src.services.roadmap_shapes import resolve_task_dependencies
+from src.services.roadmap_shapes import record_plan_quality, resolve_task_dependencies
 from src.services.task_ids import allocate_short_ids
 
 logger = logging.getLogger(__name__)
@@ -262,9 +262,13 @@ async def adjust_roadmap(
         for t in m["tasks"]:
             edges_by_key[t.get("key")] = t.get("depends_on") or []
 
-    resolve_task_dependencies(
+    resolution = resolve_task_dependencies(
         tasks_by_key, edges_by_key, existing_tasks_by_id=existing_tasks_by_id, strict=False
     )
+    # Covers only the todo tasks this adjustment rebuilt — done/in_progress
+    # history is never re-resolved, so these counts describe the re-plan, not
+    # the project's whole graph.
+    record_plan_quality(project, resolution, "adjust")
 
     await record_generation_cost(
         "roadmap_adjust",

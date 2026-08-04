@@ -24,6 +24,7 @@ PATCH  /api/projects/{project_id}/roadmap/tasks/{task_id}              → updat
                                                                           schedule / assignee / sort order
 DELETE /api/projects/{project_id}/roadmap/tasks/{task_id}              → delete a task
 GET    /api/projects/{project_id}/roadmap/status                       → readiness check for the planner's badge
+GET    /api/projects/{project_id}/roadmap/quality                      → plan-quality telemetry for the task dependency graph
 GET    /api/projects/{project_id}/roadmap/chat                         → refine-chat transcript
 POST   /api/projects/{project_id}/roadmap/chat/message                 → refine-chat turn (SSE)
 """
@@ -46,7 +47,13 @@ from src.dependencies import mark_developer_active
 from src.models.onboarding_session import OnboardingMessage
 from src.models.task import Task, TaskStatus
 from src.routers.project_common import _get_org, _owned_project
-from src.services import activity, idea_interview, roadmap_adjuster, roadmap_generator
+from src.services import (
+    activity,
+    idea_interview,
+    plan_quality,
+    roadmap_adjuster,
+    roadmap_generator,
+)
 from src.services import roadmap_service as svc
 from src.services.task_ids import allocate_short_id
 
@@ -500,6 +507,24 @@ async def get_status(
     org = await _get_org(clerk_org_id, db)
     project = await _owned_project(project_id, org, db)
     return svc.get_roadmap_status(project)
+
+
+@router.get("/quality")
+async def get_quality(
+    project_id: uuid.UUID,
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Plan-quality telemetry for this project's task dependency graph.
+
+    `generation` is how faithfully the planner's proposed graph was built (read
+    from the stored counts — a generation-time fact); `shape` is the structure
+    of the graph as it stands right now (recomputed, so it tracks edits since).
+    See services/plan_quality.py.
+    """
+    org = await _get_org(clerk_org_id, db)
+    project = await _owned_project(project_id, org, db)
+    return await plan_quality.compute_plan_quality(project.id, db)
 
 
 @router.get("/chat")

@@ -304,6 +304,7 @@ async def apply_import(
         # dangling dependsOn references into the rejected ones — drop them
         # rather than failing the whole import.
         strict=False,
+        source="import",
     )
 
     # Not reachable through normal step order (repo-select comes after

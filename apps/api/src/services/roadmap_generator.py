@@ -47,6 +47,7 @@ from src.services.roadmap_shapes import (
     _persist_milestones,
     _weekday_after,
     create_project_with_milestones,
+    record_plan_quality,
     resolve_task_dependencies,
     validated_milestone as _validated_milestone,
     validated_milestones as _validated_milestones,
@@ -463,7 +464,7 @@ async def regenerate_roadmap(
     if data.get("summary"):
         project.summary = data["summary"]
     org = await db.get(Organization, team.organization_id)
-    await _persist_milestones(project, milestones, org, db)
+    await _persist_milestones(project, milestones, org, db, source="regenerate")
 
     await record_generation_cost(
         "roadmap_regenerate",
@@ -533,7 +534,13 @@ async def regenerate_milestone(
     short_ids = await allocate_short_ids(org, len(new["tasks"]), db)
     tasks_by_key = _add_tasks(milestone.id, new["tasks"], date.today(), short_ids, db)
     edges_by_key = {t.get("key"): t.get("depends_on") or [] for t in new["tasks"]}
-    resolve_task_dependencies(tasks_by_key, edges_by_key, strict=True)
+    resolution = resolve_task_dependencies(tasks_by_key, edges_by_key, strict=True)
+    # Scoped to this milestone's edges only — _MILESTONE_TOOL can't express a
+    # cross-milestone dependency (see this function's docstring), so the counts
+    # describe the re-planned milestone, not the whole project.
+    project = await db.scalar(select(Project).where(Project.id == milestone.project_id))
+    if project is not None:
+        record_plan_quality(project, resolution, "regenerate_milestone")
 
     await record_generation_cost(
         "roadmap_regenerate_milestone",

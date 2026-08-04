@@ -238,6 +238,7 @@ export function createOnboardingApi(getToken: GetToken, apiUrl: string = DEFAULT
       reply: string
       brief: ProjectBrief | null
       briefComplete: boolean
+      awaitingConfirmation: boolean
       status: ChatStatus
     }> {
       const token = await getToken()
@@ -265,6 +266,7 @@ export function createOnboardingApi(getToken: GetToken, apiUrl: string = DEFAULT
       let reply = ''
       let brief: ProjectBrief | null = null
       let briefComplete = false
+      let awaitingConfirmation = false
       let status: ChatStatus = 'in_progress'
       let streamError: string | null = null
 
@@ -291,9 +293,15 @@ export function createOnboardingApi(getToken: GetToken, apiUrl: string = DEFAULT
               reply += text
               handlers.onToken?.(text)
             } else if (eventLine === 'brief') {
-              const d = data as { brief: ProjectBrief; missingFields: string[]; briefComplete: boolean }
+              const d = data as {
+                brief: ProjectBrief
+                missingFields: string[]
+                briefComplete: boolean
+                awaitingConfirmation: boolean
+              }
               brief = d.brief
               briefComplete = d.briefComplete
+              awaitingConfirmation = d.awaitingConfirmation
               handlers.onBrief?.(d)
             } else if (eventLine === 'done') {
               const d = data as { messageId: string; status: ChatStatus }
@@ -312,7 +320,7 @@ export function createOnboardingApi(getToken: GetToken, apiUrl: string = DEFAULT
         handlers.onError?.(streamError)
         throw new Error(streamError)
       }
-      return { reply, brief, briefComplete, status }
+      return { reply, brief, briefComplete, awaitingConfirmation, status }
     },
   }
 }

@@ -1,4 +1,6 @@
+import json
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -34,11 +36,10 @@ async def _start_chat(client, purpose="startup"):
     return await client.post("/api/onboarding/v2/chat/start", headers=AUTH)
 
 
-async def _seed_org_and_team(clerk_org_id=ORG, anthropic_key=None):
+async def _seed_org_and_team(clerk_org_id=ORG):
     from src.database import get_db
     from src.models.organization import Organization
     from src.models.team import Team
-    from src.services.encryption import encrypt
 
     async for db in app.dependency_overrides[get_db]():
         org = Organization(
@@ -47,7 +48,6 @@ async def _seed_org_and_team(clerk_org_id=ORG, anthropic_key=None):
             name="Test Org",
             slug=clerk_org_id,
             use_managed_key=False,
-            encrypted_anthropic_key=encrypt(anthropic_key) if anthropic_key else None,
         )
         db.add(org)
         await db.flush()
@@ -57,58 +57,61 @@ async def _seed_org_and_team(clerk_org_id=ORG, anthropic_key=None):
 
 
 # ---------------------------------------------------------------------------
-# Fake Anthropic client: supports messages.stream(...) and messages.create(...)
+# Fake Groq (OpenAI-compatible) client: chat.completions.create() branches on
+# `stream=True` (the conversational reply) vs. the forced-tool extraction
+# call. Each entry in `turns` covers exactly one interview turn.
 # ---------------------------------------------------------------------------
 
-class _FakeUsage:
-    input_tokens = 10
-    output_tokens = 20
-    cache_creation_input_tokens = 0
-    cache_read_input_tokens = 0
+class _FakeStreamChunks:
+    def __init__(self, tokens):
+        self._tokens = tokens
+
+    def __aiter__(self):
+        return self._gen()
+
+    async def _gen(self):
+        for t in self._tokens:
+            yield SimpleNamespace(
+                usage=None, choices=[SimpleNamespace(delta=SimpleNamespace(content=t))]
+            )
+        yield SimpleNamespace(
+            usage=SimpleNamespace(prompt_tokens=50, completion_tokens=80), choices=[]
+        )
 
 
-class _FakeStream:
-    def __init__(self, chunks):
-        self._chunks = chunks
+def _fake_groq(turns):
+    """turns: list of (reply_tokens: list[str], extraction_payload: dict | None).
 
-    async def __aenter__(self):
-        return self
+    extraction_payload=None simulates the model returning no tool call.
+    """
+    turns_iter = iter(turns)
+    pending_extraction = {}
 
-    async def __aexit__(self, *args):
-        return False
+    async def create(**kwargs):
+        if kwargs.get("stream"):
+            reply_tokens, extraction_payload = next(turns_iter)
+            pending_extraction["payload"] = extraction_payload
+            return _FakeStreamChunks(reply_tokens)
 
-    @property
-    def text_stream(self):
-        async def gen():
-            for c in self._chunks:
-                yield c
-        return gen()
+        payload = pending_extraction.get("payload")
+        tool_calls = (
+            [SimpleNamespace(
+                function=SimpleNamespace(name="update_project_brief", arguments=json.dumps(payload))
+            )]
+            if payload is not None
+            else []
+        )
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=tool_calls))],
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=20),
+        )
 
-    async def get_final_message(self):
-        msg = type("M", (), {})()
-        msg.usage = _FakeUsage()
-        return msg
-
-
-class _FakeToolBlock:
-    type = "tool_use"
-    name = "update_project_brief"
-
-    def __init__(self, payload):
-        self.input = payload
+    fake_completions = SimpleNamespace(create=create)
+    return SimpleNamespace(chat=SimpleNamespace(completions=fake_completions))
 
 
-def _fake_anthropic(reply_chunks, extraction_payload):
-    """Build a fake anthropic.AsyncAnthropic replacement."""
-    extraction_response = type("R", (), {})()
-    extraction_response.usage = _FakeUsage()
-    extraction_response.content = [_FakeToolBlock(extraction_payload)]
-
-    fake = type("FakeClient", (), {})()
-    fake.messages = type("M", (), {})()
-    fake.messages.stream = lambda **kw: _FakeStream(reply_chunks)
-    fake.messages.create = AsyncMock(return_value=extraction_response)
-    return fake
+def _patch_groq(fake):
+    return patch("src.services.idea_interview.AsyncOpenAI", return_value=fake)
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +159,14 @@ def test_system_prompt_branches_by_purpose():
     assert "HOBBY" not in base_prompt and "STARTUP" not in base_prompt
 
 
+def test_system_prompt_asks_before_declaring_done():
+    # The base prompt must ask for confirmation, not declare the interview over.
+    base_prompt = _system_prompt(None)
+    assert "anything else" in base_prompt.lower()
+    assert "still waiting on their answer" in base_prompt.lower()
+    assert "you can finish onboarding" not in base_prompt.lower()
+
+
 def test_missing_fields_tracks_required_only():
     assert "projectName" in missing_fields(None)
     full = {
@@ -167,26 +178,13 @@ def test_missing_fields_tracks_required_only():
 
 
 @pytest.mark.asyncio
-async def test_resolve_api_key_prefers_byok(tmp_db):
+async def test_resolve_api_key_uses_platform_key(tmp_db):
     from src.database import get_db
 
-    await _seed_org_and_team(anthropic_key="sk-byok")
+    await _seed_org_and_team()
     async for db in app.dependency_overrides[get_db]():
         with patch("src.services.idea_interview.settings") as mock_settings:
-            mock_settings.anthropic_api_key = "sk-platform"
-            key = await resolve_api_key(ORG, db)
-        assert key == "sk-byok"
-        break
-
-
-@pytest.mark.asyncio
-async def test_resolve_api_key_falls_back_to_platform(tmp_db):
-    from src.database import get_db
-
-    await _seed_org_and_team(anthropic_key=None)
-    async for db in app.dependency_overrides[get_db]():
-        with patch("src.services.idea_interview.settings") as mock_settings:
-            mock_settings.anthropic_api_key = "sk-platform"
+            mock_settings.groq_api_key = "sk-platform"
             key = await resolve_api_key(ORG, db)
         assert key == "sk-platform"
         break
@@ -197,10 +195,10 @@ async def test_resolve_api_key_402_when_no_key(tmp_db):
     from fastapi import HTTPException
     from src.database import get_db
 
-    await _seed_org_and_team(anthropic_key=None)
+    await _seed_org_and_team()
     async for db in app.dependency_overrides[get_db]():
         with patch("src.services.idea_interview.settings") as mock_settings:
-            mock_settings.anthropic_api_key = ""
+            mock_settings.groq_api_key = ""
             with pytest.raises(HTTPException) as exc:
                 await resolve_api_key(ORG, db)
         assert exc.value.status_code == 402
@@ -248,13 +246,13 @@ async def test_chat_message_requires_session(tmp_db):
 
 
 @pytest.mark.asyncio
-async def test_chat_message_402_without_any_key(tmp_db):
-    await _seed_org_and_team(anthropic_key=None)
+async def test_chat_message_402_without_key(tmp_db):
+    await _seed_org_and_team()
     with (
         _patch_clerk(),
         patch("src.services.idea_interview.settings") as mock_settings,
     ):
-        mock_settings.anthropic_api_key = ""
+        mock_settings.groq_api_key = ""
         async with _client() as client:
             await _start_chat(client)
             resp = await client.post(
@@ -264,33 +262,37 @@ async def test_chat_message_402_without_any_key(tmp_db):
 
 
 def _parse_sse(body: str) -> list[tuple[str, dict]]:
-    import json as _json
-
     events = []
     for block in body.strip().split("\n\n"):
         lines = block.split("\n")
         event = next(l[len("event: "):] for l in lines if l.startswith("event: "))
         data = next(l[len("data: "):] for l in lines if l.startswith("data: "))
-        events.append((event, _json.loads(data)))
+        events.append((event, json.loads(data)))
     return events
 
 
 @pytest.mark.asyncio
 async def test_chat_message_streams_tokens_brief_and_done(tmp_db):
-    await _seed_org_and_team(anthropic_key="sk-byok")
-    fake = _fake_anthropic(
-        reply_chunks=["What problem ", "does it solve?"],
-        extraction_payload={
-            "projectName": "Roadmapper",
-            "problemStatement": None,
-            "coreFeatures": ["chat onboarding"],
-            "isComplete": False,
-        },
-    )
+    await _seed_org_and_team()
+    fake = _fake_groq([
+        (
+            ["What problem ", "does it solve?"],
+            {
+                "projectName": "Roadmapper",
+                "problemStatement": None,
+                "coreFeatures": ["chat onboarding"],
+                "isComplete": False,
+            },
+        ),
+    ])
     with (
         _patch_clerk(),
-        patch("src.services.idea_interview.anthropic.AsyncAnthropic", return_value=fake),
+        patch("src.services.idea_interview.settings") as mock_settings,
+        _patch_groq(fake),
     ):
+        mock_settings.groq_api_key = "gsk-platform"
+        mock_settings.groq_base_url = "https://api.groq.com/openai/v1"
+        mock_settings.groq_model = "llama-3.3-70b-versatile"
         async with _client() as client:
             await _start_chat(client)
             resp = await client.post(
@@ -308,6 +310,7 @@ async def test_chat_message_streams_tokens_brief_and_done(tmp_db):
     brief = events[2][1]
     assert brief["brief"]["projectName"] == "Roadmapper"
     assert brief["briefComplete"] is False
+    assert brief["awaitingConfirmation"] is False
     assert "problemStatement" in brief["missingFields"]
     done = events[3][1]
     assert done["status"] == "in_progress"
@@ -320,23 +323,35 @@ async def test_chat_message_streams_tokens_brief_and_done(tmp_db):
     assert chat["messages"][2]["content"] == "What problem does it solve?"
 
 
+_FULL_BRIEF = {
+    "projectName": "Roadmapper",
+    "problemStatement": "planning is hard",
+    "targetAudience": "founders",
+    "coreFeatures": ["chat"],
+    "scope": "MVP chat",
+    "timeline": "3 months",
+}
+
+
 @pytest.mark.asyncio
-async def test_chat_completes_when_brief_complete(tmp_db):
-    await _seed_org_and_team(anthropic_key="sk-byok")
-    full_brief = {
-        "projectName": "Roadmapper",
-        "problemStatement": "planning is hard",
-        "targetAudience": "founders",
-        "coreFeatures": ["chat"],
-        "scope": "MVP chat",
-        "timeline": "3 months",
-        "isComplete": True,
-    }
-    fake = _fake_anthropic(reply_chunks=["Summary. You're all set!"], extraction_payload=full_brief)
+async def test_brief_complete_asks_for_confirmation_instead_of_finishing(tmp_db):
+    """The first turn the model judges complete must NOT end the interview —
+    it should just flip briefComplete/awaitingConfirmation and wait."""
+    await _seed_org_and_team()
+    fake = _fake_groq([
+        (
+            ["Sounds great — here's what I've got. ", "Anything else to add?"],
+            {**_FULL_BRIEF, "isComplete": True},
+        ),
+    ])
     with (
         _patch_clerk(),
-        patch("src.services.idea_interview.anthropic.AsyncAnthropic", return_value=fake),
+        patch("src.services.idea_interview.settings") as mock_settings,
+        _patch_groq(fake),
     ):
+        mock_settings.groq_api_key = "gsk-platform"
+        mock_settings.groq_base_url = "https://api.groq.com/openai/v1"
+        mock_settings.groq_model = "llama-3.3-70b-versatile"
         async with _client() as client:
             await _start_chat(client)
             resp = await client.post(
@@ -345,9 +360,52 @@ async def test_chat_completes_when_brief_complete(tmp_db):
                 headers=AUTH,
             )
             events = _parse_sse(resp.text)
-            assert events[-1][1]["status"] == "completed"
+            brief_event = next(d for e, d in events if e == "brief")
+            done_event = next(d for e, d in events if e == "done")
 
-            # Session now completed → further messages rejected, state shows done.
+            assert brief_event["briefComplete"] is True
+            assert brief_event["awaitingConfirmation"] is True
+            # Not completed yet — still waiting on the founder's answer.
+            assert done_event["status"] == "in_progress"
+
+            # The session is still open: a follow-up message is accepted.
+            state = (await client.get("/api/onboarding/v2/state", headers=AUTH)).json()
+            assert state["ideaChat"]["status"] == "in_progress"
+            assert state["ideaChat"]["briefComplete"] is True
+            assert state["ideaChat"]["awaitingConfirmation"] is True
+
+
+@pytest.mark.asyncio
+async def test_confirmation_turn_completes_when_founder_says_no(tmp_db):
+    await _seed_org_and_team()
+    fake = _fake_groq([
+        (["Anything else to add?"], {**_FULL_BRIEF, "isComplete": True}),
+        (["Great, you're all set!"], {**_FULL_BRIEF, "isComplete": True}),
+    ])
+    with (
+        _patch_clerk(),
+        patch("src.services.idea_interview.settings") as mock_settings,
+        _patch_groq(fake),
+    ):
+        mock_settings.groq_api_key = "gsk-platform"
+        mock_settings.groq_base_url = "https://api.groq.com/openai/v1"
+        mock_settings.groq_model = "llama-3.3-70b-versatile"
+        async with _client() as client:
+            await _start_chat(client)
+            await client.post(
+                "/api/onboarding/v2/chat/message",
+                json={"content": "here's everything..."},
+                headers=AUTH,
+            )
+
+            resp = await client.post(
+                "/api/onboarding/v2/chat/message", json={"content": "no, that's everything"}, headers=AUTH
+            )
+            events = _parse_sse(resp.text)
+            done_event = next(d for e, d in events if e == "done")
+            assert done_event["status"] == "completed"
+
+            # Session now completed → further messages rejected.
             resp = await client.post(
                 "/api/onboarding/v2/chat/message", json={"content": "more"}, headers=AUTH
             )
@@ -356,7 +414,52 @@ async def test_chat_completes_when_brief_complete(tmp_db):
 
             state = (await client.get("/api/onboarding/v2/state", headers=AUTH)).json()
             assert state["ideaChat"]["status"] == "completed"
-            assert state["ideaChat"]["briefComplete"] is True
+            assert state["ideaChat"]["awaitingConfirmation"] is False
+
+
+@pytest.mark.asyncio
+async def test_confirmation_turn_completes_after_founder_adds_more(tmp_db):
+    """If the founder answers 'yes' with more detail, the interview still
+    ends this turn — the extra detail is merged into the brief first."""
+    await _seed_org_and_team()
+    fake = _fake_groq([
+        (["Anything else to add?"], {**_FULL_BRIEF, "isComplete": True}),
+        (
+            ["Got it, noted that. You're all set!"],
+            {**_FULL_BRIEF, "techConstraints": ["must run on Postgres"], "isComplete": True},
+        ),
+    ])
+    with (
+        _patch_clerk(),
+        patch("src.services.idea_interview.settings") as mock_settings,
+        _patch_groq(fake),
+    ):
+        mock_settings.groq_api_key = "gsk-platform"
+        mock_settings.groq_base_url = "https://api.groq.com/openai/v1"
+        mock_settings.groq_model = "llama-3.3-70b-versatile"
+        async with _client() as client:
+            await _start_chat(client)
+            await client.post(
+                "/api/onboarding/v2/chat/message",
+                json={"content": "here's everything..."},
+                headers=AUTH,
+            )
+
+            resp = await client.post(
+                "/api/onboarding/v2/chat/message",
+                json={"content": "actually, it needs to run on Postgres"},
+                headers=AUTH,
+            )
+            events = _parse_sse(resp.text)
+            brief_event = next(d for e, d in events if e == "brief")
+            done_event = next(d for e, d in events if e == "done")
+
+            assert done_event["status"] == "completed"
+            assert brief_event["brief"]["techConstraints"] == ["must run on Postgres"]
+
+            state = (await client.get("/api/onboarding/v2/state", headers=AUTH)).json()
+            assert state["ideaChat"]["status"] == "completed"
+            assert state["ideaChat"]["brief"]["techConstraints"] == ["must run on Postgres"]
 
 
 @pytest.mark.asyncio
@@ -373,7 +476,7 @@ async def test_chat_user_override_complete(tmp_db):
 
 @pytest.mark.asyncio
 async def test_chat_message_cap(tmp_db):
-    await _seed_org_and_team(anthropic_key="sk-byok")
+    await _seed_org_and_team()
 
     from src.database import get_db
     from src.models.onboarding_session import OnboardingMessage, OnboardingSession
@@ -401,13 +504,13 @@ async def test_chat_message_cap(tmp_db):
 
 @pytest.mark.asyncio
 async def test_chat_stream_error_event_on_failure(tmp_db):
-    await _seed_org_and_team(anthropic_key="sk-byok")
+    await _seed_org_and_team()
 
     with (
         _patch_clerk(),
         patch(
             "src.routers.onboarding_v2.idea_interview.run_interview_turn",
-            new=AsyncMock(side_effect=RuntimeError("Anthropic API error: boom")),
+            new=AsyncMock(side_effect=RuntimeError("Groq API error: boom")),
         ),
     ):
         async with _client() as client:

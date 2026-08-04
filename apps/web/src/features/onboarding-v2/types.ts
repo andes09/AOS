@@ -89,6 +89,7 @@ export type OnboardingState = {
     messageCount: number
     brief: ProjectBrief | null
     briefComplete: boolean
+    awaitingConfirmation: boolean
   }
   onboardingPath: PlanSource | null
   importArtifact: ImportArtifactState | null
@@ -153,6 +154,7 @@ export type ChatPayload = {
   messages: ChatMessage[]
   brief: ProjectBrief | null
   briefComplete: boolean
+  awaitingConfirmation: boolean
 }
 
 export type GithubStatus =
@@ -183,7 +185,12 @@ export type ChatStreamHandlers = {
   /** Fires per streamed token of the assistant reply. */
   onToken?: (text: string) => void
   /** Fires once per turn with the updated extracted brief. */
-  onBrief?: (data: { brief: ProjectBrief; missingFields: string[]; briefComplete: boolean }) => void
+  onBrief?: (data: {
+    brief: ProjectBrief
+    missingFields: string[]
+    briefComplete: boolean
+    awaitingConfirmation: boolean
+  }) => void
   /** Fires when the turn finishes; status "completed" means the interview is over. */
   onDone?: (data: { messageId: string; status: ChatStatus }) => void
   onError?: (message: string) => void

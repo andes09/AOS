@@ -63,7 +63,7 @@ export function useOnboardingState() {
   })
 
   const draftPlan = useMutation({
-    mutationFn: () => api.draftPlan(),
+    mutationFn: (onProgress?: (pct: number) => void) => api.draftPlan({ onProgress }),
   })
 
   const confirmPlan = useMutation({

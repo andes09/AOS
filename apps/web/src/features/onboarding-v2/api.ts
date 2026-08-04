@@ -86,9 +86,83 @@ export function createOnboardingApi(getToken: GetToken, apiUrl: string = DEFAULT
       ),
 
     // --- plan review (experimental.plan_review) ---
-    /** Ensure a drafted roadmap exists and return its projectId. Idempotent. */
-    draftPlan: () =>
-      request<{ projectId: string }>('/api/onboarding/v2/plan/draft', { method: 'POST' }),
+    /**
+     * Ensure a drafted roadmap exists and return its projectId. Idempotent.
+     *
+     * When a project already exists (import path, or a second call) the
+     * server returns plain JSON immediately — no generation, nothing to
+     * report progress on. When generation actually has to happen, the
+     * response streams back as SSE so `onProgress` gets real 0-95% updates
+     * as the roadmap comes in from Groq, instead of a fake timer.
+     */
+    async draftPlan(
+      handlers: { onProgress?: (pct: number) => void } = {},
+      signal?: AbortSignal,
+    ): Promise<{ projectId: string }> {
+      const token = await getToken()
+      if (!token) throw new OnboardingApiError('Not authenticated', 401)
+
+      const response = await fetch(`${apiUrl}/api/onboarding/v2/plan/draft`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          Authorization: `Bearer ${token}`,
+        },
+        signal,
+      })
+
+      if (!response.ok) {
+        throw new OnboardingApiError(await parseErrorDetail(response), response.status)
+      }
+
+      const contentType = response.headers.get('content-type') ?? ''
+      if (!contentType.includes('text/event-stream')) {
+        return response.json() as Promise<{ projectId: string }>
+      }
+      if (!response.body) throw new Error('No response body for SSE stream')
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let projectId: string | null = null
+      let streamError: string | null = null
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const events = buffer.split('\n\n')
+          buffer = events.pop() ?? ''
+          for (const evt of events) {
+            const lines = evt.split('\n')
+            const eventLine = lines.find(l => l.startsWith('event:'))?.slice(6).trim()
+            const dataLine = lines.find(l => l.startsWith('data:'))?.slice(5).trim()
+            if (!eventLine || !dataLine) continue
+            let data: unknown
+            try {
+              data = JSON.parse(dataLine)
+            } catch {
+              continue
+            }
+            if (eventLine === 'progress') {
+              handlers.onProgress?.((data as { pct: number }).pct)
+            } else if (eventLine === 'done') {
+              projectId = (data as { projectId: string }).projectId
+            } else if (eventLine === 'error') {
+              streamError = (data as { message?: string }).message || 'Roadmap generation failed'
+            }
+          }
+        }
+      } finally {
+        reader.cancel().catch(() => {})
+      }
+
+      if (streamError) throw new OnboardingApiError(streamError, 502)
+      if (!projectId) throw new OnboardingApiError('Roadmap generation failed', 502)
+      return { projectId }
+    },
     /** Accept the drafted roadmap, completing the plan-review step. */
     confirmPlan: () =>
       request<OnboardingState>('/api/onboarding/v2/plan/confirm', { method: 'POST' }),

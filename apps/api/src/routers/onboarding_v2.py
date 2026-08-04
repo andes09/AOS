@@ -641,6 +641,45 @@ async def _chat_event_stream(
             task.cancel()
 
 
+async def _plan_draft_event_stream(
+    session: OnboardingSession, team: Team, api_key: str, db: AsyncSession
+):
+    """SSE generator: `progress` events (0-95%) while the roadmap streams in
+    from Groq, then `done` — or a terminal `error`. Only used on the
+    actually-generating path; see draft_plan for the idempotent fast path."""
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def on_progress(pct: int) -> None:
+        await queue.put(("progress", {"pct": pct}))
+
+    async def runner() -> None:
+        try:
+            project = await roadmap_generator.generate_roadmap(
+                session, team, api_key, db, on_progress
+            )
+            await queue.put(("done", {"projectId": str(project.id)}))
+        except Exception:
+            logger.exception(
+                "[onboarding] plan draft generation failed for session %s", session.id
+            )
+            await db.rollback()
+            await queue.put(("error", {"message": "roadmap_generation_failed"}))
+        finally:
+            await queue.put(None)  # sentinel
+
+    task = asyncio.create_task(runner())
+    try:
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            event, data = item
+            yield _sse_format(event, data)
+    finally:
+        if not task.done():
+            task.cancel()
+
+
 @router.post("/chat/message")
 async def send_chat_message(
     body: ChatMessageRequest,
@@ -874,14 +913,19 @@ async def draft_plan(
     return its projectId.
 
     Idempotent. On the import path the Project already exists (created by
-    /import/apply), so this is a no-op lookup. On the chat path no Project
-    exists yet, so this is where generation actually happens — moved out of
-    POST /complete so the founder reviews the plan *before* it's committed.
+    /import/apply), so this is a no-op lookup returning plain JSON. On the
+    chat path no Project exists yet, so this is where generation actually
+    happens — moved out of POST /complete so the founder reviews the plan
+    *before* it's committed. That generating case streams back as SSE
+    (`progress`/`done`/`error` events, see _plan_draft_event_stream) so the
+    UI can show real generation progress instead of a fake timer; team/key
+    resolution still happen synchronously first so those failures stay plain
+    JSON errors rather than being swallowed into a generic stream `error`.
 
-    Unlike /complete's best-effort generation, a failure here raises 502: the
-    review UI surfaces it and offers "continue anyway", which falls through to
-    /complete's own generation as a second chance (and the project-hub fallback
-    if that also fails). The flow still never bricks.
+    Unlike /complete's best-effort generation, a failure here is terminal for
+    this call: the review UI surfaces it and offers "continue anyway", which
+    falls through to /complete's own generation as a second chance (and the
+    project-hub fallback if that also fails). The flow still never bricks.
     """
     org = await _get_org(clerk_org_id, db)
     session = await _get_session(org, db)
@@ -891,23 +935,19 @@ async def draft_plan(
     project = await db.scalar(
         select(Project).where(Project.onboarding_session_id == session.id)
     )
-    if project is None:
-        if session.status != "completed" or not session.project_brief:
-            raise HTTPException(status_code=409, detail="brief_incomplete")
-        try:
-            team = await _resolve_team(org, db)
-            api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
-            project = await roadmap_generator.generate_roadmap(session, team, api_key, db)
-        except HTTPException:
-            raise
-        except Exception:
-            logger.exception(
-                "[onboarding] plan draft generation failed for session %s", session.id
-            )
-            await db.rollback()
-            raise HTTPException(status_code=502, detail="roadmap_generation_failed")
+    if project is not None:
+        return {"projectId": str(project.id)}
 
-    return {"projectId": str(project.id)}
+    if session.status != "completed" or not session.project_brief:
+        raise HTTPException(status_code=409, detail="brief_incomplete")
+
+    team = await _resolve_team(org, db)
+    api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
+    return StreamingResponse(
+        _plan_draft_event_stream(session, team, api_key, db),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/plan/confirm", dependencies=[Depends(_require_plan_review_enabled)])

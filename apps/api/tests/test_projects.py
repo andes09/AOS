@@ -85,15 +85,55 @@ class _FakeToolCall:
         self.function = SimpleNamespace(name=name, arguments=json.dumps(payload))
 
 
+class _FakeStream:
+    """Async-iterable standing in for the OpenAI SDK's streaming response —
+    see test_roadmap_generator.py for the shape this mirrors."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def __aiter__(self):
+        return self._gen()
+
+    async def _gen(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+def _stream_chunks_for(arguments, usage):
+    if not arguments:
+        return [SimpleNamespace(choices=[], usage=usage)]
+    mid = len(arguments) // 2
+    fragments = [arguments[:mid], arguments[mid:]] if mid else [arguments]
+    chunks = [
+        SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(
+                tool_calls=[SimpleNamespace(function=SimpleNamespace(arguments=frag))]
+            ))],
+            usage=None,
+        )
+        for frag in fragments
+        if frag
+    ]
+    chunks.append(SimpleNamespace(choices=[], usage=usage))
+    return chunks
+
+
 def _fake_groq(payload=None, tool_name="build_roadmap", tool_calls=None):
+    """Stream-aware — /plan/draft's generating path now calls the streamed
+    _call_planner_stream, not the non-streamed _call_planner."""
     if tool_calls is None:
         tool_calls = [_FakeToolCall(tool_name, payload)] if payload is not None else []
     message = SimpleNamespace(tool_calls=tool_calls or None)
-    response = SimpleNamespace(
-        choices=[SimpleNamespace(message=message)],
-        usage=SimpleNamespace(prompt_tokens=100, completion_tokens=200),
-    )
-    fake_completions = SimpleNamespace(create=AsyncMock(return_value=response))
+    usage = SimpleNamespace(prompt_tokens=100, completion_tokens=200)
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)
+    arguments = tool_calls[0].function.arguments if tool_calls else None
+    stream_chunks = _stream_chunks_for(arguments, usage)
+
+    async def create(**kwargs):
+        return _FakeStream(stream_chunks) if kwargs.get("stream") else response
+
+    fake_completions = SimpleNamespace(create=AsyncMock(side_effect=create))
     return SimpleNamespace(chat=SimpleNamespace(completions=fake_completions))
 
 

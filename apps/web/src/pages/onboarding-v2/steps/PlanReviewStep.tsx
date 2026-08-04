@@ -9,15 +9,52 @@
  * which confirms and falls through to POST /complete's own best-effort
  * generation (and the project-hub fallback if that also fails).
  */
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { useOnboardingState } from '../../../features/onboarding-v2'
 import { useApi } from '../../../lib/api'
 import type { Roadmap } from '../../../types/roadmap'
-import { Alert, Btn, C, Spinner } from '../theme'
+import { Alert, Btn, C, ProgressBar, Spinner } from '../theme'
 
 const ROADMAP_KEY = (projectId: string) => ['onboarding-plan-review-roadmap', projectId] as const
+
+// Captions keyed by real progress (from /plan/draft's SSE `progress` events,
+// see api.ts draftPlan) rather than elapsed time — the bar now reflects
+// actual generation, not a guess.
+const PROGRESS_STAGES: [number, string][] = [
+  [0, 'Reading your brief…'],
+  [25, 'Sketching milestones…'],
+  [60, 'Structuring tasks…'],
+  [90, 'Almost there…'],
+]
+
+function useLiveProgress(loading: boolean) {
+  const [progress, setProgress] = useState(0)
+  const [finishing, setFinishing] = useState(false)
+  const wasLoadingRef = useRef(false)
+
+  useEffect(() => {
+    if (loading) {
+      wasLoadingRef.current = true
+      setFinishing(false)
+      setProgress(0)
+      return
+    }
+    // Loading just finished — snap to 100% and hold briefly before the
+    // caller swaps in the real content, instead of an abrupt cut.
+    if (!wasLoadingRef.current) return
+    wasLoadingRef.current = false
+    setProgress(100)
+    setFinishing(true)
+    const timeout = setTimeout(() => setFinishing(false), 200)
+    return () => clearTimeout(timeout)
+  }, [loading])
+
+  const label = [...PROGRESS_STAGES].reverse().find(([t]) => progress >= t)?.[1] ?? PROGRESS_STAGES[0][1]
+
+  return { progress, setProgress, label, finishing }
+}
 
 export function PlanReviewStep() {
   const { state, draftPlan, confirmPlan } = useOnboardingState()
@@ -25,16 +62,6 @@ export function PlanReviewStep() {
   const queryClient = useQueryClient()
 
   const projectId = state?.projectId ?? draftPlan.data?.projectId ?? null
-
-  // Draft the roadmap once if no project exists yet (chat path). A ref guards
-  // against re-firing on re-render; the query below picks up the projectId.
-  const draftedRef = useRef(false)
-  useEffect(() => {
-    if (!projectId && !draftedRef.current && !draftPlan.isPending) {
-      draftedRef.current = true
-      draftPlan.mutate()
-    }
-  }, [projectId, draftPlan])
 
   const roadmap = useQuery({
     queryKey: projectId ? ROADMAP_KEY(projectId) : ['onboarding-plan-review-roadmap', 'none'],
@@ -53,10 +80,27 @@ export function PlanReviewStep() {
   const busy = confirmPlan.isPending
 
   // Draft in flight, or drafted but roadmap still loading.
-  if (!draftFailed && (draftPlan.isPending || (projectId && roadmap.isLoading))) {
+  const loading = !draftFailed && !!(draftPlan.isPending || (projectId && roadmap.isLoading))
+  const { progress, setProgress, label, finishing } = useLiveProgress(loading)
+
+  // Draft the roadmap once if no project exists yet (chat path). A ref guards
+  // against re-firing on re-render; the query above picks up the projectId.
+  const draftedRef = useRef(false)
+  useEffect(() => {
+    if (!projectId && !draftedRef.current && !draftPlan.isPending) {
+      draftedRef.current = true
+      draftPlan.mutate(pct => setProgress(p => Math.max(p, pct)))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, draftPlan])
+
+  if (loading || finishing) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.t3, fontSize: 14, padding: '40px 0', animation: 'fadeUp 0.22s ease both' }}>
-        <Spinner size={16} /> Drafting your roadmap…
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '40px 0', animation: 'fadeUp 0.22s ease both' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.t3, fontSize: 14 }}>
+          <Spinner size={16} /> {label}
+        </div>
+        <ProgressBar progress={progress} />
       </div>
     )
   }

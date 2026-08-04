@@ -51,22 +51,71 @@ class _FakeToolCall:
         self.function = SimpleNamespace(name=name, arguments=json.dumps(payload))
 
 
+class _FakeStream:
+    """Async-iterable standing in for the OpenAI SDK's streaming response —
+    see test_roadmap_generator.py for the shape this mirrors."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def __aiter__(self):
+        return self._gen()
+
+    async def _gen(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+def _stream_chunks_for(arguments, usage):
+    if not arguments:
+        return [SimpleNamespace(choices=[], usage=usage)]
+    mid = len(arguments) // 2
+    fragments = [arguments[:mid], arguments[mid:]] if mid else [arguments]
+    chunks = [
+        SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(
+                tool_calls=[SimpleNamespace(function=SimpleNamespace(arguments=frag))]
+            ))],
+            usage=None,
+        )
+        for frag in fragments
+        if frag
+    ]
+    chunks.append(SimpleNamespace(choices=[], usage=usage))
+    return chunks
+
+
 def _fake_groq(payload=None, tool_name="build_roadmap", tool_calls=None):
     """Mirrors test_projects.py's fake Groq client (same forced-tool shape
-    roadmap_generator.generate_roadmap expects)."""
+    roadmap_generator.generate_roadmap expects) — stream-aware, since
+    /plan/draft's generating path now calls the streamed _call_planner_stream."""
     if tool_calls is None:
         tool_calls = [_FakeToolCall(tool_name, payload)] if payload is not None else []
     message = SimpleNamespace(tool_calls=tool_calls or None)
-    response = SimpleNamespace(
-        choices=[SimpleNamespace(message=message)],
-        usage=SimpleNamespace(prompt_tokens=100, completion_tokens=200),
-    )
-    fake_completions = SimpleNamespace(create=AsyncMock(return_value=response))
+    usage = SimpleNamespace(prompt_tokens=100, completion_tokens=200)
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)
+    arguments = tool_calls[0].function.arguments if tool_calls else None
+    stream_chunks = _stream_chunks_for(arguments, usage)
+
+    async def create(**kwargs):
+        return _FakeStream(stream_chunks) if kwargs.get("stream") else response
+
+    fake_completions = SimpleNamespace(create=AsyncMock(side_effect=create))
     return SimpleNamespace(chat=SimpleNamespace(completions=fake_completions))
 
 
 def _patch_groq(fake):
     return patch("src.services.roadmap_generator.AsyncOpenAI", return_value=fake)
+
+
+def _parse_sse(body: str) -> list[tuple[str, dict]]:
+    events = []
+    for block in body.strip().split("\n\n"):
+        lines = block.split("\n")
+        event = next(l[len("event: "):] for l in lines if l.startswith("event: "))
+        data = next(l[len("data: "):] for l in lines if l.startswith("data: "))
+        events.append((event, json.loads(data)))
+    return events
 
 
 def _patch_api_key():
@@ -760,7 +809,10 @@ async def test_plan_draft_generates_project_for_chat_path(tmp_db):
         async with _client() as client:
             resp = await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)
             assert resp.status_code == 200
-            project_id = resp.json()["projectId"]
+            assert resp.headers["content-type"].startswith("text/event-stream")
+            events = _parse_sse(resp.text)
+            assert [e for e, _ in events][-1] == "done"
+            project_id = events[-1][1]["projectId"]
             assert project_id is not None
 
             state = (await client.get("/api/onboarding/v2/state", headers=AUTH)).json()
@@ -781,16 +833,24 @@ async def test_plan_draft_is_idempotent(tmp_db):
 
     with _patch_clerk(), _patch_api_key(), _patch_groq(fake_groq):
         async with _client() as client:
-            first = (await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)).json()
-            second = (await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)).json()
-    assert first["projectId"] == second["projectId"]
+            first_resp = await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)
+            first_project_id = _parse_sse(first_resp.text)[-1][1]["projectId"]
+            # Idempotent path: project already exists, so this is plain JSON —
+            # no stream, nothing left to generate.
+            second_resp = await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)
+            assert not second_resp.headers["content-type"].startswith("text/event-stream")
+            second_project_id = second_resp.json()["projectId"]
+    assert first_project_id == second_project_id
     assert fake_groq.chat.completions.create.await_count == 1
 
 
 @pytest.mark.asyncio
 async def test_plan_draft_502_when_generation_fails(tmp_db):
     """Unlike /complete's best-effort generation, /plan/draft surfaces a
-    failure as 502 so the review UI can offer 'continue anyway'."""
+    failure so the review UI can offer 'continue anyway'. Once the roadmap is
+    actually streaming, generation failures come back as a terminal `error`
+    SSE event rather than a non-200 status — headers are already sent by the
+    time generation fails, same as /chat/message's existing error handling."""
     org_id, team_id = await _seed_org_and_team()
     await _complete_profile_and_chat(org_id, team_id, {"projectName": "Draft Co"})
     fake_groq = _fake_groq(tool_calls=[])  # no tool call -> RuntimeError inside
@@ -798,7 +858,11 @@ async def test_plan_draft_502_when_generation_fails(tmp_db):
     with _patch_clerk(), _patch_api_key(), _patch_groq(fake_groq):
         async with _client() as client:
             resp = await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)
-    assert resp.status_code == 502
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    events = _parse_sse(resp.text)
+    assert events[-1][0] == "error"
+    assert events[-1][1]["message"] == "roadmap_generation_failed"
 
 
 @pytest.mark.asyncio

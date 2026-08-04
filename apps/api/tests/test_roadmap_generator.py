@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest_asyncio
-from openai import BadRequestError
+from openai import APIError, BadRequestError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import selectinload
@@ -86,16 +86,60 @@ class _FakeToolCall:
         self.function = SimpleNamespace(name=name, arguments=json.dumps(payload))
 
 
+class _FakeStream:
+    """Async-iterable standing in for the OpenAI SDK's streaming response —
+    yields pre-built chunks, one delta.tool_calls[].function.arguments
+    fragment (or a trailing usage-only chunk) each."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def __aiter__(self):
+        return self._gen()
+
+    async def _gen(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+def _stream_chunks_for(arguments, usage):
+    """Splits `arguments` into a couple of delta fragments (so accumulation
+    logic is actually exercised) plus a trailing usage-only chunk, matching
+    the shape confirmed against the real Groq endpoint."""
+    if not arguments:
+        return [SimpleNamespace(choices=[], usage=usage)]
+    mid = len(arguments) // 2
+    fragments = [arguments[:mid], arguments[mid:]] if mid else [arguments]
+    chunks = [
+        SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(
+                tool_calls=[SimpleNamespace(function=SimpleNamespace(arguments=frag))]
+            ))],
+            usage=None,
+        )
+        for frag in fragments
+        if frag
+    ]
+    chunks.append(SimpleNamespace(choices=[], usage=usage))
+    return chunks
+
+
 def _fake_groq(payload=None, tool_name="build_roadmap", tool_calls=None):
-    """Fake AsyncOpenAI whose chat.completions.create returns the given tool call."""
+    """Fake AsyncOpenAI whose chat.completions.create serves both the
+    non-streamed (_call_planner) and streamed (_call_planner_stream) shapes —
+    picks based on the `stream` kwarg, same as the real client does."""
     if tool_calls is None:
         tool_calls = [_FakeToolCall(tool_name, payload)] if payload is not None else []
     message = SimpleNamespace(tool_calls=tool_calls or None)
-    response = SimpleNamespace(
-        choices=[SimpleNamespace(message=message)],
-        usage=SimpleNamespace(prompt_tokens=100, completion_tokens=200),
-    )
-    fake_completions = SimpleNamespace(create=AsyncMock(return_value=response))
+    usage = SimpleNamespace(prompt_tokens=100, completion_tokens=200)
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)
+    arguments = tool_calls[0].function.arguments if tool_calls else None
+    stream_chunks = _stream_chunks_for(arguments, usage)
+
+    async def create(**kwargs):
+        return _FakeStream(stream_chunks) if kwargs.get("stream") else response
+
+    fake_completions = SimpleNamespace(create=AsyncMock(side_effect=create))
     return SimpleNamespace(chat=SimpleNamespace(completions=fake_completions))
 
 
@@ -107,12 +151,26 @@ def _patch_groq(fake):
 
 def _tool_use_failed_error():
     """A Groq 400 with code=tool_use_failed — observed live when the model's raw
-    output doesn't parse as a clean tool call. Groq's own guidance is to retry."""
+    output doesn't parse as a clean tool call. Groq's own guidance is to retry.
+    This is what the non-streamed path (_call_planner) raises, from a normal
+    HTTP error response."""
     resp = httpx.Response(
         400, request=httpx.Request("POST", "http://groq.test"),
         json={"error": {"code": "tool_use_failed"}},
     )
     return BadRequestError("Failed to call a function.", response=resp, body={"code": "tool_use_failed"})
+
+
+def _tool_use_failed_stream_error():
+    """The streamed path's equivalent of _tool_use_failed_error — confirmed
+    live against Groq that a mid-stream tool_use_failed surfaces as a bare
+    APIError (not BadRequestError), since the SDK doesn't map SSE-delivered
+    error events to status-code subclasses the way it does HTTP responses."""
+    return APIError(
+        "Failed to call a function. Please adjust your prompt.",
+        httpx.Request("POST", "http://groq.test"),
+        body={"code": "tool_use_failed"},
+    )
 
 
 _ROADMAP_PAYLOAD = {
@@ -175,6 +233,124 @@ async def test_call_planner_gives_up_after_max_tool_use_failures():
             assert "Groq API error" in str(exc)
 
     assert create_mock.await_count == roadmap_generator._MAX_TOOL_RETRIES + 1
+
+
+# ─── _call_planner_stream (streamed, used by generate_roadmap) ─────────────────
+
+class _RaisingStream:
+    """A stream that yields a couple of chunks then raises — the shape
+    confirmed live against Groq: tool_use_failed surfaces mid-iteration, not
+    from the initial create() call like the non-streamed path."""
+
+    def __init__(self, error, chunks=()):
+        self._error = error
+        self._chunks = chunks
+
+    def __aiter__(self):
+        return self._gen()
+
+    async def _gen(self):
+        for chunk in self._chunks:
+            yield chunk
+        raise self._error
+
+
+async def test_call_planner_stream_reports_progress_and_returns_data():
+    usage = SimpleNamespace(prompt_tokens=100, completion_tokens=200)
+    arguments = json.dumps(_ROADMAP_PAYLOAD)
+    create_mock = AsyncMock(return_value=_FakeStream(_stream_chunks_for(arguments, usage)))
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create_mock)))
+
+    progress_calls = []
+
+    async def on_progress(pct):
+        progress_calls.append(pct)
+
+    with _patch_groq(fake):
+        data, returned_usage = await roadmap_generator._call_planner_stream(
+            "sk-key", "sys", "user", roadmap_generator._ROADMAP_TOOL, on_progress
+        )
+
+    assert data["projectName"] == "Trail Buddy"
+    assert returned_usage is usage
+    assert progress_calls  # at least one update fired
+    assert progress_calls == sorted(progress_calls)  # monotonic as more args arrive
+    assert all(0 <= p <= 95 for p in progress_calls)
+    create_mock.assert_awaited_once()
+    _, kwargs = create_mock.await_args
+    assert kwargs["stream"] is True
+    assert kwargs["tool_choice"] == {"type": "function", "function": {"name": "build_roadmap"}}
+
+
+async def test_call_planner_stream_retries_tool_use_failed_then_succeeds():
+    usage = SimpleNamespace(prompt_tokens=100, completion_tokens=200)
+    arguments = json.dumps(_ROADMAP_PAYLOAD)
+    create_mock = AsyncMock(side_effect=[
+        _RaisingStream(_tool_use_failed_stream_error()),
+        _FakeStream(_stream_chunks_for(arguments, usage)),
+    ])
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create_mock)))
+
+    with _patch_groq(fake):
+        data, _ = await roadmap_generator._call_planner_stream(
+            "sk-key", "sys", "user", roadmap_generator._ROADMAP_TOOL, None
+        )
+
+    assert data["projectName"] == "Trail Buddy"
+    assert create_mock.await_count == 2
+
+
+async def test_call_planner_stream_gives_up_after_max_tool_use_failures():
+    create_mock = AsyncMock(side_effect=[
+        _RaisingStream(_tool_use_failed_stream_error()) for _ in range(10)
+    ])
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create_mock)))
+
+    with _patch_groq(fake):
+        try:
+            await roadmap_generator._call_planner_stream(
+                "sk-key", "sys", "user", roadmap_generator._ROADMAP_TOOL, None
+            )
+            raise AssertionError("expected RuntimeError")
+        except RuntimeError as exc:
+            assert "Groq API error" in str(exc)
+
+    assert create_mock.await_count == roadmap_generator._MAX_TOOL_RETRIES + 1
+
+
+async def test_call_planner_stream_malformed_json_retries_then_succeeds():
+    usage = SimpleNamespace(prompt_tokens=100, completion_tokens=200)
+    good_arguments = json.dumps(_ROADMAP_PAYLOAD)
+    create_mock = AsyncMock(side_effect=[
+        _FakeStream(_stream_chunks_for("{not valid json", usage)),
+        _FakeStream(_stream_chunks_for(good_arguments, usage)),
+    ])
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create_mock)))
+
+    with _patch_groq(fake):
+        data, _ = await roadmap_generator._call_planner_stream(
+            "sk-key", "sys", "user", roadmap_generator._ROADMAP_TOOL, None
+        )
+
+    assert data["projectName"] == "Trail Buddy"
+    assert create_mock.await_count == 2
+
+
+async def test_call_planner_stream_empty_arguments_raises():
+    empty_usage = SimpleNamespace(prompt_tokens=10, completion_tokens=0)
+    create_mock = AsyncMock(side_effect=[
+        _FakeStream(_stream_chunks_for(None, empty_usage)) for _ in range(10)
+    ])
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create_mock)))
+
+    with _patch_groq(fake):
+        try:
+            await roadmap_generator._call_planner_stream(
+                "sk-key", "sys", "user", roadmap_generator._ROADMAP_TOOL, None
+            )
+            raise AssertionError("expected RuntimeError")
+        except RuntimeError as exc:
+            assert "did not return a roadmap" in str(exc)
 
 
 # ─── _tech_stack_prompt / _brief_prompt ────────────────────────────────────────

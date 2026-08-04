@@ -18,6 +18,7 @@ milestones/tasks replaced) and a single milestone (siblings untouched).
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import date
 
 from openai import APIError, AsyncOpenAI, AuthenticationError, BadRequestError, RateLimitError
@@ -56,6 +57,10 @@ _MODEL = settings.groq_model
 # 3-6 sentence technical description. At 4096 the tool call gets truncated and
 # the roadmap comes back short.
 _MAX_TOKENS = 8192
+# Rough tokens→chars heuristic for the streamed draft's progress bar (English
+# text averages ~4 chars/token). Capped below 100 in _call_planner_stream since
+# validation/persistence still happen after the last byte arrives.
+_PROGRESS_CHAR_ESTIMATE = _MAX_TOKENS * 4
 
 _SYSTEM_PROMPT = """You are Omada's technical project planner. Given a founder's project brief, \
 produce a SHORT-TERM, day-by-day plan a developer can actually execute — think the next couple \
@@ -244,18 +249,98 @@ async def _call_planner(api_key: str, system: str, user_content: str, tool: dict
         raise RuntimeError("The planner returned malformed output. Please try again.") from exc
 
 
+async def _call_planner_stream(
+    api_key: str,
+    system: str,
+    user_content: str,
+    tool: dict,
+    on_progress: Callable[[int], Awaitable[None]] | None,
+):
+    """Streamed sibling of `_call_planner`, used only by `generate_roadmap` (the
+    plan-review draft's critical path) so the UI can show real progress instead
+    of a fake timer. Same forced-tool-call and retry semantics, but accumulated
+    from `delta.tool_calls[].function.arguments` fragments.
+
+    Mid-stream tool_use_failed surfaces as a bare APIError (not BadRequestError
+    like the non-streamed path gets) since the SDK doesn't map SSE-delivered
+    error events to status-code subclasses the way it does HTTP responses —
+    confirmed against the real Groq endpoint, not just SDK docs.
+    """
+    tool_name = tool["function"]["name"]
+    client = AsyncOpenAI(api_key=api_key, base_url=settings.groq_base_url)
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_content},
+    ]
+
+    for attempt in range(_MAX_TOOL_RETRIES + 1):
+        arguments = ""
+        usage = None
+        try:
+            stream = await client.chat.completions.create(
+                model=_MODEL,
+                max_tokens=_MAX_TOKENS,
+                messages=messages,
+                tools=[tool],
+                tool_choice={"type": "function", "function": {"name": tool_name}},
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+            async for chunk in stream:
+                if chunk.usage is not None:
+                    usage = chunk.usage
+                if not chunk.choices:
+                    continue
+                for tc in chunk.choices[0].delta.tool_calls or []:
+                    frag = tc.function.arguments if tc.function else None
+                    if frag:
+                        arguments += frag
+                        if on_progress is not None:
+                            pct = min(round(len(arguments) / _PROGRESS_CHAR_ESTIMATE * 100), 95)
+                            await on_progress(pct)
+        except AuthenticationError as exc:
+            raise ValueError("Invalid Groq API key.") from exc
+        except RateLimitError as exc:
+            raise RuntimeError(
+                "Groq API rate limit reached. Please try again in a moment."
+            ) from exc
+        except APIError as exc:
+            if getattr(exc, "code", None) == "tool_use_failed" and attempt < _MAX_TOOL_RETRIES:
+                continue
+            raise RuntimeError(f"Groq API error: {exc}") from exc
+
+        if not arguments:
+            if attempt < _MAX_TOOL_RETRIES:
+                continue
+            raise RuntimeError("The planner did not return a roadmap. Please try again.")
+        try:
+            return json.loads(arguments), usage
+        except json.JSONDecodeError:
+            if attempt < _MAX_TOOL_RETRIES:
+                continue
+            raise RuntimeError("The planner returned malformed output. Please try again.")
+
+
 # ─── public API ────────────────────────────────────────────────────────────────
 async def generate_roadmap(
-    session: OnboardingSession, team: Team, api_key: str, db: AsyncSession
+    session: OnboardingSession,
+    team: Team,
+    api_key: str,
+    db: AsyncSession,
+    on_progress: Callable[[int], Awaitable[None]] | None = None,
 ) -> Project:
     """Generate and persist a roadmap for `session` under `team`. Returns the
     new Project with milestones+tasks flushed. Assumes no project exists yet for
-    the session (the router enforces that)."""
-    data, usage = await _call_planner(
+    the session (the router enforces that).
+
+    `on_progress`, when given, is called with a 0-95 percent estimate as the
+    forced tool call streams in — see _call_planner_stream."""
+    data, usage = await _call_planner_stream(
         api_key,
         _system_prompt(session.project_purpose),
         _brief_prompt(session),
         _ROADMAP_TOOL,
+        on_progress,
     )
     milestones = _validated_milestones(data)
 

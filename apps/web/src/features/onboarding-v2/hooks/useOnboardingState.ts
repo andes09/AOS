@@ -1,3 +1,4 @@
+import { useOrganization } from '@clerk/clerk-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { PROJECTS_KEY } from '../../projects/hooks/useProjects'
@@ -15,6 +16,7 @@ export const ONBOARDING_STATE_KEY = ['onboarding-v2-state']
 export function useOnboardingState() {
   const api = useOnboardingApi()
   const queryClient = useQueryClient()
+  const { organization } = useOrganization()
 
   const query = useQuery<OnboardingState>({
     queryKey: ONBOARDING_STATE_KEY,
@@ -25,7 +27,7 @@ export function useOnboardingState() {
         // Direct navigation to /onboarding can beat org provisioning; the API
         // signals this with 409 org_not_provisioned. Provision once and retry.
         if (err instanceof OnboardingApiError && err.status === 409) {
-          await api.provisionOrganization()
+          await api.provisionOrganization(organization?.name ?? 'My Organization')
           return api.getState()
         }
         throw err

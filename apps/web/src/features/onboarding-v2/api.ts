@@ -167,8 +167,16 @@ export function createOnboardingApi(getToken: GetToken, apiUrl: string = DEFAULT
     confirmPlan: () =>
       request<OnboardingState>('/api/onboarding/v2/plan/confirm', { method: 'POST' }),
 
-    /** Self-heal for direct navigation before the org row exists (409 org_not_provisioned). */
-    provisionOrganization: () => request<unknown>('/api/organizations', { method: 'POST' }),
+    /** Self-heal for direct navigation before the org row exists (409
+     * org_not_provisioned). POST /api/organizations requires a `name` — the
+     * caller supplies the Clerk org's name (this module has no Clerk
+     * context of its own), matching what useProvisionOrg's normal-path call
+     * sends. */
+    provisionOrganization: (name: string) =>
+      request<unknown>('/api/organizations', {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      }),
 
     // --- GitHub connection ---
     getGithubConnectUrl: (returnTo: string) =>

@@ -1,9 +1,9 @@
 import enum
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime, ForeignKey
+from sqlalchemy import JSON, String, Text, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from src.database import Base
 
 
@@ -39,6 +39,16 @@ class Project(Base):
     # (import path, once the Project already exists) or copied on at creation
     # time by roadmap_generator.generate_roadmap (chat path).
     github_repo_full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Generation-fidelity telemetry for the task dependency graph: how much of
+    # the `dependsOn` graph the planner proposed actually survived validation.
+    # Written by whichever path last built the DAG (see
+    # roadmap_shapes.record_plan_quality); read back — and turned into rates and
+    # DAG-shape metrics — by services/plan_quality.py. Raw counts only, so this
+    # column stays a plain fact about the build rather than a cached derivation.
+    # NULL for a project whose roadmap predates this column.
+    plan_quality: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

@@ -26,7 +26,8 @@ reuse of a "private" helper already has precedent in this codebase (see
 
 import logging
 import re
-from datetime import date, time, timedelta
+from collections import Counter
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -242,25 +243,40 @@ def milestones_from_json(milestones: list[dict]) -> list[dict]:
 
 
 # ─── dependency-graph resolution ────────────────────────────────────────────────
-def _find_cyclic_keys(graph: dict[str, set[str]]) -> set[str]:
-    """`graph[key]` = the set of keys `key` depends on. Returns every key that
-    participates in a cycle, via a straightforward Kahn's-algorithm topological
-    peel: repeatedly remove keys with no remaining dependencies; whatever's
-    left when nothing more can be removed is cyclic. Plan sizes are small
-    (<= MAX_MILESTONES * MAX_TASKS_PER_MILESTONE = 80 tasks), so the O(n^2)
-    worst case here is fine.
+def topological_levels(graph: dict[str, set[str]]) -> tuple[list[list[str]], set[str]]:
+    """`graph[key]` = the set of keys `key` depends on. Returns
+    `(levels, cyclic)` via a straightforward Kahn's-algorithm topological peel:
+    repeatedly remove every key with no remaining dependencies, one *level* at
+    a time. Whatever's left when nothing more can be removed is cyclic.
+
+    A level is the set of keys that become workable at the same time, so the
+    peel answers both DAG-shape questions `plan_quality` asks: `len(levels)` is
+    the critical-path length (minimum sequential steps to finish the plan) and
+    the widest level is the maximum parallel width. Levels are sorted so the
+    output is deterministic rather than dict-insertion-ordered.
+
+    Dependencies pointing outside `graph` are ignored — an absent key can never
+    be peeled, so leaving it in would misreport the whole downstream chain as
+    cyclic. Plan sizes are small (<= MAX_MILESTONES * MAX_TASKS_PER_MILESTONE
+    = 80 tasks), so the O(n^2) worst case here is fine.
     """
-    remaining = {k: set(v) for k, v in graph.items()}
-    changed = True
-    while changed:
-        changed = False
-        ready = [k for k, deps in remaining.items() if not deps]
+    remaining = {k: {d for d in deps if d in graph} for k, deps in graph.items()}
+    levels: list[list[str]] = []
+    while True:
+        ready = sorted(k for k, deps in remaining.items() if not deps)
+        if not ready:
+            break
+        levels.append(ready)
         for k in ready:
             del remaining[k]
-            changed = True
         for deps in remaining.values():
             deps.difference_update(ready)
-    return set(remaining.keys())
+    return levels, set(remaining.keys())
+
+
+def _find_cyclic_keys(graph: dict[str, set[str]]) -> set[str]:
+    """Every key in `graph` that participates in a cycle."""
+    return topological_levels(graph)[1]
 
 
 def resolve_task_dependencies(
@@ -269,7 +285,7 @@ def resolve_task_dependencies(
     *,
     existing_tasks_by_id: dict[str, Task] | None = None,
     strict: bool,
-) -> None:
+) -> dict:
     """Resolve each task's `dependsOn` key list into real `Task.depends_on`
     ORM edges, validating references and rejecting cycles.
 
@@ -288,18 +304,35 @@ def resolve_task_dependencies(
     every edge touching a cyclic task, are silently dropped (and logged);
     everything else still persists. These paths never destructively fail on a
     graph hiccup.
+
+    Returns generation-fidelity stats — how much of the graph the model
+    proposed actually survived::
+
+        {"edges_proposed": int, "edges_kept": int, "edges_dropped": int,
+         "dropped_by_reason": {"dangling": int, "cyclic": int}}
+
+    `dropped_by_reason` carries only reasons that actually fired (a `Counter`
+    view, matching `plan_quality`'s `overrides_by_reason` convention), and
+    `edges_proposed == edges_kept + edges_dropped` always holds. Under
+    `strict=True` this raises before returning, so a returned dict there is
+    necessarily all-kept. `plan_quality.summarize_dependency_resolution` turns
+    this into the persisted telemetry block.
     """
     existing_tasks_by_id = existing_tasks_by_id or {}
+    dropped: Counter[str] = Counter()
+    edges_proposed = 0
     resolved: dict[str, list[Task]] = {}
     for key, task in tasks_by_key.items():
         targets: list[Task] = []
         for dep_key in edges_by_key.get(key, []):
+            edges_proposed += 1
             target = tasks_by_key.get(dep_key) or existing_tasks_by_id.get(dep_key)
             if target is None or target is task:
                 if strict:
                     raise RuntimeError(
                         "The planner referenced a task that doesn't exist in this batch."
                     )
+                dropped["dangling"] += 1
                 logger.warning("roadmap: dropping dangling task dependency %r -> %r", key, dep_key)
                 continue
             targets.append(target)
@@ -318,11 +351,24 @@ def resolve_task_dependencies(
             )
         logger.warning("roadmap: dropping cyclic task dependencies for keys %s", sorted(cyclic))
 
+    edges_kept = 0
     for key, task in tasks_by_key.items():
         if key in cyclic:
+            # Every edge out of a cyclic task goes, not just the one closing
+            # the loop — there's no principled way to pick which edge was the
+            # model's mistake.
+            dropped["cyclic"] += len(resolved[key])
             continue
         for target in resolved[key]:
             task.depends_on.append(target)
+            edges_kept += 1
+
+    return {
+        "edges_proposed": edges_proposed,
+        "edges_kept": edges_kept,
+        "edges_dropped": sum(dropped.values()),
+        "dropped_by_reason": dict(dropped),
+    }
 
 
 # ─── persistence ───────────────────────────────────────────────────────────────
@@ -358,8 +404,37 @@ def _add_tasks(
     return tasks_by_key
 
 
+def record_plan_quality(project: Project, resolution: dict, source: str) -> None:
+    """Stash a DAG-build's generation-fidelity stats on `projects.plan_quality`.
+
+    Raw counts only — no rates. `plan_quality` derives `dropped_edge_rate` (and
+    the DAG-shape metrics) at *read* time, so this stays a plain fact about what
+    the build did and needs no import from the telemetry module. That direction
+    matters: `plan_quality` imports `topological_levels` from here, so an import
+    back the other way would be a cycle.
+
+    `source` names the path that produced the graph ("generate", "regenerate",
+    "regenerate_milestone", "adjust", "import"), because they don't all cover
+    the same scope — `adjust` and `regenerate_milestone` only rebuild part of
+    the plan, so their counts describe that part, not the whole project.
+
+    The caller commits.
+    """
+    project.plan_quality = {
+        "resolution": resolution,
+        "source": source,
+        "recorded_at": datetime.utcnow().isoformat(),
+    }
+
+
 async def _persist_milestones(
-    project: Project, milestones: list[dict], org: Organization, db: AsyncSession, *, strict: bool = True
+    project: Project,
+    milestones: list[dict],
+    org: Organization,
+    db: AsyncSession,
+    *,
+    strict: bool = True,
+    source: str = "generate",
 ) -> None:
     start = date.today()
     # One atomic batch reservation for every task in the plan, rather than one
@@ -381,7 +456,8 @@ async def _persist_milestones(
         tasks_by_key.update(_add_tasks(milestone.id, m["tasks"], start, task_short_ids, db))
         for t in m["tasks"]:
             edges_by_key[t.get("key")] = t.get("depends_on") or []
-    resolve_task_dependencies(tasks_by_key, edges_by_key, strict=strict)
+    resolution = resolve_task_dependencies(tasks_by_key, edges_by_key, strict=strict)
+    record_plan_quality(project, resolution, source)
 
 
 async def create_project_with_milestones(
@@ -394,6 +470,7 @@ async def create_project_with_milestones(
     db: AsyncSession,
     *,
     strict: bool = True,
+    source: str = "generate",
 ) -> Project:
     """Create a Project row (linked to `session` via its 1:1 FK) under `team`
     and persist `milestones` (already validated) under it.
@@ -406,7 +483,10 @@ async def create_project_with_milestones(
     `strict` governs dependency-graph resolution (see `resolve_task_dependencies`):
     the import path passes `strict=False` since accepting only a subset of
     proposed milestones legitimately produces dangling `dependsOn` references
-    to milestones the user rejected.
+    to milestones the user rejected. `source` labels the recorded plan-quality
+    telemetry (see `record_plan_quality`) — note the import path's dangling
+    edges are expected, so its dropped-edge counts read differently from a
+    strict generate's.
     """
     project = Project(
         team_id=team.id,
@@ -418,5 +498,5 @@ async def create_project_with_milestones(
     db.add(project)
     await db.flush()  # assign project.id
     org = await db.get(Organization, team.organization_id)
-    await _persist_milestones(project, milestones, org, db, strict=strict)
+    await _persist_milestones(project, milestones, org, db, strict=strict, source=source)
     return project

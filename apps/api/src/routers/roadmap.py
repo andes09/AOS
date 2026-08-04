@@ -32,7 +32,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import date, time
+from datetime import date, datetime, time
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -42,10 +42,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth import get_current_org_id, get_current_user_id
 from src.database import get_db
+from src.dependencies import mark_developer_active
 from src.models.onboarding_session import OnboardingMessage
 from src.models.task import Task, TaskStatus
 from src.routers.project_common import _get_org, _owned_project
-from src.services import idea_interview, roadmap_adjuster, roadmap_generator
+from src.services import activity, idea_interview, roadmap_adjuster, roadmap_generator
 from src.services import roadmap_service as svc
 from src.services.task_ids import allocate_short_id
 
@@ -58,7 +59,15 @@ _CHAT_OPENER = (
     "constraints, key features), the more precise and technical I can make your plan."
 )
 
-router = APIRouter(prefix="/api/projects/{project_id}/roadmap", tags=["roadmap"])
+# mark_developer_active as a router-level dependency: one line marks the caller
+# active on the roadmap load *and* on every task mutation below (anti-dormancy,
+# see docs/plans/2026-07-20-anti-dormancy-mvp.md). Its return value is ignored
+# here — only the summary route, which is on routers/activity.py, reads it.
+router = APIRouter(
+    prefix="/api/projects/{project_id}/roadmap",
+    tags=["roadmap"],
+    dependencies=[Depends(mark_developer_active)],
+)
 
 
 # ─── endpoints ──────────────────────────────────────────────────────────────────
@@ -281,7 +290,24 @@ async def update_task(
     if body.status is not None:
         if body.status == TaskStatus.DONE.value and svc.task_is_blocked(task):
             raise HTTPException(status_code=409, detail="task_blocked_by_dependency")
+        current_status = task.status.value if isinstance(task.status, TaskStatus) else task.status
+        was_done = current_status == TaskStatus.DONE.value
+        now_done = body.status == TaskStatus.DONE.value
         task.status = body.status
+        # completed_at drives "tasks completed since last visit" in the
+        # re-engagement summary. The GitHub/MCP paths already stamp it; the
+        # manual REST flip did not — set it here on the todo/in_progress→done
+        # edge, clear it when a task is reopened, and leave an existing stamp
+        # untouched on a done→done no-op.
+        if now_done and not was_done:
+            task.completed_at = datetime.utcnow()
+        elif was_done and not now_done:
+            task.completed_at = None
+        # A teammate's completion resets *their* dormancy clock, not just the
+        # clicker's. Unassigned tasks are skipped (no one to credit) rather than
+        # fanned out to the whole org — that stays simple for this milestone.
+        if now_done and not was_done and task.assignee_id is not None:
+            await activity.touch_developer_activity(task.assignee_id, db)
     if body.title is not None:
         task.title = body.title
     if "description" in body.model_fields_set:

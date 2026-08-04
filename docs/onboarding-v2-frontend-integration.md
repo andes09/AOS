@@ -25,17 +25,19 @@ protocol for you.
 Onboarding is five steps, always in this order:
 
 ```
-github_connect → profile → purpose → build_plan → repo_select → done
+profile → purpose → build_plan → github_repo → done
 ```
 
 `build_plan` is a fork, not a single step: until the user picks a plan
 source, its `id` in `state.steps` is `'build_plan'`; once they pick via
 `savePlanSource('chat' | 'import')`, it becomes `'idea_chat'` or
 `'import_artifact'` for the rest of the session (no path-switching UI —
-the choice is fixed once its sub-flow starts). `github_connect` and
-`repo_select` are both skippable; `repo_select` also auto-completes on its
-own if GitHub was never connected in the first place (nothing to pick a repo
-from). **Don't hardcode any of this in your UI logic** — read it off
+the choice is fixed once its sub-flow starts). `github_repo` covers
+connecting GitHub *and* picking (or creating) a repo as one skippable step —
+it renders as two phases (connect, then pick/create) off the same
+`state.currentStep === 'github_repo'`, and auto-completes on its own if
+GitHub was never connected in the first place (nothing to pick a repo from).
+**Don't hardcode any of this in your UI logic** — read it off
 `state.steps` / `state.currentStep` so if we ever reorder or add a step, your
 UI adapts without a code change.
 
@@ -52,14 +54,13 @@ const { state, isLoading, error, skipGithub, saveProfile, savePurpose, savePlanS
 
 ```ts
 {
-  currentStep: 'github_connect' | 'profile' | 'purpose' | 'build_plan' | 'idea_chat'
-             | 'import_artifact' | 'repo_select' | 'done',
+  currentStep: 'profile' | 'purpose' | 'build_plan' | 'idea_chat'
+             | 'import_artifact' | 'github_repo' | 'done',
   steps: [
-    { id: 'github_connect', status: 'complete' | 'current' | 'pending', skippable: true },
-    { id: 'profile',        status: ..., skippable: false },
+    { id: 'profile',        status: 'complete' | 'current' | 'pending', skippable: false },
     { id: 'purpose',        status: ..., skippable: false },
     { id: 'build_plan' | 'idea_chat' | 'import_artifact', status: ..., skippable: false },
-    { id: 'repo_select',    status: ..., skippable: true },
+    { id: 'github_repo',    status: ..., skippable: true },
   ],
   github:   { connected: boolean, login: string | null, skipped: boolean, needsReconnect: boolean },
   profile:  { name: string | null, phone: string | null, complete: boolean },
@@ -76,29 +77,7 @@ Render based on `state.currentStep`. Every mutation below returns the **full
 new state**, so after calling one, `state` is already up to date — no manual
 refetch needed.
 
-### Step 1 — GitHub connect (skippable)
-
-```tsx
-import { useGithubConnect } from '../features/onboarding-v2'
-
-const { connect, disconnect, redirectResult } = useGithubConnect('/onboarding')
-
-<button onClick={() => connect.mutate()}>Connect GitHub</button>
-<button onClick={() => skipGithub.mutate()}>Skip for now</button>
-```
-
-`connect.mutate()` redirects the whole page to GitHub's consent screen.
-GitHub redirects back to the same URL with `?github=connected` or
-`?github=error&reason=...` — `redirectResult` parses that for you on mount, so
-check it once to show a success/error message:
-
-```tsx
-if (redirectResult?.outcome === 'error') {
-  // show redirectResult.reason (e.g. "token_exchange_failed")
-}
-```
-
-### Step 2 — Profile (name + phone)
+### Step 1 — Profile (name + phone)
 
 ```tsx
 saveProfile.mutate({ name, phone })
@@ -108,7 +87,7 @@ Validation (name 1–255 chars, phone must look like a phone number) happens
 server-side and surfaces as `saveProfile.error.message` — a 422 means one of
 the fields is invalid, show that message next to the form.
 
-### Step 3 — Purpose (hobby / startup / learning)
+### Step 2 — Purpose (hobby / startup / learning)
 
 **This is a 3-way choice, not free text.** It determines how the AI interview
 in the next step behaves — a hobby project gets asked about fun and spare
@@ -120,7 +99,7 @@ buttons/cards and call:
 savePurpose.mutate('hobby' | 'startup' | 'learning')
 ```
 
-### Step 4 — Idea interview (the AI chat)
+### Step 3 — Idea interview (the AI chat)
 
 ```tsx
 import { useIdeaChat } from '../features/onboarding-v2'
@@ -148,7 +127,7 @@ forth (the reference UI gates it on `chat.messages.length > 2`); it lets the
 user end the interview instead of waiting for the AI to decide it has enough.
 When `chat.status === 'completed'`, disable the input and move on.
 
-### Step 4 (fork) — build_plan: chat or import
+### Step 3 (fork) — build_plan: chat or import
 
 `build_plan` isn't one step, it's a chooser. Render it while
 `state.currentStep === 'build_plan'`:
@@ -190,22 +169,57 @@ entry, collect a value and pass it as a key in `apply`'s `briefOverrides` →
 the same onboarding state everything else does — no manual navigation needed,
 `state.currentStep` moves on by itself.
 
-### Step 5 — repo_select (skippable)
+### Step 4 — GitHub + repo (skippable)
+
+One step, two phases, both keyed off `state.currentStep === 'github_repo'`:
+
+**Phase A — GitHub not connected** (`!state.github.connected ||
+state.github.needsReconnect`):
+
+```tsx
+import { useGithubConnect } from '../features/onboarding-v2'
+
+const { connect, disconnect, redirectResult } = useGithubConnect('/onboarding')
+
+<button onClick={() => connect.mutate()}>Connect GitHub</button>
+<button onClick={() => skipGithub.mutate()}>Skip for now</button>
+```
+
+`connect.mutate()` redirects the whole page to GitHub's consent screen.
+GitHub redirects back to the same URL with `?github=connected` or
+`?github=error&reason=...` — `redirectResult` parses that for you on mount, so
+check it once to show a success/error message:
+
+```tsx
+if (redirectResult?.outcome === 'error') {
+  // show redirectResult.reason (e.g. "token_exchange_failed")
+}
+```
+
+`skipGithub.mutate()` here skips the *whole* step — with no connection,
+there's no repo to pick either, so the backend auto-completes both halves at
+once.
+
+**Phase B — GitHub connected**: render the repo picker instead. Its skip only
+skips the repo half (GitHub stays connected):
 
 ```tsx
 import { useRepoSelect } from '../features/onboarding-v2'
 
-const { repos, page, setPage, selectRepo, skip } = useRepoSelect()
+const { repos, page, setPage, selectRepo, skip, createRepo } = useRepoSelect()
 // repos.data — GithubRepo[] for the current page
 // selectRepo.mutate(repoFullName)
 // skip.mutate()
+// createRepo.mutate({ name, isPrivate }) — chat/greenfield path only, gated
+//   behind state.repo.canCreate (an Organization install with
+//   experimental.repo_create on; personal accounts are connect-only)
 ```
 
-Only ever reachable if `state.repo.available` is true (GitHub is actually
-connected) — if it's false, this step is already marked done server-side and
-`currentStep` skips straight past it.
+`state.currentStep` only moves past `github_repo` once *both* phases are
+done (connected-or-skipped, and repo-picked-or-skipped-or-unavailable) — see
+`GithubRepoStep.tsx` in the reference UI for the phase switch itself.
 
-### Step 6 — Done
+### Step 5 — Done
 
 ```tsx
 await complete.mutateAsync()  // sets onboardingCompleted, then navigate to /app

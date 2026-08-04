@@ -105,7 +105,7 @@ export function Spinner({ size = 16, color = C.accent }: { size?: number; color?
   )
 }
 
-// ─── ProgressBar ──────────────────────────────────────────────────────────────
+// ─── Progress bar ─────────────────────────────────────────────────────────────
 export function ProgressBar({ progress }: { progress: number }) {
   return (
     <div style={{ width: '100%', height: 4, borderRadius: 2, background: C.bg3, overflow: 'hidden' }}>

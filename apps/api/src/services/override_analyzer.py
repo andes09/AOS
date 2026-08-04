@@ -62,6 +62,9 @@ async def detect_patterns(
     try:
         team_uuid = uuid.UUID(str(team_id))
     except (ValueError, TypeError):
+        # Returning [] here is indistinguishable from "no patterns found", so
+        # log it — a malformed team_id means the caller is passing junk.
+        logger.warning("detect_patterns: invalid team_id %r — returning no patterns", team_id)
         return []
 
     cutoff = datetime.utcnow() - timedelta(days=lookback_days)
@@ -118,6 +121,12 @@ async def detect_patterns(
                 try:
                     w = float(weight)
                 except (TypeError, ValueError):
+                    # Non-numeric weight = corrupt skill_vector on the analysis
+                    # row; skipping it silently would hide the bad data forever.
+                    logger.warning(
+                        "detect_patterns: non-numeric skill weight, skipping",
+                        extra={"skill": skill_name, "weight": repr(weight), "override_id": str(override.id)},
+                    )
                     continue
                 if w > SKILL_THRESHOLD_WEIGHT:
                     skill_counts[(override.original_developer_id, skill_name)].append(
@@ -130,6 +139,10 @@ async def detect_patterns(
                 try:
                     ident_uuid = uuid.UUID(str(ident))
                 except (ValueError, TypeError):
+                    logger.warning(
+                        "detect_patterns: malformed matched_identifier, skipping",
+                        extra={"identifier": repr(ident), "override_id": str(override.id)},
+                    )
                     continue
                 ident_target_counts[(ident_uuid, override.new_developer_id)].append(
                     str(override.id)
@@ -203,6 +216,10 @@ async def detect_patterns(
             try:
                 top_skill = max(target_dev.skill_ratings.items(), key=lambda kv: float(kv[1] or 0))[0]
             except (ValueError, TypeError):
+                logger.warning(
+                    "detect_patterns: unrankable skill_ratings, skipping developer",
+                    extra={"developer_id": str(target_dev_id), "skill_ratings": repr(target_dev.skill_ratings)},
+                )
                 continue
             ident_skill_evidence[(ident_uuid, top_skill)].extend(evidence)
 

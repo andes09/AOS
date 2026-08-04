@@ -8,6 +8,7 @@ GET    /api/invitations
 DELETE /api/invitations/{invitation_id}
 POST   /api/invitations/accept
 """
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -28,6 +29,8 @@ from src.services.invitation import (
     build_invite_link,
     create_invitation,
 )
+
+logger = logging.getLogger(__name__)
 
 invitations_router = APIRouter(tags=["invitations"])
 
@@ -173,7 +176,15 @@ async def list_invitations(
 ):
     try:
         org, _ = await _resolve_org_and_team(clerk_org_id, db)
-    except HTTPException:
+    except HTTPException as exc:
+        # Deliberately degrades to an empty list rather than erroring, so the
+        # settings page still renders. But the exception never propagates to
+        # the central handler, so without this line an org that can't be
+        # resolved looks identical to an org with no invitations.
+        logger.warning(
+            "list_invitations: could not resolve org, returning empty list",
+            extra={"clerk_org_id": clerk_org_id, "status": exc.status_code, "detail": exc.detail},
+        )
         return InvitationsListResponse(invitations=[])
     result = await db.execute(
         select(Invitation).where(Invitation.organization_id == org.id)

@@ -51,7 +51,6 @@ router = APIRouter(prefix="/api/onboarding/v2", tags=["onboarding-v2"])
 
 _PHONE_RE = re.compile(r"^\+?[0-9][0-9\s\-().]{5,30}$")
 
-STEP_GITHUB = "github_connect"
 STEP_PROFILE = "profile"
 STEP_PURPOSE = "purpose"
 # Gated behind experimental.tech_stack_step (see PUT /tech-stack below) — only
@@ -65,9 +64,12 @@ STEP_IDEA_CHAT = "idea_chat"
 # the same position in `steps[]`.
 STEP_BUILD_PLAN = "build_plan"
 STEP_IMPORT_ARTIFACT = "import_artifact"
-# New, genuinely separate step after build_plan — skippable, mirrors
-# github_connect (see docs/plans/2026-07-20-import-artifacts.md).
-STEP_REPO_SELECT = "repo_select"
+# Connect GitHub, then pick/create a repo — one skippable step covering both
+# halves (see `github_done`/`repo_done` below). Deliberately placed after
+# build_plan rather than at the very front: by this point onboardingPath is
+# already known, so the repo picker can be path-aware (offer "create a repo"
+# only on the chat/greenfield path) from the moment it's shown.
+STEP_GITHUB_REPO = "github_repo"
 # Gated behind the plan_review flag — the last step before "done". The
 # founder reviews (and can regenerate) the drafted roadmap before it's
 # committed, instead of it being generated silently at POST /complete. Only
@@ -120,6 +122,23 @@ async def _resolve_team(org: Organization, db: AsyncSession) -> Team:
     if team is None:
         raise HTTPException(status_code=409, detail="no_team_for_org")
     return team
+
+
+def _maybe_prewarm_roadmap(session: OnboardingSession) -> None:
+    """Fire a background roadmap generation the moment the interview
+    completes, so POST /plan/draft usually finds it already sitting there
+    instead of paying for the Groq call on the review step's critical path
+    (see services/roadmap_generator.prewarm_roadmap). Best-effort: an enqueue
+    failure (e.g. Redis briefly down) must never break onboarding.
+    """
+    if not settings.is_feature_enabled("plan_review") or not session.project_brief:
+        return
+    try:
+        roadmap_generator.prewarm_roadmap.delay(str(session.id))
+    except Exception:
+        logger.exception(
+            "[onboarding] failed to enqueue roadmap prewarm for session %s", session.id
+        )
 
 
 async def _get_or_create_session(
@@ -201,9 +220,10 @@ async def _build_state(
     else:
         fourth_step_id = STEP_BUILD_PLAN
 
-    # repo_select is auto-satisfied when there's no GitHub connection to pick
-    # a repo from (github was never connected, whether skipped or just not
-    # yet done) — mirrors github_connect's own skippability.
+    # The repo half of STEP_GITHUB_REPO is auto-satisfied when there's no
+    # GitHub connection to pick a repo from (github was never connected,
+    # whether skipped or just not yet done) — so skipping the GitHub half
+    # alone completes the whole merged step in one action.
     repo_available = bool(connection)
     repo_selected = bool(session and session.selected_github_repo_full_name)
     repo_skipped = bool(session and session.repo_select_skipped_at)
@@ -239,13 +259,16 @@ async def _build_state(
             or 0
         )
 
+    # Both halves must be done for the merged step to complete — see the
+    # repo_done/github_done cases documented on STEP_GITHUB_REPO above.
+    github_repo_done = github_done and repo_done
+
     done_flags = [
-        (STEP_GITHUB, github_done, True),
         (STEP_PROFILE, profile_done, False),
         (STEP_PURPOSE, purpose_done, False),
         *([(STEP_TECH_STACK, tech_stack_done, False)] if tech_stack_step_enabled else []),
         (fourth_step_id, chat_done, False),
-        (STEP_REPO_SELECT, repo_done, True),
+        (STEP_GITHUB_REPO, github_repo_done, True),
         *([(STEP_PLAN_REVIEW, plan_confirmed, False)] if plan_review_enabled else []),
     ]
     steps = []
@@ -622,6 +645,8 @@ async def _chat_event_stream(
                 "messageId": result["message_id"],
                 "status": result["status"],
             }))
+            if result["status"] == "completed":
+                _maybe_prewarm_roadmap(session)
         except Exception as e:
             logger.exception("[idea-chat] turn failed for session %s", session.id)
             await queue.put(("error", {"message": str(e) or "Interview turn failed"}))
@@ -654,7 +679,7 @@ async def _plan_draft_event_stream(
 
     async def runner() -> None:
         try:
-            project = await roadmap_generator.generate_roadmap(
+            project = await roadmap_generator.generate_roadmap_once(
                 session, team, api_key, db, on_progress
             )
             await queue.put(("done", {"projectId": str(project.id)}))
@@ -729,6 +754,7 @@ async def complete_chat(
         session.status = "completed"
         session.completed_at = datetime.utcnow()
         await db.commit()
+        _maybe_prewarm_roadmap(session)
     return await _build_state(org, user_id, db)
 
 

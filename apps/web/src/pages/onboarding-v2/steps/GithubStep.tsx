@@ -1,7 +1,8 @@
 /**
- * Step 1 — connect GitHub (skippable). Wires the `useGithubConnect` hook:
- * `connect.mutate()` sends the browser to the GitHub App install flow, and
- * the install redirect result (?github=connected|error) is surfaced on mount.
+ * Phase A of the github_repo step (see GithubRepoStep) — connect GitHub,
+ * skippable. Wires the `useGithubConnect` hook: `connect.mutate()` sends the
+ * browser to the GitHub App install flow, and the install redirect result
+ * (?github=connected|error) is surfaced on mount.
  */
 import { useGithubConnect } from '../../../features/onboarding-v2'
 import { Btn, C, GithubMark, OmadaMark, Spinner, WARM } from '../theme'

@@ -11,6 +11,7 @@ import { EmptyState } from '../../components/ui/EmptyState'
 import { useProjects, useProjectMutations } from '../../features/projects/hooks/useProjects'
 import type { ProjectStatus, ProjectSummary } from '../../features/projects/types'
 import { ProjectCard } from './ProjectCard'
+import { WelcomeBackBanner } from '../../components/activity/WelcomeBackBanner'
 import { ApiError } from '../../lib/api'
 
 const SECTIONS: { status: ProjectStatus; title: string }[] = [
@@ -43,6 +44,7 @@ export function ProjectHubPage() {
 
   return (
     <div style={{ maxWidth: 960, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
+      <WelcomeBackBanner />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <h1 style={{ fontSize: 'var(--text-xl)', fontWeight: 700, margin: 0 }}>Projects</h1>
         <Button variant="primary" onClick={() => navigate('/app/projects/new')}>

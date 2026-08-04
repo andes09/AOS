@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test'
 
 /**
- * E2e walk of the onboarding v2 flow (GitHub → profile → idea chat → done)
- * against the reference UI at /onboarding/v2.
+ * E2e walk of the onboarding v2 flow (profile → purpose → idea chat →
+ * GitHub+repo → done) against the reference UI at /onboarding/v2.
  *
  * Requires VITE_TEST_MODE=true: App.tsx skips <SignedIn> and the headless
  * client uses a dummy bearer token, so every API route here is intercepted
@@ -11,30 +11,37 @@ import { test, expect } from '@playwright/test'
 
 type StepStatus = 'complete' | 'current' | 'pending'
 
-function makeState(current: 'github_connect' | 'profile' | 'purpose' | 'idea_chat' | 'done') {
-  const order = ['github_connect', 'profile', 'purpose', 'idea_chat'] as const
+function makeState(current: 'profile' | 'purpose' | 'idea_chat' | 'github_repo' | 'done') {
+  const order = ['profile', 'purpose', 'idea_chat', 'github_repo'] as const
   const currentIdx = current === 'done' ? order.length : order.indexOf(current)
   const status = (i: number): StepStatus =>
     i < currentIdx ? 'complete' : i === currentIdx ? 'current' : 'pending'
   return {
     currentStep: current,
-    steps: order.map((id, i) => ({ id, status: status(i), skippable: id === 'github_connect' })),
-    github: { connected: false, login: null, skipped: currentIdx > 0 },
+    steps: order.map((id, i) => ({ id, status: status(i), skippable: id === 'github_repo' })),
+    // GitHub is only skipped once the walk reaches (and skips) github_repo,
+    // the last tracked step here — i.e. only once we're at 'done'.
+    github: { connected: false, login: null, skipped: currentIdx > 3, needsReconnect: false },
     profile:
-      currentIdx > 1
+      currentIdx > 0
         ? { name: 'Ada Lovelace', phone: '+1 555 123 4567', complete: true }
         : { name: null, phone: null, complete: false },
     purpose:
-      currentIdx > 2
+      currentIdx > 1
         ? { value: 'startup', complete: true }
         : { value: null, complete: false },
     ideaChat: {
-      sessionId: currentIdx > 3 ? 'sess-1' : null,
-      status: current === 'done' ? 'completed' : 'not_started',
+      sessionId: currentIdx > 2 ? 'sess-1' : null,
+      status: currentIdx > 2 ? 'completed' : 'not_started',
       messageCount: 0,
       brief: null,
       briefComplete: false,
     },
+    onboardingPath: currentIdx > 1 ? 'chat' : null,
+    // GithubRepoStep/RepoSelectStep read these unconditionally once
+    // currentStep is 'github_repo', so every state needs them even though
+    // this walk never leaves phase A (GitHub not connected).
+    repo: { selected: null, skipped: false, available: false, canCreate: false, ownerLogin: null },
     onboardingCompleted: false,
   }
 }
@@ -47,17 +54,13 @@ const SSE_TURN = [
 ].join('\n')
 
 test.describe('Onboarding v2 flow', () => {
-  test('walks GitHub skip → profile → idea chat → done', async ({ page }) => {
+  test('walks profile → purpose → idea chat → GitHub skip → done', async ({ page }) => {
     // GET /state serves whatever step the flow has reached; mutations advance it.
-    let state = makeState('github_connect')
+    let state = makeState('profile')
 
     await page.route('**/api/onboarding/v2/state', route =>
       route.fulfill({ status: 200, body: JSON.stringify(state) }),
     )
-    await page.route('**/api/onboarding/v2/github/skip', route => {
-      state = makeState('profile')
-      return route.fulfill({ status: 200, body: JSON.stringify(state) })
-    })
     await page.route('**/api/onboarding/v2/profile', route => {
       state = makeState('purpose')
       return route.fulfill({ status: 200, body: JSON.stringify(state) })
@@ -93,6 +96,10 @@ test.describe('Onboarding v2 flow', () => {
       }),
     )
     await page.route('**/api/onboarding/v2/chat/complete', route => {
+      state = makeState('github_repo')
+      return route.fulfill({ status: 200, body: JSON.stringify(state) })
+    })
+    await page.route('**/api/onboarding/v2/github/skip', route => {
       state = makeState('done')
       return route.fulfill({ status: 200, body: JSON.stringify(state) })
     })
@@ -102,21 +109,17 @@ test.describe('Onboarding v2 flow', () => {
 
     await page.goto('/onboarding/v2')
 
-    // Step 1: GitHub connect, skipped.
-    await expect(page.getByRole('heading', { name: 'Connect your GitHub' })).toBeVisible()
-    await page.getByRole('button', { name: 'Skip for now' }).click()
-
-    // Step 2: profile.
+    // Step 1: profile.
     await expect(page.getByRole('heading', { name: 'Tell us who you are' })).toBeVisible()
     await page.getByLabel('Name').fill('Ada Lovelace')
     await page.getByLabel('Phone').fill('+1 555 123 4567')
     await page.getByRole('button', { name: 'Continue' }).click()
 
-    // Step 3: purpose — a simple 3-way choice, not free text.
+    // Step 2: purpose — a simple 3-way choice, not free text.
     await expect(page.getByRole('heading', { name: "What's this project for?" })).toBeVisible()
     await page.getByRole('button', { name: /A startup/ }).click()
 
-    // Step 4: idea chat — opening message, then a streamed turn.
+    // Step 3: idea chat — opening message, then a streamed turn.
     await expect(page.getByRole('heading', { name: 'Tell us about your idea' })).toBeVisible()
     await expect(page.getByText('what are you building?')).toBeVisible()
     await page.getByLabel('Your message').fill('A roadmap AI for founders')
@@ -127,7 +130,12 @@ test.describe('Onboarding v2 flow', () => {
     // User override: finish the interview.
     await page.getByRole('button', { name: "That's enough — finish up" }).click()
 
-    // Step 4: done.
+    // Step 4: GitHub + repo (merged step, phase A since GitHub isn't
+    // connected), skipped.
+    await expect(page.getByRole('heading', { name: 'Connect your GitHub' })).toBeVisible()
+    await page.getByRole('button', { name: 'Skip for now' }).click()
+
+    // Step 5: done.
     await expect(page.getByRole('heading', { name: "You're all set" })).toBeVisible()
   })
 
@@ -135,12 +143,11 @@ test.describe('Onboarding v2 flow', () => {
     let state: Record<string, unknown> = {
       currentStep: 'tech_stack',
       steps: [
-        { id: 'github_connect', status: 'complete', skippable: true },
         { id: 'profile', status: 'complete', skippable: false },
         { id: 'purpose', status: 'complete', skippable: false },
         { id: 'tech_stack', status: 'current', skippable: false },
         { id: 'build_plan', status: 'pending', skippable: false },
-        { id: 'repo_select', status: 'complete', skippable: true },
+        { id: 'github_repo', status: 'complete', skippable: true },
       ],
       github: { connected: false, login: null, skipped: true },
       profile: { name: 'Ada Lovelace', phone: '+1 555 123 4567', complete: true },
@@ -218,7 +225,7 @@ test.describe('Onboarding v2 flow', () => {
 
   test('surfaces a GitHub OAuth error redirect', async ({ page }) => {
     await page.route('**/api/onboarding/v2/state', route =>
-      route.fulfill({ status: 200, body: JSON.stringify(makeState('github_connect')) }),
+      route.fulfill({ status: 200, body: JSON.stringify(makeState('github_repo')) }),
     )
     await page.goto('/onboarding/v2?github=error&reason=token_exchange_failed')
     await expect(page.getByRole('alert')).toContainText('token_exchange_failed')

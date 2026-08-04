@@ -102,7 +102,9 @@ async def github_callback(
     try:
         await db.execute(delete(OAuthState).where(OAuthState.expires_at < datetime.utcnow()))
     except Exception:
-        pass
+        # Best-effort GC of expired states — never block the callback on it.
+        # Logged because repeated failures here mean the table grows unbounded.
+        logger.warning("github_callback: expired OAuthState cleanup failed", exc_info=True)
 
     state_row = await db.scalar(select(OAuthState).where(OAuthState.state == state))
     if not state_row:

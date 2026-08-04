@@ -10,11 +10,13 @@
 //   const importFlow = useImportArtifact()  // analyze/apply + per-milestone accept/reject
 //   const repoSelect = useRepoSelect()  // list repos + setRepo/skipRepo
 //
-// state.currentStep walks: github_connect -> profile -> purpose -> tech_stack (flag-gated)
-// -> build_plan -> repo_select -> plan_review (flag-gated) -> done. build_plan forks on state.onboardingPath
+// state.currentStep walks: profile -> purpose -> tech_stack (flag-gated)
+// -> build_plan -> github_repo -> plan_review (flag-gated) -> done. build_plan forks on state.onboardingPath
 // ('chat' | 'import' | null): its step id in state.steps is 'build_plan' while
 // unset, then 'idea_chat' or 'import_artifact' once chosen via savePlanSource.
-// repo_select is skippable and auto-completes when GitHub was never connected.
+// github_repo covers connecting GitHub, then picking (or creating) a repo, as
+// one skippable step — it auto-completes if GitHub is never connected, and
+// the repo half stays pending if GitHub connects but no repo is picked yet.
 // `purpose` (hobby/startup/learning) steers the idea interview's system prompt
 // server-side, so collect it with a simple 3-way choice, not free text.
 // `tech_stack` (behind experimental.tech_stack_step) is similarly explicit —

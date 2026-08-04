@@ -8,6 +8,7 @@ POST /api/organizations
     Called by the frontend once after first sign-in.
     Returns 201 on creation, 200 if org already existed.
 """
+import logging
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
@@ -20,6 +21,8 @@ from src.database import get_db
 from src.models.organization import Organization
 from src.models.team import Team
 from src.services.encryption import encrypt
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/organizations", tags=["organizations"])
 settings_router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -111,12 +114,27 @@ async def provision_organization(
     except IntegrityError:
         # Concurrent request already created the org (e.g. React Strict Mode double-fire).
         # Roll back and return the existing record as if it were a normal idempotent hit.
+        logger.info(
+            "organization create raced with a concurrent request, falling back to existing row",
+            extra={"clerk_org_id": clerk_org_id},
+        )
         await db.rollback()
         org = await db.scalar(select(Organization).where(Organization.clerk_org_id == clerk_org_id))
         if org is None:
+            # IntegrityError but no matching org — the constraint that fired was
+            # something other than the clerk_org_id uniqueness we assumed here.
+            logger.exception(
+                "organization create hit IntegrityError but no existing org found — "
+                "the failing constraint is not clerk_org_id uniqueness",
+                extra={"clerk_org_id": clerk_org_id},
+            )
             raise HTTPException(status_code=500, detail="Organisation creation failed.")
         team = await db.scalar(select(Team).where(Team.organization_id == org.id))
         if team is None:
+            logger.error(
+                "organization exists but has no default team — data integrity problem",
+                extra={"clerk_org_id": clerk_org_id, "org_id": str(org.id)},
+            )
             raise HTTPException(status_code=500, detail="Organisation exists but has no default team.")
         response.status_code = 200
         return {

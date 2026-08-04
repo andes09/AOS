@@ -182,7 +182,9 @@ async def test_call_planner_gives_up_after_max_tool_use_failures():
 def test_tech_stack_prompt_none_when_unset():
     session = OnboardingSession(project_brief={"projectName": "Trail Buddy"})
     assert roadmap_generator._tech_stack_prompt(session) is None
-    assert "Project brief" in roadmap_generator._brief_prompt(session)
+    brief_prompt = roadmap_generator._brief_prompt(session)
+    assert "Project brief" in brief_prompt
+    assert roadmap_generator._ENV_SETUP_GUIDANCE in brief_prompt
 
 
 def test_tech_stack_prompt_experienced_names_the_stack():
@@ -192,6 +194,7 @@ def test_tech_stack_prompt_experienced_names_the_stack():
     prompt = roadmap_generator._tech_stack_prompt(session)
     assert "React, Postgres" in prompt
     assert "already knows" in prompt
+    assert "installed for this project" in prompt
     assert prompt in roadmap_generator._brief_prompt(session)
 
 
@@ -201,6 +204,11 @@ def test_tech_stack_prompt_new_asks_for_beginner_setup():
     assert "new to building software" in prompt
     assert "setup" in prompt
     assert prompt in roadmap_generator._brief_prompt(session)
+
+
+def test_brief_prompt_always_includes_environment_setup_guidance():
+    session = OnboardingSession(project_brief={"projectName": "Trail Buddy"})
+    assert roadmap_generator._ENV_SETUP_GUIDANCE in roadmap_generator._brief_prompt(session)
 
 
 # ─── generate_roadmap ──────────────────────────────────────────────────────────

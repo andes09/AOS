@@ -2,6 +2,42 @@
 
 ---
 
+## 🚀 ACTIVE — Plans should always start with environment setup (branch: feature/plan-environment-setup)
+
+Roadmap generation only told the planner to front-load "install tools/create
+accounts" tasks when the founder answered the tech-stack onboarding step with
+"I'm new to this". Everyone else (experienced founders, or flag-off sessions)
+got plans that assume the dev machine is already configured for this specific
+project. Full plan: `~/.claude/plans/fancy-mixing-reef.md`.
+
+- [x] Add always-on `_ENV_SETUP_GUIDANCE` constant in `roadmap_generator.py`,
+      appended unconditionally in `_brief_prompt` (full-roadmap gen only, not
+      single-milestone regen)
+- [x] Sharpen `_tech_stack_prompt`'s `"experienced"` branch: familiarity with a
+      tool isn't the same as having it installed for this project
+- [x] Update/add tests in `test_roadmap_generator.py` for the new unconditional
+      behavior
+- [x] Run `pytest tests/test_roadmap_generator.py -q`
+
+### Review (2026-08-04)
+
+**Shipped.** Pure prompt-text change, no schema/frontend/flag touched.
+`test_roadmap_generator.py`: 17 passed (was 15; added
+`test_brief_prompt_always_includes_environment_setup_guidance`, extended two
+existing tests). Full backend suite: 285 passed / 43 failed — confirmed via
+stash-and-rerun that the same 43 fail on a clean `origin/main` checkout in this
+fresh worktree (pre-existing baseline, unrelated to this change; auth/env-config
+shaped, not something this task should touch).
+
+**Environment note (ironic given the task):** this worktree needed `uv sync
+--extra dev` (pytest wasn't in the base `uv sync`) and a local-only `uv pip
+install aiosqlite` (missing from `pyproject.toml`/`uv.lock` entirely — the main
+checkout's `.venv` has it, but nothing declares it) before tests would even
+collect. Did not add `aiosqlite` to `pyproject.toml` — out of scope for this
+task and worth its own fix separately.
+
+---
+
 ## ✅ DONE — Stage 5: Omada MCP Server (branch: feature/omada-mcp-server, merged to main)
 
 Spec: `docs/plans/2026-07-20-omada-mcp-server.md` + corrections in the task prompt

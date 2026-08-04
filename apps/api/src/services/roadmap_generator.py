@@ -87,6 +87,17 @@ brief doesn't support; where the brief is silent, make a sensible, clearly-reaso
 choice and state it."""
 
 
+_ENV_SETUP_GUIDANCE = (
+    "The first milestone must include explicit tasks for setting up the local "
+    "development environment this project needs: installing the language "
+    "runtime/package manager, required CLI tools, framework or SDK installs, "
+    "and creating accounts or API keys for any required third-party services "
+    "— before any feature-building tasks. Base these on the project's actual "
+    "stack; don't assume the developer's machine is already configured for "
+    "this specific project."
+)
+
+
 def _system_prompt(purpose: str | None) -> str:
     guidance = _PURPOSE_GUIDANCE.get(purpose or "")
     if not guidance:
@@ -140,7 +151,9 @@ def _tech_stack_prompt(session: OnboardingSession) -> str | None:
         return (
             f"The founder already knows: {stack}. Prefer these tools; only introduce "
             "something new if there's a clear, well-justified gap in what they listed, "
-            "and say why in the task description."
+            "and say why in the task description. Knowing a tool isn't the same as "
+            "having it installed for this project — still give the first milestone "
+            "explicit setup tasks for the chosen stack."
         )
     if experience == "new":
         return (
@@ -153,7 +166,10 @@ def _tech_stack_prompt(session: OnboardingSession) -> str | None:
 
 
 def _brief_prompt(session: OnboardingSession) -> str:
-    parts = [f"Project brief (JSON):\n{json.dumps(session.project_brief or {})}"]
+    parts = [
+        f"Project brief (JSON):\n{json.dumps(session.project_brief or {})}",
+        _ENV_SETUP_GUIDANCE,
+    ]
     tech_stack_guidance = _tech_stack_prompt(session)
     if tech_stack_guidance:
         parts.append(tech_stack_guidance)

@@ -68,8 +68,28 @@ Full backend suite on `main`: **344 passed / 3 failed**, and those same 3
 `test_sprints_router::test_current_sprint_returns_active_sprint`) fail
 identically at `c12f836`, i.e. pre-existing and untouched by this work.
 
-**Still open:** both branches' `origin` refs are stale; the onboarding one was
-rebased, so updating it would need `--force-with-lease`.
+**Branch cleanup (done).** Both branches are gone — local refs, remote refs, and
+their worktrees (`.claude/worktrees/task-dependency-graph`,
+`../AOS-onboarding-confirmation`). Deleted rather than force-pushed, since the
+work is on `main` and the rebase had made the remote refs unfixable without
+`--force-with-lease`.
+
+Verified contained before deleting, not assumed. `git cherry` flagged
+`origin/feat/onboarding-completion-confirmation` as carrying 1 unmerged patch —
+that was the pre-rebase `66dab39`, whose patch-id differs only because of the
+migration renumber. Comparing the two commits' content lines with the
+`revision`/`down_revision`/`Revision ID`/`Revises` lines excluded: **392 lines,
+identical**. Nothing lost. Both worktrees were clean (no modified or untracked
+files) at removal.
+
+The repo's 9 stashes were left untouched — they are repo-global and shared with
+other concurrent sessions.
+
+**Still open (unrelated housekeeping):** `git fetch` warns about a stale
+`.git/gc.log` and a backlog of unreachable loose objects, so automatic gc is
+disabled. Deliberately not run — `git prune` would discard exactly the kind of
+unreachable commit (e.g. the pre-rebase `66dab39`) that is worth keeping
+recoverable for now, and other sessions share this repo.
 
 ---
 

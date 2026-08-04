@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { useApi } from '../lib/api'
+import { logger } from '../lib/logger'
 import type { TeamListItem } from '../types/multiTeam'
 
 interface TeamContextValue {
@@ -32,7 +33,9 @@ export function TeamProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     get<{ teams: TeamListItem[] }>('/api/teams')
       .then(data => setTeams(data.teams))
-      .catch(() => {})
+      // Swallowing this left the team switcher silently empty and the active
+      // team name blank, with no clue why.
+      .catch(err => logger.error('Failed to load teams', err))
   }, [])
 
   function setActiveTeam(teamId: string) {

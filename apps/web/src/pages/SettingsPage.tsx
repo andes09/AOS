@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useClerk } from '@clerk/clerk-react'
 import { useApi } from '../lib/api'
+import { logger } from '../lib/logger'
 import { useAppRole } from '../hooks/useAppRole'
 import { Card, CardHeader, CardBody } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
@@ -87,8 +88,10 @@ export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
     try {
       await del(`/api/invitations/${id}`)
       setInvitations(prev => prev.filter(i => i.id !== id))
-    } catch {
-      // ignore
+    } catch (err) {
+      // The row stays on screen when this fails, which looks like the button
+      // did nothing. At minimum it needs to be visible in the logs.
+      logger.error('Failed to revoke invitation', err, { invitationId: id })
     }
   }
 

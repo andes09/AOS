@@ -15,16 +15,16 @@ Nullable with no backfill — a project whose roadmap was generated before this
 column simply has no telemetry, and the numbers are only recoverable at
 generation time, so there is nothing to backfill from.
 
-Revision ID: 0048
-Revises: 0047
+Revision ID: 0049
+Revises: 0048
 Create Date: 2026-08-04
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
-revision = '0048'
-down_revision = '0047'
+revision = '0049'
+down_revision = '0048'
 branch_labels = None
 depends_on = None
 

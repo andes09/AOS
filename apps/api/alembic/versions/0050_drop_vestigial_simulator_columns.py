@@ -25,14 +25,14 @@ columns: which databases originally had them is not recoverable here, so
 re-creating them everywhere would manufacture the very drift this removes, and
 the columns are dead weight in any case.
 
-Revision ID: 0049
-Revises: 0048
+Revision ID: 0050
+Revises: 0049
 Create Date: 2026-08-04
 """
 from alembic import op
 
-revision = '0049'
-down_revision = '0048'
+revision = '0050'
+down_revision = '0049'
 branch_labels = None
 depends_on = None
 

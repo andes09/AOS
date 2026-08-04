@@ -4,12 +4,15 @@
  * Composes the presentational pieces in `./onboarding-v2` (theme atoms,
  * SidebarStepper, and the step components) over the headless hooks in
  * `src/features/onboarding-v2`. Nothing here calls `fetch` or hardcodes step
- * order — it renders whatever `state.currentStep` says, so reordering or adding
+ * order — it renders `state.currentStep` (or an earlier step the founder has
+ * navigated Back to, via local `viewStep` override), so reordering or adding
  * a step on the backend needs no change here (see
  * docs/onboarding-v2-frontend-integration.md).
  */
+import { useState } from 'react'
 import { useOnboardingState } from '../features/onboarding-v2'
-import { Alert, C, Spinner } from './onboarding-v2/theme'
+import type { OnboardingStepId } from '../features/onboarding-v2'
+import { Alert, Btn, C, Spinner } from './onboarding-v2/theme'
 import { SidebarStepper } from './onboarding-v2/SidebarStepper'
 import { ProfileStep } from './onboarding-v2/steps/ProfileStep'
 import { PurposeStep } from './onboarding-v2/steps/PurposeStep'
@@ -27,6 +30,15 @@ export function OnboardingV2Page() {
   const {
     state, isLoading, error, skipGithub, saveProfile, savePurpose, saveTechStack, savePlanSource, complete,
   } = useOnboardingState()
+
+  // Lets the founder step back to review or edit an earlier answer. The
+  // backend has no notion of "previous step" — currentStep is always the
+  // first incomplete step derived from saved data (see onboarding_v2.py's
+  // _build_state) — so this is purely a client-side view override, never
+  // sent to the server. Re-saving an already-complete step's data (e.g.
+  // profile) doesn't change what's still incomplete, so currentStep lands
+  // back in the same place once the override clears.
+  const [viewStep, setViewStep] = useState<OnboardingStepId | null>(null)
 
   if (isLoading) {
     return (
@@ -49,6 +61,16 @@ export function OnboardingV2Page() {
   }
 
   if (!state) return null
+
+  // state.steps never includes 'done' — it's the fallback currentStep once
+  // every real step is complete, so treat it as sitting one past the last one.
+  const stepIds = state.steps.map(step => step.id)
+  const activeStep = viewStep ?? state.currentStep
+  const activeIndex = activeStep === 'done' ? stepIds.length : stepIds.indexOf(activeStep)
+  const canGoBack = activeIndex > 0
+  const isPreviewingPastStep = viewStep !== null && viewStep !== state.currentStep
+  const goBack = () => setViewStep(stepIds[activeIndex - 1])
+  const returnToCurrent = () => setViewStep(null)
 
   return (
     <div
@@ -85,39 +107,49 @@ export function OnboardingV2Page() {
         }}
       >
         <div style={{ width: '100%', maxWidth: 580 }}>
-          {state.currentStep === 'profile' && (
+          {(canGoBack || isPreviewingPastStep) && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+              {canGoBack ? (
+                <Btn variant="ghost" size="sm" onClick={goBack}>← Back</Btn>
+              ) : <span />}
+              {isPreviewingPastStep && (
+                <Btn variant="ghost" size="sm" onClick={returnToCurrent}>Return to current step →</Btn>
+              )}
+            </div>
+          )}
+          {activeStep === 'profile' && (
             <ProfileStep
-              onSave={(name, phone) => saveProfile.mutate({ name, phone })}
+              onSave={(name, phone) => { setViewStep(null); saveProfile.mutate({ name, phone }) }}
               saving={saveProfile.isPending}
               saveError={saveProfile.error?.message ?? null}
             />
           )}
-          {state.currentStep === 'purpose' && (
+          {activeStep === 'purpose' && (
             <PurposeStep
-              onSave={purpose => savePurpose.mutate(purpose)}
+              onSave={purpose => { setViewStep(null); savePurpose.mutate(purpose) }}
               saving={savePurpose.isPending}
             />
           )}
-          {state.currentStep === 'tech_stack' && (
+          {activeStep === 'tech_stack' && (
             <TechStackStep
-              onSave={(stack, experience) => saveTechStack.mutate({ stack, experience })}
+              onSave={(stack, experience) => { setViewStep(null); saveTechStack.mutate({ stack, experience }) }}
               saving={saveTechStack.isPending}
               saveError={saveTechStack.error?.message ?? null}
             />
           )}
-          {state.currentStep === 'build_plan' && (
+          {activeStep === 'build_plan' && (
             <PlanSourceStep
-              onSave={source => savePlanSource.mutate(source)}
+              onSave={source => { setViewStep(null); savePlanSource.mutate(source) }}
               saving={savePlanSource.isPending}
             />
           )}
-          {state.currentStep === 'idea_chat' && <IdeaChatStep />}
-          {state.currentStep === 'import_artifact' && <ImportArtifactStep />}
-          {state.currentStep === 'github_repo' && (
+          {activeStep === 'idea_chat' && <IdeaChatStep />}
+          {activeStep === 'import_artifact' && <ImportArtifactStep />}
+          {activeStep === 'github_repo' && (
             <GithubRepoStep
               githubConnected={state.github.connected}
               githubNeedsReconnect={state.github.needsReconnect}
-              onSkipGithub={() => skipGithub.mutate()}
+              onSkipGithub={() => { setViewStep(null); skipGithub.mutate() }}
               skippingGithub={skipGithub.isPending}
               repoAvailable={state.repo.available}
               onboardingPath={state.onboardingPath}
@@ -125,8 +157,8 @@ export function OnboardingV2Page() {
               ownerLogin={state.repo.ownerLogin}
             />
           )}
-          {state.currentStep === 'plan_review' && <PlanReviewStep />}
-          {state.currentStep === 'done' && <DoneStep onFinish={() => complete.mutateAsync()} />}
+          {activeStep === 'plan_review' && <PlanReviewStep />}
+          {activeStep === 'done' && <DoneStep onFinish={() => complete.mutateAsync()} />}
         </div>
       </div>
     </div>

@@ -13,6 +13,7 @@ const CATEGORIES: { label: string; options: string[] }[] = [
   { label: 'Backend', options: ['Node.js', 'Python (Django/Flask)', 'Go', 'Ruby on Rails', 'Java/Spring'] },
   { label: 'Database', options: ['PostgreSQL/MySQL', 'MongoDB'] },
   { label: 'Mobile', options: ['Swift/iOS', 'Kotlin/Android', 'React Native/Flutter'] },
+  { label: 'Cloud & Hosting', options: ['AWS', 'Azure', 'Google Cloud', 'Railway', 'Vercel', 'Render', 'Heroku', 'DigitalOcean'] },
 ]
 
 const inputStyle: React.CSSProperties = {

@@ -1,8 +1,63 @@
 # Omada — Active Work
 
+_Last reconciled against `main` on 2026-08-04 (HEAD `6e42fb6`)._
+
 ---
 
-## 🚀 ACTIVE — Plans should always start with environment setup (branch: feature/plan-environment-setup)
+## 🚧 IN FLIGHT — unmerged branches
+
+None. Both previously-stranded branches were merged to `main` on 2026-08-04
+(see "Stranded branch cleanup" below). Everything else in this file is on `main`.
+
+---
+
+## ✅ SHIPPED — Stranded branch cleanup (merged to main 2026-08-04)
+
+Two finished branches had been pushed to `origin` and then never merged.
+
+- [x] `feature/task-dependency-graph` → merge commit `365cb52`. Note the
+      namesake work (`3523ed1` + migration `0046_task_dependency_graph`) was
+      *already* on `main`; the branch had been reused for one unrelated
+      follow-up, `1430e60` (roadmap plan sizing). That single commit was all
+      that was outstanding. Merged clean, no conflicts.
+- [x] `feat/onboarding-completion-confirmation` → rebased onto `main`
+      (`66dab39` → `be708f9`), merge commit `6e42fb6`.
+
+### Review (2026-08-04)
+
+**Why they were stranded.** `feature/task-dependency-graph` had no blocker at
+all — it auto-merged with zero conflicts; the merge step was simply never run
+after the last commit. `feat/onboarding-completion-confirmation` had a real
+one, and a silent one: it carried `0035_onboarding_awaiting_confirmation.py`
+declaring `revision = '0035'` / `down_revision = '0034'`, but `main` already
+had `0035_task_parallel.py` with **the identical pair**, with `0036` chained
+off it. Different filenames, so git reports no conflict and merges happily —
+the break only surfaces at `alembic upgrade head` on a duplicate revision id.
+
+**Fix.** Rebased onto `main`, then `git mv` to
+`0048_onboarding_awaiting_confirmation.py` with `revision = '0048'` /
+`down_revision = '0047'`. `alembic heads` → single head `0048`;
+`alembic history` confirms a linear `0047 -> 0048` tail.
+
+**Verification.** `test_roadmap_generator.py` 27 passed; `test_idea_interview.py`
+20 passed (includes the three new confirmation-turn tests); together on merged
+`main`, 47 passed. `npx tsc --noEmit` in `apps/web` exits 0. Also confirmed the
+`_SYSTEM_PROMPT` f-string conversion in `roadmap_generator.py` is safe post-merge
+— constants are imported at line 42–44, well above the line-70 use, and an AST
+walk shows exactly three interpolations and no stray braces.
+
+**Follow-ups not taken (out of scope):**
+- `aiosqlite` is an undeclared test dependency — required by `conftest.py`'s
+  SQLite async engine but absent from `apps/api/pyproject.toml` and `uv.lock`.
+  It survives in the main venv only as a manual `uv pip install`, so every
+  fresh worktree fails 13 tests until someone installs it by hand. Should be
+  added to the `dev` extra.
+- Both branches' `origin` refs are now stale; the onboarding one was rebased,
+  so updating it would need `--force-with-lease`. Nothing pushed.
+
+---
+
+## ✅ SHIPPED — Plans always start with environment setup (merged to main 2026-08-04)
 
 Roadmap generation only told the planner to front-load "install tools/create
 accounts" tasks when the founder answered the tech-stack onboarding step with
@@ -74,14 +129,16 @@ worktree to run the full stack.
 
 ---
 
-## 🚧 IN PROGRESS — Anti-Dormancy MVP, Milestone 1 (branch: feature/onboarding-tech-stack)
+## ✅ SHIPPED — Anti-Dormancy MVP, Milestone 1 (merged to main 2026-08-03, `0bdea3d`)
 
 Spec: `docs/plans/2026-07-20-anti-dormancy-mvp.md` (Milestone 1 only, per user).
 Plan reconciled against current code (roadmap router is project-scoped; slack.py
 deleted; Task.completed_at already exists; frontend has no features/roadmap —
 landing is ProjectHubPage). Summary is **org-scoped**, banner lands on ProjectHub.
 
-- [x] Migration `0046`: `developers.last_active_at` (nullable DateTime), chains 0045→0046 (single head confirmed via `alembic heads`)
+- [x] Migration for `developers.last_active_at` (nullable DateTime) — landed as
+      `0047_developer_last_active_at` after renumbering around the concurrently
+      built `0046_task_dependency_graph` (single head confirmed via `alembic heads`)
 - [x] `services/activity.py` (new): `touch_developer_activity()`, `touch_by_clerk_user()`, `re_engagement_summary()`
 - [x] `dependencies.py`: `mark_developer_active` (filters clerk_user_id IS NOT NULL; commits the touch itself so a GET's activity signal doesn't ride on an implicit end-of-request commit)
 - [x] `routers/roadmap.py`: attach `mark_developer_active` router-level; PATCH→done touches assignee's clock
@@ -96,6 +153,179 @@ landing is ProjectHubPage). Summary is **org-scoped**, banner lands on ProjectHu
 - **Deferred (per user)**: Milestone 2 (dormancy Celery job) and Milestone 3 (Resend email). The `touch_developer_activity()` seam is standalone so both compose without changes.
 
 ---
+
+## ✅ SHIPPED — everything else merged to main, 2026-07-28 → 2026-08-04
+
+Reconstructed from the commit log; these landed while `todo.md` was tracking the
+two features above and were never written down here.
+
+### Observability — comprehensive error logging (branch `chore/comprehensive-error-logging`, worktree `../AOS-logging`, merged `adeea4f`)
+
+The whole app was flying blind: nothing configured the root logger, so every
+`logger.info()` was dropped and warnings/errors fell through to
+`logging.lastResort` (bare message to stderr, no timestamp/level/traceback).
+The web app had **zero** `console.*` calls and no error boundary anywhere.
+
+- [x] `cd60154` **Backend foundation** — `src/logging_config.py` (one stdout
+      handler on root; JSON in production, human-readable elsewhere;
+      request/user/org `ContextVar`s stamped onto every record; noisy
+      third-party loggers turned down). `src/request_logging.py` (per-request
+      correlation id honouring inbound `X-Request-ID` and echoing it on the
+      response; access logging with status/duration/client IP; slow requests at
+      WARNING). `main.py`: `setup_logging()` before anything else can log,
+      handlers for `RequestValidationError`/`HTTPException` (which previously
+      left no server-side trace), startup DB connectivity probe in a lifespan
+      handler. `worker.py`: Celery `task_failure`/`task_retry`/`prerun` signals
+      so roadmap prewarm and the GitHub sweep can't fail silently. `auth.py`
+      now distinguishes "Clerk unreachable" from "bad token".
+      **`/health` deliberately still does no DB I/O** — it's Railway's
+      healthcheck, and a round-trip there turns pool exhaustion into container
+      restarts.
+- [x] `4726592` **Frontend** — `lib/logger.ts` (console + Sentry; real `Error`s
+      keep their stack via `captureException`; global
+      `unhandledrejection`/`error` handlers), `components/ErrorBoundary.tsx`
+      (mounted at root and around `<App/>`; logs component stack, shows a
+      recoverable panel instead of a white screen), `lib/api.ts` logs
+      network-level failures / non-JSON 2xx bodies / non-OK responses (5xx
+      error, 4xx warn) and `ApiError` now carries the server's `X-Request-ID`
+      so a front-end report joins to the backend trace, `main.tsx`
+      QueryCache/MutationCache `onError`.
+- [x] `d7c4502` **MCP + remaining silent swallows** — a `_logged` wrapper on all
+      9 MCP tools (MCP calls bypass the HTTP stack entirely, so neither the
+      middleware nor the FastAPI exception handlers ever saw them; `ToolError`
+      → WARNING, anything else → ERROR with traceback; all 9 schemas preserved
+      through `functools.wraps`). Plus `invitations.py`, `organizations.py`,
+      `database.py` rollback tracing.
+- [x] `3c21599` **Redaction + cause reporting** — the 422 handler was logging
+      Pydantic's raw `errors()`, whose `input` field carries the offending
+      value; verified a failing `POST /api/settings/anthropic-key` **would have
+      written a customer's API key into the logs**. Now only `loc`/`type`/`msg`.
+      Also: webhook secret-missing (ERROR) vs signature mismatch (WARNING),
+      named `ENCRYPTION_KEY` failure causes, `LOG_LEVEL`/`LOG_FORMAT`/`SENTRY_DSN`
+      documented in `.env.example`.
+- [x] `54435b2` **Fix double-printed SQL** — once a root handler existed,
+      `echo=True` printed every statement twice (SQLAlchemy's own
+      `StreamHandler` plus propagation to ours). Propagation off for
+      `sqlalchemy.engine.Engine` when echo is on; noise floor lifted entirely at
+      `LOG_LEVEL=DEBUG`.
+
+### Onboarding v2 flow
+
+- [x] `65b2edc` (2026-07-30) **Tech-stack step** — required, flag-gated
+      (`experimental.tech_stack_step`) step between purpose and build_plan,
+      asking founders what they already know (or that they're new to building
+      software). Feeds the roadmap prompt directly: known tools preferred,
+      "new to this" gets explicit beginner setup tasks in milestone 1. Also
+      fixed a pre-existing test bug (`test_local_yaml_loads` asserted
+      week/day/board view were true when `local.yaml` has them false).
+- [x] `b79e5ec` (2026-08-03) Enable that step in `local.yaml` — it was fully
+      built but the flag was left off when experimental flags were zeroed out,
+      so it never appeared outside test runs.
+- [x] `3cc5da6` (2026-08-04) Add a **Cloud & Hosting** category to the
+      tech-stack step — founders often know a deploy target (Railway, Azure,
+      AWS) even when unsure about frameworks.
+- [x] `a7e9aa7` (2026-08-03) **Review-before-commit plan step + path-aware
+      repo** (flags `plan_review`, `repo_create`). Roadmap generation moved out
+      of the silent `POST /complete` into an idempotent `POST /plan/draft`;
+      `POST /plan/confirm` records acceptance (`onboarding_sessions.
+      plan_confirmed_at`, migration `0044`). New derived `plan_review` step with
+      Regenerate / Looks good, never-bricks (draft failure offers "continue
+      anyway"). Persist `github_connections.account_type` (migration `0045`);
+      `GithubClient.create_repo`; `POST /repo/create` rejects non-org installs
+      with 422, since **personal-account installation tokens can't create
+      repos**.
+- [x] `64df285` (2026-08-03) Update GitHub connect copy — `Administration:write`
+      means the old "read-only / never writes to your repos" line was
+      inaccurate; reframed as creates-only-when-asked, never modifies existing
+      code, revocable.
+- [x] `e00c269` / `114237c` (2026-08-04) **Consolidate GitHub connect + repo
+      select into one step** — merged `github_connect` and `repo_select` into a
+      single skippable `github_repo` step (two phases behind a new
+      `GithubRepoStep` wrapper), moved to **position 5** (after `build_plan`)
+      instead of being the very first thing a user sees, so `onboardingPath` is
+      already known when the path-aware "create a repo" offer renders.
+- [x] `c12f836` (2026-08-04) **Back button** — the backend derives `currentStep`
+      from data completeness and has no "previous step" concept, so this is a
+      client-side view override in `OnboardingV2Page`; re-saving an
+      already-complete step doesn't change what's incomplete, so `currentStep`
+      lands back where it was once the override clears.
+- [x] `e5ed261` (2026-07-28) **Generate the roadmap on complete, land on the new
+      plan** — the chat path marked the session completed but never created a
+      Project/roadmap (unlike the import path), so users landed on `/app` with
+      zero projects and got the empty "create new project" screen instead of the
+      plan Omada had just drafted. `/complete` now generates best-effort (a
+      failure still completes onboarding) and returns the project id; `DoneStep`
+      navigates to `/app/projects/{projectId}`.
+- [x] `05b0009` (2026-08-03) **Prewarm roadmap generation via Celery** — fire
+      Groq generation as soon as the interview completes rather than on
+      `/plan/draft`'s critical path; `generate_roadmap_once` resolves the
+      prewarm-vs-draft race via the `Project.onboarding_session_id` unique
+      constraint. Also dropped the dead TAWOS importer references (`pymysql`
+      dep, `.gitignore` entry).
+
+### Planner
+
+- [x] `595111b` (2026-07-29) **Nested planner-view flags** under a `planner`
+      group (`list` itself ungated; the switcher hides disabled options and
+      falls back to List). Also deleted two flags gating dead surface area:
+      `allow_team_creation_via_api` (two endpoints with zero callers — removed
+      outright rather than leaving permanently-403 dead code) and `slack_alerts`
+      (a fully-built but never-called Slack feature — settings UI, router and
+      `slack_configs` table all removed, migration `0042`).
+- [x] `355ec84` / `6c6d209` (2026-07-29) **Enforce sequential task ordering** —
+      the "waits its turn" fade was cosmetic; non-parallel tasks could be
+      completed out of order in both API and UI. `PATCH /tasks/{id}` now returns
+      409 `task_blocked_by_earlier_task`; Up next checkbox disabled for waiting
+      tasks; window bumped 2 → 3.
+- [x] `5752d41` (2026-07-30) **Fix which view is gated** — `DayAgenda` ("Up
+      next") is the permanent main page and must never be hideable, but it was
+      gated behind `planner.day_view` (off locally), leaving the multi-day
+      `ListView` as the hardcoded ungated fallback. Swapped: `day` is always
+      available, the renamed `planner.daily_calendar_view` gates `list`. Filter/
+      fallback logic extracted into a shared `usePlannerViewOptions()` (it was
+      duplicated and *inconsistent* between `TopBar` and `DashboardLayout`).
+- [x] `0728068` (2026-07-30) **Up next is an unlimited stream** — the daily list
+      was scoped to one calendar day, so finishing a couple of tasks dead-ended
+      into an unwanted "Plan more for today" AI prompt instead of continuing
+      into tasks already generated for later days. Day boundary removed
+      entirely; backend sequential blocking now spans the whole project,
+      matching `claim_next_task`. **The extend-day AI top-up was removed
+      outright (superseded, not hidden), and delete-task was removed everywhere**
+      — deleting a task disturbs the sequential ordering others depend on.
+- [x] `3523ed1` (2026-08-03) **Explicit dependency graph replaces the `parallel`
+      flag** — a flat boolean ("doesn't block on the task before it") can only
+      express strict sequencing, not real prerequisites. Adds a
+      `task_dependencies` join table + `Task.depends_on` (migration `0046`); the
+      generator/adjuster now emit real `key`/`dependsOn` edges, so the planner
+      can unlock genuinely parallel tracks feeding a later integration task.
+- [x] `5632e76` (2026-08-03) Removed the dead Anthropic API key card from
+      Settings (leftover from pre-pivot Sprint Planning/Retro Prep;
+      `get_anthropic_key()` has no callers), and pinned the "Plan map" button to
+      the lower fifth of the viewport so its position doesn't depend on queue
+      length or scroll.
+
+### Fixes & config
+
+- [x] `871c7bb` (2026-07-28) **All `experimental.*` flags default to false** in
+      `local.yaml`, matching production. Also fixed real test-env drift:
+      `conftest.py` never forced `ENVIRONMENT=test`, so local `pytest` silently
+      picked up whatever a developer's `apps/api/.env` set. **This, plus
+      `config/features/test.yaml` now existing, closes the old known issue about
+      `ENVIRONMENT=test` blowing up on a missing flag file.**
+- [x] `bf9ef3c` (2026-08-03) **Account-deletion 500** — `DELETE /api/users/me`
+      threw a Postgres FK violation because `projects`, `ai_usage_events` and
+      `github_activity_events` all FK to `teams.id`/`organizations.id` without
+      `ondelete=CASCADE` and weren't cleaned up first; **every real account
+      (which always has a project) hit this.** Added the missing deletes plus a
+      regression test that reproduces the violation on the old code. Also
+      stopped `SettingsPage` fetching lead-only `/api/invitations` for every
+      user, which logged a 403 for anyone below lead.
+- [x] `ec63f77` (2026-08-03) **Migration `0025` fix** — the remap `UPDATE` ran
+      while `tickets_assignee_id_fkey` still pointed at `team_members`, so
+      setting `assignee_id` to a developer id violated the constraint
+      immediately. Drop the old FK before the remap, add the new one after.
+
+
 
 ## ✅ DONE — Stage 5: Omada MCP Server (branch: feature/omada-mcp-server, merged to main)
 
@@ -162,7 +392,13 @@ Auto-Complete 0038, Master Dashboard 0039, Omada MCP Server 0040/0041).
 
 ---
 
-## 🚀 ACTIVE — Planner Revamp (team lanes, time blocking, design system)
+## ✅ SHIPPED (Phases 1–7, bar the gaps noted below) — Planner Revamp (team lanes, time blocking, design system)
+
+> **Superseded in places by later work (see the Planner entries above).** Day
+> scoping, the extend-day AI top-up and delete-task were all removed on
+> 2026-07-30 (`0728068`); `DayAgenda` ("Up next") is now the permanent main view
+> and the `parallel` boolean was replaced by a real dependency graph
+> (`3523ed1`). Treat the phase notes below as history, not as current design.
 
 Rebuild the planner from a bare Mon–Fri checkbox grid into a dense, color-coded
 scheduling surface: team-member lanes down the left, time-labelled task blocks
@@ -281,27 +517,32 @@ Two things found along the way that were *not* in the plan:
       Found 2026-07-20 while verifying the legacy-onboarding-removal branch;
       confirmed via `git diff origin/main` that neither file was touched by
       that change, so it predates it and is a pure test-locator bug.
+      Still open — re-verified 2026-08-04: `PurposeStep.tsx:31` renders a
+      `role="radiogroup"` of `role="radio"` options, and the spec still calls
+      `getByRole('button', …)` at line 120 even after `e00c269` rewrote much of
+      that file.
 - [ ] Onboarding v2 — Ops (external, not code): GitHub OAuth apps per env
       (callback `/api/integrations/github/callback`), Clerk GitHub social
-      provider, `GITHUB_*` + `ANTHROPIC_API_KEY` in Railway. Blocks
-      onboarding v2 going live in production (flag is currently off there).
-- [ ] `apps/api/config/features/test.yaml` has never existed in this repo
-      (only `local.yaml`/`production.yaml` do), but `.github/workflows/test.yml`
-      sets `ENVIRONMENT: test` for the backend pytest job. Any test hitting
-      `settings.is_feature_enabled(...)` raises `RuntimeError: Feature flag
-      file not found`. CI's `-x` flag masks this by stopping at the first
-      failure; running locally with `ENVIRONMENT=test` (matching CI exactly)
-      surfaces ~88 failures instead of the real ~11-failure baseline. Found
-      2026-07-20 verifying the B8 migration (pre-existing on `main`, unrelated
-      to that change — worked around locally with `ENVIRONMENT=local` instead).
-      Either add `config/features/test.yaml` (probably a copy of `local.yaml`)
-      or repoint CI's `ENVIRONMENT` to `local`.
+      provider, `GITHUB_*` + `ANTHROPIC_API_KEY`/`GROQ_API_KEY` in Railway.
+      Blocks onboarding v2 going live in production (flag is currently off
+      there). **Now also needs the GitHub App's `Administration:write`
+      permission** for the onboarding "create a new repo" path (`a7e9aa7`) —
+      and note that path only works for org installs; personal-account
+      installation tokens cannot create repos.
+- [ ] `apps/web/src/pages/OnboardingV2Page.tsx`'s Back button is a client-side
+      view override only; the backend has no notion of a previous step. Fine
+      today, but a future step whose data can't be re-saved idempotently would
+      break the "override clears → lands back where it was" assumption.
+- [x] ~~`apps/api/config/features/test.yaml` never existed while CI sets
+      `ENVIRONMENT: test`~~ — **fixed.** `test.yaml` now exists, and `871c7bb`
+      made `conftest.py` force `ENVIRONMENT=test` so local runs match CI
+      deterministically instead of picking up a developer's `.env`.
 
 ---
 
 ## ✅ Done (archived)
 
-- **B8: drop legacy Jira schema** — 2026-07-20, branch `chore/b8-drop-legacy-jira-schema` (not yet merged), built on top of the now-merged `chore/legacy-teardown-b2-b7` (PR #29, B2–B7). Deferred schema-removal step: migration `0032_drop_legacy_jira_schema.py` drops tables `dependencies`, `ticket_analyses`, `jira_connections`, `sync_status` and columns `teams.jira_board_id`/`jira_project_key`/`jira_import_status`/`jira_import_sprints_imported`, `developers.jira_account_id`/`capacity_hours_per_week`; deletes the 4 corresponding model files, `tawos_importer/`, `seed_sprints.py`. **Scope was narrowed from the original ask** — investigation showed `tickets`, `sprints`, `sprint_tickets`, `developer_velocity_profiles` are still live (alerts/capacity/sprints/teams/developers/users routers) and `developers.skill_ratings`/`domain_strengths` back the live recalibration feature, so none of those were touched. Verified: local Postgres upgrade→downgrade→upgrade round-trip clean; downgrade recreates empty structures only (no data restore, documented in the migration docstring); applied cleanly against an actual production snapshot (prod was on `0026`, 93 `jira_connections` rows + other real data confirmed destroyed as intended, scratch DB discarded after); full backend suite at the pre-existing 163-passed/11-failed baseline (no regressions). **Caught and fixed one real regression along the way**: `routers/users.py`'s account-deletion cleanup had raw-SQL `DELETE FROM dependencies/ticket_analyses/jira_connections` that a class-name-only grep sweep missed — a table-name string sweep in addition to symbol grep is now the standard check for future table-drop migrations. Also found & removed 3 stale `JIRA_CLIENT_*` keys from local `.env`/`apps/api/.env` (gitignored, blocked local app boot after B7 removed those `Settings` fields — pre-existing, unrelated to this migration). Not yet committed — awaiting go-ahead.
+- **B8: drop legacy Jira schema** — 2026-07-20, branch `chore/b8-drop-legacy-jira-schema` (**since merged into `main`** — confirmed 2026-08-04 via `git branch --merged main`), built on top of the now-merged `chore/legacy-teardown-b2-b7` (PR #29, B2–B7). Deferred schema-removal step: migration `0032_drop_legacy_jira_schema.py` drops tables `dependencies`, `ticket_analyses`, `jira_connections`, `sync_status` and columns `teams.jira_board_id`/`jira_project_key`/`jira_import_status`/`jira_import_sprints_imported`, `developers.jira_account_id`/`capacity_hours_per_week`; deletes the 4 corresponding model files, `tawos_importer/`, `seed_sprints.py`. **Scope was narrowed from the original ask** — investigation showed `tickets`, `sprints`, `sprint_tickets`, `developer_velocity_profiles` are still live (alerts/capacity/sprints/teams/developers/users routers) and `developers.skill_ratings`/`domain_strengths` back the live recalibration feature, so none of those were touched. Verified: local Postgres upgrade→downgrade→upgrade round-trip clean; downgrade recreates empty structures only (no data restore, documented in the migration docstring); applied cleanly against an actual production snapshot (prod was on `0026`, 93 `jira_connections` rows + other real data confirmed destroyed as intended, scratch DB discarded after); full backend suite at the pre-existing 163-passed/11-failed baseline (no regressions). **Caught and fixed one real regression along the way**: `routers/users.py`'s account-deletion cleanup had raw-SQL `DELETE FROM dependencies/ticket_analyses/jira_connections` that a class-name-only grep sweep missed — a table-name string sweep in addition to symbol grep is now the standard check for future table-drop migrations. Also found & removed 3 stale `JIRA_CLIENT_*` keys from local `.env`/`apps/api/.env` (gitignored, blocked local app boot after B7 removed those `Settings` fields — pre-existing, unrelated to this migration).
 
 - **Pivot: Onboarding v2 (project roadmap AI)** — shipped 2026-07-13. Replaced the Jira onboarding entry with GitHub connect → profile → purpose classification (hobby/startup/learning) → LLM idea interview (`services/idea_interview.py`, SSE streaming, 40-msg cap). Headless hooks layer at `features/onboarding-v2/` + reference UI `OnboardingV2Page.tsx`. 45 backend tests + 3 Playwright green; partner integration doc at `docs/onboarding-v2-frontend-integration.md`. Outstanding: GitHub OAuth ops config, tracked above.
 
@@ -341,4 +582,15 @@ All code is written and committed. Nothing to build yet — just configuration t
 
 ## 📋 Up next
 
-Nothing active beyond what's tracked above. Next work items are billing (configure + launch) and whatever comes after.
+1. Merge the two in-flight branches at the top of this file (`feature/task-dependency-graph`
+   is a clean single-file change; `feat/onboarding-completion-confirmation`
+   needs a rebase + migration renumber off `0035`).
+2. Run `alembic upgrade head` against the real dev/prod DBs — `main` is at
+   `0047` and the last few migrations (`0044`–`0047`) have only been exercised
+   against SQLite/local Postgres.
+3. Prod ops for onboarding v2 + roadmap generation (GitHub App
+   `Administration:write`, `GITHUB_*`, `GROQ_API_KEY`/`ANTHROPIC_API_KEY` in
+   Railway), then flip the production flags.
+4. Anti-Dormancy Milestones 2 (dormancy Celery job) and 3 (Resend email) —
+   deferred, and the `touch_developer_activity()` seam composes with both.
+5. Billing (configure + launch), below.

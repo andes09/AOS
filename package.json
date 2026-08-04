@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.1",
   "scripts": {
+    "dev": "bash scripts/dev.sh",
     "dev:web": "pnpm --filter web dev",
     "dev:landing": "pnpm --filter landing dev",
     "build:web": "pnpm --filter web build",

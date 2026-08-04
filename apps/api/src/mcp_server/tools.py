@@ -14,6 +14,9 @@ the available project list (same shape `list_projects` returns) so the
 calling agent can retry with an explicit id.
 """
 
+import functools
+import logging
+import time
 import uuid
 from datetime import date
 
@@ -31,9 +34,59 @@ from src.routers import project_common
 from src.services import idea_interview, roadmap_generator, roadmap_service as svc
 
 
+logger = logging.getLogger(__name__)
+
+
 class ToolError(Exception):
     """Raised for tool-facing errors — FastMCP surfaces the message to the
     calling agent as a tool error result rather than a transport failure."""
+
+
+def _logged(fn):
+    """Log every MCP tool call, its outcome and its duration.
+
+    MCP tools don't go through the HTTP stack, so neither the request
+    middleware nor the FastAPI exception handlers ever see them. A ToolError
+    is delivered to the calling LLM and nowhere else — meaning a tool that
+    fails for every agent, every time, currently produces no server-side
+    evidence at all. ToolError is expected control flow (WARNING); anything
+    else is a defect (ERROR, with traceback).
+    """
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        logger.info("mcp tool called", extra={"tool": fn.__name__})
+        try:
+            result = await fn(*args, **kwargs)
+        except ToolError as exc:
+            logger.warning(
+                "mcp tool rejected: %s", exc,
+                extra={
+                    "tool": fn.__name__,
+                    "duration_ms": round((time.perf_counter() - start) * 1000, 1),
+                },
+            )
+            raise
+        except Exception:
+            logger.exception(
+                "mcp tool FAILED",
+                extra={
+                    "tool": fn.__name__,
+                    "duration_ms": round((time.perf_counter() - start) * 1000, 1),
+                },
+            )
+            raise
+        logger.info(
+            "mcp tool ok",
+            extra={
+                "tool": fn.__name__,
+                "duration_ms": round((time.perf_counter() - start) * 1000, 1),
+            },
+        )
+        return result
+
+    return wrapper
 
 
 async def _identity() -> tuple[str, str, str]:
@@ -102,6 +155,7 @@ def register_tools(mcp: FastMCP) -> None:
     """Registers all 9 tools on `mcp`. Called once from main.py at mount time."""
 
     @mcp.tool()
+    @_logged
     async def list_projects() -> dict:
         """List the caller's organization's projects, so an agent can pick which
         project_id to use before calling any other project-scoped tool."""
@@ -118,6 +172,7 @@ def register_tools(mcp: FastMCP) -> None:
             return {"projects": [_project_summary(p) for p in rows]}
 
     @mcp.tool()
+    @_logged
     async def get_roadmap(project_id: str | None = None) -> dict:
         """Full project + milestones + tasks for the caller's org. Omit
         project_id if the org has exactly one active project."""
@@ -127,6 +182,7 @@ def register_tools(mcp: FastMCP) -> None:
             return svc.project_json(project)
 
     @mcp.tool()
+    @_logged
     async def get_task(task_id: str, project_id: str | None = None) -> dict:
         """Single task by id, scoped to the caller's org."""
         async with db_session() as db:
@@ -136,6 +192,7 @@ def register_tools(mcp: FastMCP) -> None:
             return svc.task_json(task)
 
     @mcp.tool()
+    @_logged
     async def list_tasks(
         project_id: str | None = None,
         status: str | None = None,
@@ -161,6 +218,7 @@ def register_tools(mcp: FastMCP) -> None:
             return {"tasks": [svc.task_json(t) for t in tasks]}
 
     @mcp.tool()
+    @_logged
     async def list_team_members(project_id: str | None = None) -> dict:
         """Roster + workload (open scheduled tasks) for the resolved project."""
         async with db_session() as db:
@@ -169,6 +227,7 @@ def register_tools(mcp: FastMCP) -> None:
             return await svc.get_members(org, project, db)
 
     @mcp.tool()
+    @_logged
     async def get_roadmap_status(project_id: str | None = None) -> dict:
         """Onboarding/planning readiness check for the resolved project."""
         async with db_session() as db:
@@ -177,6 +236,7 @@ def register_tools(mcp: FastMCP) -> None:
             return svc.get_roadmap_status(project)
 
     @mcp.tool()
+    @_logged
     async def get_next_task(project_id: str | None = None) -> dict:
         """Claims the next todo task by schedule order and self-assigns it to
         the caller's own Developer record. Returns a clean "nothing to do"
@@ -190,6 +250,7 @@ def register_tools(mcp: FastMCP) -> None:
             return {"task": svc.task_json(task)}
 
     @mcp.tool()
+    @_logged
     async def complete_task(
         task_id: str, completion_note: str | None = None, project_id: str | None = None
     ) -> dict:
@@ -204,6 +265,7 @@ def register_tools(mcp: FastMCP) -> None:
             return {"task": svc.task_json(task)}
 
     @mcp.tool()
+    @_logged
     async def regenerate_milestone(
         milestone_id: str, confirmed: bool = False, project_id: str | None = None
     ) -> dict:

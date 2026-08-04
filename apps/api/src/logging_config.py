@@ -119,6 +119,10 @@ class HumanFormatter(logging.Formatter):
 
 
 # Third-party loggers that are pure noise at INFO and drown out real signal.
+#
+# Note `sqlalchemy.engine.Engine` is only half the story: when the engine is
+# built with echo=True it attaches its own handler and ignores this level, so
+# database.py additionally turns off propagation to stop double-printing.
 _NOISY = {
     "httpx": logging.WARNING,
     "httpcore": logging.WARNING,
@@ -169,8 +173,12 @@ def setup_logging(*, force: bool = False) -> None:
         uv.handlers.clear()
         uv.propagate = True
 
-    for name, noisy_level in _NOISY.items():
-        logging.getLogger(name).setLevel(max(noisy_level, level))
+    # LOG_LEVEL=DEBUG is an explicit "show me everything", so the noise floor is
+    # lifted entirely rather than clamped — otherwise the one setting a developer
+    # reaches for when debugging would silently keep SQL and httpx hidden.
+    if level > logging.DEBUG:
+        for name, noisy_level in _NOISY.items():
+            logging.getLogger(name).setLevel(max(noisy_level, level))
 
     _configured = True
     logging.getLogger(__name__).info(

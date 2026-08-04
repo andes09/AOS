@@ -1,9 +1,10 @@
 /**
- * Step 5 — repo_select. Searchable, paginated list from `listGithubRepos`
- * ("Connect this repo" / "Skip for now"). If GitHub was never connected/was
- * skipped earlier, this step is already marked done server-side and
- * `currentStep` skips past it — the `repoAvailable` guard below is a defensive
- * fallback for that case.
+ * Phase B of the github_repo step (see GithubRepoStep) — shown once GitHub
+ * is connected. Searchable, paginated list from `listGithubRepos` ("Connect
+ * this repo" / "Skip for now"). If GitHub was never connected/was skipped
+ * earlier, the whole github_repo step is already marked done server-side and
+ * GithubRepoStep never renders this phase — the `repoAvailable` guard below
+ * is a defensive fallback for that case.
  *
  * Path-aware: the import path connects the repo the project already lives in;
  * the chat path (greenfield) additionally offers "create a new repo" when the

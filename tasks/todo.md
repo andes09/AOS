@@ -46,12 +46,27 @@ the break only surfaces at `alembic upgrade head` on a duplicate revision id.
 — constants are imported at line 42–44, well above the line-70 use, and an AST
 walk shows exactly three interpolations and no stray braces.
 
-**Follow-up fixed.** `aiosqlite` was an undeclared test dependency — required by
-`conftest.py`'s `sqlite+aiosqlite:///:memory:` engine but absent from
+**Follow-up fixed (1/2) — undeclared test dep.** `aiosqlite` is required by
+`conftest.py`'s `sqlite+aiosqlite:///:memory:` engine but was absent from
 `apps/api/pyproject.toml` and `uv.lock`, surviving in the main venv only as a
 manual `uv pip install`. Every fresh worktree failed 13 tests until someone
-installed it by hand. Now declared in the `dev` extra and locked; verified by
-`uv sync --extra dev` alone in a throwaway worktree off `main`.
+installed it by hand. Now declared in the `dev` extra and locked.
+
+**Follow-up fixed (2/2) — env-dependent test.**
+`test_chat_stream_error_event_on_failure` was the only test in
+`test_idea_interview.py` not patching `src.services.idea_interview.settings`,
+so `resolve_api_key` 402'd before the request ever reached the mocked
+`run_interview_turn`. It passed locally purely because the gitignored
+`apps/api/.env` supplies a real `GROQ_API_KEY` — it would fail on any clean
+checkout or in CI. Now patches `settings` like its siblings.
+
+Both caught by building a throwaway worktree off `main` and running with
+`uv sync --extra dev` alone: 47 passed with no `.env` and no manual installs.
+Full backend suite on `main`: **344 passed / 3 failed**, and those same 3
+(`test_features::test_local_yaml_loads`,
+`test_project_brief::test_brief_tool_derivation_matches_original_hand_written_shape`,
+`test_sprints_router::test_current_sprint_returns_active_sprint`) fail
+identically at `c12f836`, i.e. pre-existing and untouched by this work.
 
 **Still open:** both branches' `origin` refs are stale; the onboarding one was
 rebased, so updating it would need `--force-with-lease`.

@@ -508,11 +508,16 @@ async def test_chat_stream_error_event_on_failure(tmp_db):
 
     with (
         _patch_clerk(),
+        patch("src.services.idea_interview.settings") as mock_settings,
         patch(
             "src.routers.onboarding_v2.idea_interview.run_interview_turn",
             new=AsyncMock(side_effect=RuntimeError("Groq API error: boom")),
         ),
     ):
+        # Without this the request 402s in resolve_api_key before it ever
+        # reaches the mocked turn, so the test only passed when a real
+        # GROQ_API_KEY happened to be in the ambient env.
+        mock_settings.groq_api_key = "gsk-platform"
         async with _client() as client:
             await _start_chat(client)
             resp = await client.post(

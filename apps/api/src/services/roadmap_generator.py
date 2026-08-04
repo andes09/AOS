@@ -16,15 +16,19 @@ Regeneration comes in two grains: the whole roadmap (Project row kept, its
 milestones/tasks replaced) and a single milestone (siblings untouched).
 """
 
+import asyncio
 import json
 import logging
+import uuid
 from datetime import date
 
 from openai import APIError, AsyncOpenAI, AuthenticationError, BadRequestError, RateLimitError
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import settings
+from src.database import AsyncSessionLocal
 from src.models.milestone import Milestone
 from src.models.onboarding_session import OnboardingSession
 from src.models.organization import Organization
@@ -48,6 +52,7 @@ from src.services.roadmap_shapes import (
     validated_task as _validated_task,
 )
 from src.services.task_ids import allocate_short_ids
+from src.worker import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -57,20 +62,26 @@ _MODEL = settings.groq_model
 # the roadmap comes back short.
 _MAX_TOKENS = 8192
 
-_SYSTEM_PROMPT = """You are Omada's technical project planner. Given a founder's project brief, \
-produce a SHORT-TERM, day-by-day plan a developer can actually execute — think the next couple \
-of weeks of weekdays, not an exhaustive backlog.
+_SYSTEM_PROMPT = f"""You are Omada's technical project planner. Given a founder's project brief, \
+produce a day-by-day plan a developer can actually execute, sized to the project's ACTUAL \
+complexity — not an exhaustive backlog, but not padded down to a token few phases either.
 
 Make it genuinely DETAILED and TECHNICAL:
-- Break the work into a handful of ordered milestones (phases).
+- Break the work into ordered milestones (phases), and size the plan to what the brief \
+actually describes. A narrow, single-feature project might only need 2-4 milestones with a \
+few tasks each. A genuinely complex project — multiple core features, integrations, or a \
+broad scope/tech-constraints list — needs proportionally more: use as many milestones (up to \
+{_MAX_MILESTONES}) and tasks per milestone (up to {_MAX_TASKS_PER_MILESTONE}) as the brief's \
+`coreFeatures`, `scope`, and `techConstraints` justify. Don't compress real scope just to keep \
+the plan short.
 - Under each milestone, list concrete engineering tasks — each doable in part of a day.
 - For EVERY task, write a detailed, technical `description` (3-6 sentences). Name the specific \
 approach, technologies/libraries/frameworks, the files or modules to create, data models or \
 schema, API endpoints, and key commands — and end with a crisp acceptance criterion for "done". \
 Write for a technical reader; be concrete, never generic filler.
 - Give every task a `dayOffset`: a 0-based index of WEEKDAYS from the start (0 = the first \
-working day). Spread tasks so each day has only a few; keep the whole plan within ~2 weeks \
-of weekdays where possible.
+working day). Spread tasks so each day has only a few; let the plan run as long as the work \
+genuinely requires, up to {_MAX_DAY_OFFSET} weekdays.
 - Lay out each day as a realistic schedule: give every task a `startTime` (24h "HH:MM", \
 between 09:00 and 18:00) and a `durationMinutes` (15–240). Order tasks within a day by time \
 and don't overlap them — a developer should be able to follow the day top to bottom.
@@ -272,6 +283,32 @@ async def generate_roadmap(
     return project
 
 
+async def generate_roadmap_once(
+    session: OnboardingSession, team: Team, api_key: str, db: AsyncSession
+) -> Project:
+    """`generate_roadmap`, safe against a concurrent writer for the same
+    session — the prewarm Celery task below and `POST /plan/draft` can now
+    legitimately race to generate for the same session. `Project.
+    onboarding_session_id` is unique, so the loser's commit raises
+    IntegrityError; roll back and return the winner's project instead of
+    erroring out from underneath the loser."""
+    # Captured before the possible rollback below: AsyncSession.rollback()
+    # expires every object already loaded on `db` (including `session`
+    # itself), so `session.id` after that point would trigger an implicit
+    # lazy-load outside of an async context and raise MissingGreenlet.
+    session_id = session.id
+    try:
+        return await generate_roadmap(session, team, api_key, db)
+    except IntegrityError:
+        await db.rollback()
+        project = await db.scalar(
+            select(Project).where(Project.onboarding_session_id == session_id)
+        )
+        if project is None:
+            raise
+        return project
+
+
 async def regenerate_roadmap(
     session: OnboardingSession, team: Team, api_key: str, db: AsyncSession
 ) -> Project:
@@ -388,3 +425,56 @@ async def regenerate_milestone(
     await db.commit()
     await db.refresh(milestone)
     return milestone
+
+
+# ─── background pre-generation ─────────────────────────────────────────────────
+# `purpose`/`tech_stack` are known and `project_brief` is updated after every
+# chat turn, well before the founder ever reaches the plan-review step — so as
+# soon as the interview completes (`session.status == "completed"`), we can
+# generate the roadmap in the background instead of on the review step's
+# critical path. See onboarding_v2._maybe_prewarm_roadmap for the trigger.
+async def _prewarm_roadmap_async(session_id: str, db: AsyncSession) -> None:
+    # `session_id` arrives as a plain string (Celery JSON-serializes task
+    # args) — `db.get`'s identity lookup needs an actual UUID for its bind
+    # processor, unlike filter comparisons elsewhere which coerce it fine.
+    session = await db.get(OnboardingSession, uuid.UUID(session_id))
+    if session is None or session.status != "completed" or not session.project_brief:
+        return
+    existing = await db.scalar(
+        select(Project).where(Project.onboarding_session_id == session.id)
+    )
+    if existing is not None:
+        return
+    if not settings.groq_api_key:
+        logger.warning(
+            "prewarm_roadmap: no Groq API key configured, skipping session %s", session_id
+        )
+        return
+    team = await db.scalar(
+        select(Team).where(Team.organization_id == session.organization_id).order_by(Team.created_at)
+    )
+    if team is None:
+        logger.warning("prewarm_roadmap: no team for session %s, skipping", session_id)
+        return
+    await generate_roadmap_once(session, team, settings.groq_api_key, db)
+
+
+@celery_app.task(bind=True, max_retries=1)
+def prewarm_roadmap(self, session_id: str):
+    """Best-effort background pre-generation. This is purely a perf
+    optimization — `POST /plan/draft` still generates synchronously if this
+    hasn't finished (or failed) by the time the founder reaches plan-review —
+    so retries are kept minimal rather than chasing this indefinitely."""
+    async def _run() -> None:
+        async with AsyncSessionLocal() as db:
+            try:
+                await _prewarm_roadmap_async(session_id, db)
+            except Exception:
+                await db.rollback()
+                raise
+
+    try:
+        asyncio.run(_run())
+    except Exception as exc:  # pragma: no cover — exercised via retry semantics, not unit tests
+        logger.exception("prewarm_roadmap failed for session %s", session_id)
+        raise self.retry(exc=exc, countdown=15)

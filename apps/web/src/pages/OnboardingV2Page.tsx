@@ -11,14 +11,13 @@
 import { useOnboardingState } from '../features/onboarding-v2'
 import { Alert, C, Spinner } from './onboarding-v2/theme'
 import { SidebarStepper } from './onboarding-v2/SidebarStepper'
-import { GithubStep } from './onboarding-v2/steps/GithubStep'
 import { ProfileStep } from './onboarding-v2/steps/ProfileStep'
 import { PurposeStep } from './onboarding-v2/steps/PurposeStep'
 import { TechStackStep } from './onboarding-v2/steps/TechStackStep'
 import { PlanSourceStep } from './onboarding-v2/steps/PlanSourceStep'
 import { IdeaChatStep } from './onboarding-v2/steps/IdeaChatStep'
 import { ImportArtifactStep } from './onboarding-v2/steps/ImportArtifactStep'
-import { RepoSelectStep } from './onboarding-v2/steps/RepoSelectStep'
+import { GithubRepoStep } from './onboarding-v2/steps/GithubRepoStep'
 import { PlanReviewStep } from './onboarding-v2/steps/PlanReviewStep'
 import { DoneStep } from './onboarding-v2/steps/DoneStep'
 
@@ -86,13 +85,6 @@ export function OnboardingV2Page() {
         }}
       >
         <div style={{ width: '100%', maxWidth: 580 }}>
-          {state.currentStep === 'github_connect' && (
-            <GithubStep
-              onSkip={() => skipGithub.mutate()}
-              skipping={skipGithub.isPending}
-              needsReconnect={state.github.needsReconnect}
-            />
-          )}
           {state.currentStep === 'profile' && (
             <ProfileStep
               onSave={(name, phone) => saveProfile.mutate({ name, phone })}
@@ -121,8 +113,12 @@ export function OnboardingV2Page() {
           )}
           {state.currentStep === 'idea_chat' && <IdeaChatStep />}
           {state.currentStep === 'import_artifact' && <ImportArtifactStep />}
-          {state.currentStep === 'repo_select' && (
-            <RepoSelectStep
+          {state.currentStep === 'github_repo' && (
+            <GithubRepoStep
+              githubConnected={state.github.connected}
+              githubNeedsReconnect={state.github.needsReconnect}
+              onSkipGithub={() => skipGithub.mutate()}
+              skippingGithub={skipGithub.isPending}
               repoAvailable={state.repo.available}
               onboardingPath={state.onboardingPath}
               canCreate={state.repo.canCreate}

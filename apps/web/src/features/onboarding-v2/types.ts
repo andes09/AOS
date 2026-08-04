@@ -4,16 +4,17 @@
 
 // The 4th step's id depends on which build_plan sub-flow was chosen (see
 // PUT /plan-source): 'build_plan' while unset, then 'idea_chat' or
-// 'import_artifact'. 'repo_select' is a new, genuinely separate 5th step.
+// 'import_artifact'. 'github_repo' covers connecting GitHub and picking (or
+// creating) a repo as one step — see `github` / `repo` below for the two
+// halves' own state.
 export type OnboardingStepId =
-  | 'github_connect'
   | 'profile'
   | 'purpose'
   | 'tech_stack'
   | 'build_plan'
   | 'idea_chat'
   | 'import_artifact'
-  | 'repo_select'
+  | 'github_repo'
   // Gated behind experimental.plan_review — review/regenerate the drafted
   // roadmap before it's committed. The last step before 'done'.
   | 'plan_review'

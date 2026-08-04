@@ -132,7 +132,7 @@ export function DayAgenda({
         </div>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'center', marginTop: 'var(--space-5)' }}>
+      <div style={planMapWrapStyle}>
         <button onClick={onOpenPlanMap} style={planMapBtnStyle}>
           <Map size={14} />
           Plan map
@@ -340,6 +340,17 @@ const addNoteBtnStyle: CSSProperties = {
   fontFamily: 'var(--font-sans)',
   fontSize: 'var(--text-xs)',
   color: 'var(--color-text-muted)',
+}
+
+// Fixed in the lower fifth of the viewport rather than flowing after the
+// task list, so it stays reachable at a consistent spot regardless of queue
+// length or scroll position.
+const planMapWrapStyle: CSSProperties = {
+  position: 'fixed',
+  left: '50%',
+  bottom: '10vh',
+  transform: 'translateX(-50%)',
+  zIndex: 10,
 }
 
 const planMapBtnStyle: CSSProperties = {

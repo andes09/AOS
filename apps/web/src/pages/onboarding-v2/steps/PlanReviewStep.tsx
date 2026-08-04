@@ -9,15 +9,61 @@
  * which confirms and falls through to POST /complete's own best-effort
  * generation (and the project-hub fallback if that also fails).
  */
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { useOnboardingState } from '../../../features/onboarding-v2'
 import { useApi } from '../../../lib/api'
 import type { Roadmap } from '../../../types/roadmap'
-import { Alert, Btn, C, Spinner } from '../theme'
+import { Alert, Btn, C, ProgressBar, Spinner } from '../theme'
 
 const ROADMAP_KEY = (projectId: string) => ['onboarding-plan-review-roadmap', projectId] as const
+
+// Real progress isn't observable — the whole roadmap comes back as one
+// non-streamed LLM call — so this fakes it: crawl toward an asymptote that
+// never quite finishes on its own, and swap labels by elapsed time (not by
+// progress ticks, so it doesn't look janky if the interval timing drifts).
+const PROGRESS_STAGES: [number, string][] = [
+  [0, 'Reading your brief…'],
+  [4000, 'Sketching milestones…'],
+  [10000, 'Structuring tasks…'],
+  [18000, 'Almost there…'],
+]
+
+function useStagedProgress(loading: boolean) {
+  const [progress, setProgress] = useState(0)
+  const [label, setLabel] = useState(PROGRESS_STAGES[0][1])
+  const [finishing, setFinishing] = useState(false)
+  const startRef = useRef(Date.now())
+  const wasLoadingRef = useRef(false)
+
+  useEffect(() => {
+    if (loading) {
+      wasLoadingRef.current = true
+      setFinishing(false)
+      setProgress(0)
+      setLabel(PROGRESS_STAGES[0][1])
+      startRef.current = Date.now()
+      const interval = setInterval(() => {
+        const elapsed = Date.now() - startRef.current
+        setProgress(p => Math.min(92, p + (92 - p) * 0.06))
+        const stage = [...PROGRESS_STAGES].reverse().find(([t]) => elapsed >= t)
+        if (stage) setLabel(stage[1])
+      }, 300)
+      return () => clearInterval(interval)
+    }
+    // Loading just finished — snap to 100% and hold briefly before the
+    // caller swaps in the real content, instead of an abrupt cut.
+    if (!wasLoadingRef.current) return
+    wasLoadingRef.current = false
+    setProgress(100)
+    setFinishing(true)
+    const timeout = setTimeout(() => setFinishing(false), 200)
+    return () => clearTimeout(timeout)
+  }, [loading])
+
+  return { progress, label, finishing }
+}
 
 export function PlanReviewStep() {
   const { state, draftPlan, confirmPlan } = useOnboardingState()
@@ -53,10 +99,16 @@ export function PlanReviewStep() {
   const busy = confirmPlan.isPending
 
   // Draft in flight, or drafted but roadmap still loading.
-  if (!draftFailed && (draftPlan.isPending || (projectId && roadmap.isLoading))) {
+  const loading = !draftFailed && !!(draftPlan.isPending || (projectId && roadmap.isLoading))
+  const { progress, label, finishing } = useStagedProgress(loading)
+
+  if (loading || finishing) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.t3, fontSize: 14, padding: '40px 0', animation: 'fadeUp 0.22s ease both' }}>
-        <Spinner size={16} /> Drafting your roadmap…
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '40px 0', animation: 'fadeUp 0.22s ease both' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.t3, fontSize: 14 }}>
+          <Spinner size={16} /> {label}
+        </div>
+        <ProgressBar progress={progress} />
       </div>
     )
   }

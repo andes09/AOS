@@ -130,19 +130,22 @@ async def test_state_initial(tmp_db):
             resp = await client.get("/api/onboarding/v2/state", headers=AUTH)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["currentStep"] == "github_connect"
+    assert body["currentStep"] == "profile"
     # tech_stack only appears when experimental.tech_stack_step is on (true in
     # the test environment — see conftest.py).
     # plan_review (flag-gated, on in test env) is appended as the last step.
     assert [s["id"] for s in body["steps"]] == [
-        "github_connect", "profile", "purpose", "tech_stack", "build_plan", "repo_select",
+        "profile", "purpose", "tech_stack", "build_plan", "github_repo",
         "plan_review",
     ]
-    # repo_select auto-completes when there's no GitHub connection to pick a
-    # repo from at all yet (see docs/plans/2026-07-20-import-artifacts.md) —
-    # it's "complete" out of order here, ahead of steps still pending.
+    # Unlike the old repo_select, github_repo does NOT auto-complete on a
+    # totally fresh session: it requires the GitHub half to be explicitly
+    # resolved (connected or skipped) before the merged step counts as done,
+    # since that decision now lives inside this step rather than an earlier
+    # one. It only auto-completes once github_done is true and there's still
+    # no connection (see test_github_skip_advances_flow).
     assert [s["status"] for s in body["steps"]] == [
-        "current", "pending", "pending", "pending", "pending", "complete", "pending",
+        "current", "pending", "pending", "pending", "pending", "pending",
     ]
     assert body["github"] == {"connected": False, "login": None, "skipped": False, "needsReconnect": False}
     assert body["profile"] == {"name": None, "phone": None, "complete": False}
@@ -167,8 +170,11 @@ async def test_github_skip_advances_flow(tmp_db):
     body = resp.json()
     assert body["github"]["skipped"] is True
     assert body["currentStep"] == "profile"
+    # Skipping GitHub alone auto-completes the whole github_repo step too
+    # (no connection means no repo to pick from either) — but profile, the
+    # step now in front of it, is untouched and still current.
     assert [s["status"] for s in body["steps"]] == [
-        "complete", "current", "pending", "pending", "pending", "complete", "pending",
+        "current", "pending", "pending", "pending", "complete", "pending",
     ]
 
 
@@ -205,12 +211,17 @@ async def test_github_connection_completes_step(tmp_db):
 @pytest.mark.asyncio
 async def test_github_legacy_connection_needs_reconnect_and_blocks_step(tmp_db):
     """A pre-GitHub-App-migration connection (no installation_id) must not
-    complete the step — the user has to reconnect through the App install
-    flow before onboarding advances."""
+    complete the github_repo step — the user has to reconnect through the App
+    install flow before onboarding can finish. Since github_repo now sits at
+    position 5 (merged with repo_select), this no longer blocks the whole
+    flow from the front — profile/purpose/tech-stack/plan-source all still
+    complete normally ahead of it."""
     org_id, _ = await _seed_org_and_team()
 
+    from sqlalchemy import select
     from src.database import get_db
     from src.models.github_connection import GithubConnection
+    from src.models.onboarding_session import OnboardingSession
     from src.services.encryption import encrypt
 
     async for db in app.dependency_overrides[get_db]():
@@ -226,13 +237,40 @@ async def test_github_legacy_connection_needs_reconnect_and_blocks_step(tmp_db):
 
     with _patch_clerk():
         async with _client() as client:
+            await client.put(
+                "/api/onboarding/v2/profile", json={"name": "Ada", "phone": "+15551234567"},
+                headers=AUTH,
+            )
+            await client.put("/api/onboarding/v2/purpose", json={"purpose": "hobby"}, headers=AUTH)
+            await client.put(
+                "/api/onboarding/v2/tech-stack",
+                json={"stack": ["React"], "experience": "experienced"},
+                headers=AUTH,
+            )
+            await client.put(
+                "/api/onboarding/v2/plan-source", json={"source": "chat"}, headers=AUTH
+            )
+
+    # Stamp the idea-chat session completed directly, bypassing the real SSE
+    # turns (same shortcut _complete_profile_and_chat uses below), so the
+    # flow reaches github_repo without needing GitHub connected for it.
+    async for db in app.dependency_overrides[get_db]():
+        session = await db.scalar(
+            select(OnboardingSession).where(OnboardingSession.organization_id == org_id)
+        )
+        session.status = "completed"
+        await db.commit()
+        break
+
+    with _patch_clerk():
+        async with _client() as client:
             resp = await client.get("/api/onboarding/v2/state", headers=AUTH)
     body = resp.json()
     assert body["github"]["connected"] is True
     assert body["github"]["needsReconnect"] is True
-    assert body["currentStep"] == "github_connect"
-    github_step = next(s for s in body["steps"] if s["id"] == "github_connect")
-    assert github_step["status"] == "current"
+    assert body["currentStep"] == "github_repo"
+    github_repo_step = next(s for s in body["steps"] if s["id"] == "github_repo")
+    assert github_repo_step["status"] == "current"
 
 
 @pytest.mark.asyncio
@@ -323,11 +361,11 @@ async def test_purpose_completes_step_and_advances_flow(tmp_db):
     # after purpose, before the plan-source chooser.
     assert body["currentStep"] == "tech_stack"
     assert [s["id"] for s in body["steps"]] == [
-        "github_connect", "profile", "purpose", "tech_stack", "build_plan", "repo_select",
+        "profile", "purpose", "tech_stack", "build_plan", "github_repo",
         "plan_review",
     ]
     assert [s["status"] for s in body["steps"]] == [
-        "complete", "complete", "complete", "current", "pending", "complete", "pending",
+        "complete", "complete", "current", "pending", "complete", "pending",
     ]
 
 
@@ -536,7 +574,7 @@ async def test_plan_source_chat_advances_to_idea_chat_step(tmp_db):
     assert body["onboardingPath"] == "chat"
     assert body["currentStep"] == "idea_chat"
     assert [s["id"] for s in body["steps"]] == [
-        "github_connect", "profile", "purpose", "tech_stack", "idea_chat", "repo_select",
+        "profile", "purpose", "tech_stack", "idea_chat", "github_repo",
         "plan_review",
     ]
 
@@ -564,7 +602,7 @@ async def test_plan_source_import_advances_to_import_artifact_step(tmp_db):
     assert body["onboardingPath"] == "import"
     assert body["currentStep"] == "import_artifact"
     assert [s["id"] for s in body["steps"]] == [
-        "github_connect", "profile", "purpose", "tech_stack", "import_artifact", "repo_select",
+        "profile", "purpose", "tech_stack", "import_artifact", "github_repo",
         "plan_review",
     ]
 
@@ -640,7 +678,7 @@ async def test_repo_skip_is_idempotent_and_advances_flow(tmp_db):
 
 @pytest.mark.asyncio
 async def test_repo_select_required_when_github_connected(tmp_db):
-    """Unlike the no-connection case, repo_select must NOT auto-complete once
+    """Unlike the no-connection case, github_repo must NOT auto-complete once
     GitHub is actually connected — the user has real repos to choose from."""
     org_id, _ = await _seed_org_and_team()
 
@@ -668,7 +706,7 @@ async def test_repo_select_required_when_github_connected(tmp_db):
         "selected": None, "skipped": False, "available": True,
         "canCreate": False, "ownerLogin": "octocat",
     }
-    repo_step = next(s for s in body["steps"] if s["id"] == "repo_select")
+    repo_step = next(s for s in body["steps"] if s["id"] == "github_repo")
     assert repo_step["status"] != "complete"
 
 

@@ -251,6 +251,34 @@ async def test_generate_roadmap_happy_path(roadmap_db):
             assert t.scheduled_date >= date.today()
 
 
+async def test_generate_roadmap_once_returns_winner_project_on_conflict(roadmap_db):
+    """Simulates the prewarm-task-vs-/plan/draft race: a Project already
+    exists for the session (the "winner") by the time generate_roadmap_once
+    tries to create one — its commit hits Project.onboarding_session_id's
+    unique constraint, and generate_roadmap_once should roll back and hand
+    back the winner's project instead of raising."""
+    team_id, session_id = await _seed(roadmap_db)
+    fake = _fake_groq(_ROADMAP_PAYLOAD)
+
+    async with roadmap_db() as db:
+        winner = Project(id=uuid.uuid4(), team_id=team_id, onboarding_session_id=session_id, name="Winner")
+        db.add(winner)
+        await db.commit()
+        winner_id = winner.id
+
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_groq(fake):
+            project = await roadmap_generator.generate_roadmap_once(session, team, "sk-key", db)
+
+    assert project.id == winner_id
+    async with roadmap_db() as db:
+        projects = (await db.execute(select(Project))).scalars().all()
+        assert [p.id for p in projects] == [winner_id]
+        assert (await db.execute(select(Milestone))).scalars().all() == []
+
+
 async def test_generate_roadmap_no_tool_block_persists_nothing(roadmap_db):
     team_id, session_id = await _seed(roadmap_db)
     fake = _fake_groq(tool_calls=[])
@@ -576,3 +604,65 @@ async def test_regenerate_milestone_failure_leaves_everything_untouched(roadmap_
                 select(Task).where(Task.milestone_id == milestone.id)
             )).scalars().all()
             assert [t.title for t in tasks] == [f"M{i} task"]
+
+
+# ─── _prewarm_roadmap_async ────────────────────────────────────────────────────
+
+async def test_prewarm_roadmap_async_generates_when_eligible(roadmap_db):
+    _, session_id = await _seed(roadmap_db)
+    fake = _fake_groq(_ROADMAP_PAYLOAD)
+
+    async with roadmap_db() as db:
+        with _patch_groq(fake), patch("src.config.settings.groq_api_key", "sk-platform"):
+            await roadmap_generator._prewarm_roadmap_async(str(session_id), db)
+
+    async with roadmap_db() as db:
+        projects = (await db.execute(select(Project))).scalars().all()
+        assert [p.name for p in projects] == ["Trail Buddy"]
+
+
+async def test_prewarm_roadmap_async_noop_when_session_not_completed(roadmap_db):
+    _, session_id = await _seed(roadmap_db)
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        session.status = "in_progress"
+        await db.commit()
+
+    fake = _fake_groq(_ROADMAP_PAYLOAD)
+    async with roadmap_db() as db:
+        with _patch_groq(fake), patch("src.config.settings.groq_api_key", "sk-platform"):
+            await roadmap_generator._prewarm_roadmap_async(str(session_id), db)
+
+    assert fake.chat.completions.create.await_count == 0
+    async with roadmap_db() as db:
+        assert (await db.execute(select(Project))).scalars().all() == []
+
+
+async def test_prewarm_roadmap_async_noop_when_project_already_exists(roadmap_db):
+    team_id, session_id = await _seed(roadmap_db)
+    async with roadmap_db() as db:
+        db.add(Project(id=uuid.uuid4(), team_id=team_id, onboarding_session_id=session_id, name="Existing"))
+        await db.commit()
+
+    fake = _fake_groq(_ROADMAP_PAYLOAD)
+    async with roadmap_db() as db:
+        with _patch_groq(fake), patch("src.config.settings.groq_api_key", "sk-platform"):
+            await roadmap_generator._prewarm_roadmap_async(str(session_id), db)
+
+    assert fake.chat.completions.create.await_count == 0
+    async with roadmap_db() as db:
+        projects = (await db.execute(select(Project))).scalars().all()
+        assert [p.name for p in projects] == ["Existing"]
+
+
+async def test_prewarm_roadmap_async_noop_when_no_groq_key(roadmap_db):
+    _, session_id = await _seed(roadmap_db)
+    fake = _fake_groq(_ROADMAP_PAYLOAD)
+
+    async with roadmap_db() as db:
+        with _patch_groq(fake), patch("src.config.settings.groq_api_key", ""):
+            await roadmap_generator._prewarm_roadmap_async(str(session_id), db)
+
+    assert fake.chat.completions.create.await_count == 0
+    async with roadmap_db() as db:
+        assert (await db.execute(select(Project))).scalars().all() == []

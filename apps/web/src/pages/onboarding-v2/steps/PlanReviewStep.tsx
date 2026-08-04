@@ -3,7 +3,9 @@
  * before it's committed. On mount it ensures a draft exists (POST /plan/draft;
  * the chat path generates here, the import path already has one), fetches the
  * roadmap, and lets the founder regenerate it or accept it. "Looks good"
- * confirms (POST /plan/confirm), advancing the flow to `done`.
+ * confirms (POST /plan/confirm) — the flow lands on `done`, which
+ * OnboardingV2Page finishes automatically and navigates to the project. This
+ * is the last click of onboarding; there is no interstitial after it.
  *
  * Never-brick: if drafting fails, the founder can still "Continue anyway",
  * which confirms and falls through to POST /complete's own best-effort

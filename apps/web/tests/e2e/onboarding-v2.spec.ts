@@ -117,7 +117,8 @@ test.describe('Onboarding v2 flow', () => {
 
     // Step 2: purpose — a simple 3-way choice, not free text.
     await expect(page.getByRole('heading', { name: "What's this project for?" })).toBeVisible()
-    await page.getByRole('button', { name: /A startup/ }).click()
+    // The options are a radiogroup, not plain buttons (see PurposeStep).
+    await page.getByRole('radio', { name: /A startup/ }).click()
 
     // Step 3: idea chat — opening message, then a streamed turn.
     await expect(page.getByRole('heading', { name: 'Tell us about your idea' })).toBeVisible()
@@ -135,8 +136,9 @@ test.describe('Onboarding v2 flow', () => {
     await expect(page.getByRole('heading', { name: 'Connect your GitHub' })).toBeVisible()
     await page.getByRole('button', { name: 'Skip for now' }).click()
 
-    // Step 5: done.
-    await expect(page.getByRole('heading', { name: "You're all set" })).toBeVisible()
+    // No "you're all set" interstitial — the last step finishes onboarding
+    // and drops the founder straight into the app.
+    await expect(page).toHaveURL(/\/app$/)
   })
 
   test('tech_stack step: picking known tools advances to build_plan', async ({ page }) => {

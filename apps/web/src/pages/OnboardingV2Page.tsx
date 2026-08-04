@@ -9,7 +9,8 @@
  * a step on the backend needs no change here (see
  * docs/onboarding-v2-frontend-integration.md).
  */
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useOnboardingState } from '../features/onboarding-v2'
 import type { OnboardingStepId } from '../features/onboarding-v2'
 import { Alert, Btn, C, Spinner } from './onboarding-v2/theme'
@@ -22,7 +23,6 @@ import { IdeaChatStep } from './onboarding-v2/steps/IdeaChatStep'
 import { ImportArtifactStep } from './onboarding-v2/steps/ImportArtifactStep'
 import { GithubRepoStep } from './onboarding-v2/steps/GithubRepoStep'
 import { PlanReviewStep } from './onboarding-v2/steps/PlanReviewStep'
-import { DoneStep } from './onboarding-v2/steps/DoneStep'
 
 const shellFont = "'Inter', system-ui, sans-serif"
 
@@ -39,6 +39,34 @@ export function OnboardingV2Page() {
   // profile) doesn't change what's still incomplete, so currentStep lands
   // back in the same place once the override clears.
   const [viewStep, setViewStep] = useState<OnboardingStepId | null>(null)
+
+  // Reaching 'done' is not a screen — the last real step (accepting the
+  // roadmap, or skipping GitHub when plan_review is off) *is* the last click.
+  // We finish onboarding and land on the project, rather than parking the
+  // founder on an interstitial whose only job is one more button.
+  const navigate = useNavigate()
+  const [finishError, setFinishError] = useState<string | null>(null)
+  const finishingRef = useRef(false)
+
+  const finish = () => {
+    finishingRef.current = true
+    setFinishError(null)
+    complete
+      .mutateAsync()
+      // No project means POST /complete's best-effort generation didn't
+      // produce one; the hub can still create it.
+      .then(({ projectId }) => navigate(projectId ? `/app/projects/${projectId}` : '/app', { replace: true }))
+      .catch(err => {
+        finishingRef.current = false
+        setFinishError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
+      })
+  }
+
+  const atDone = state?.currentStep === 'done' && viewStep === null
+  useEffect(() => {
+    if (atDone && !finishingRef.current) finish()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [atDone])
 
   if (isLoading) {
     return (
@@ -61,6 +89,25 @@ export function OnboardingV2Page() {
   }
 
   if (!state) return null
+
+  // Onboarding is over — the effect above is finishing it. Show progress (or a
+  // retry if POST /complete failed) instead of the sidebar shell.
+  if (atDone) {
+    return (
+      <CenteredShell>
+        {finishError ? (
+          <div style={{ width: '100%', maxWidth: 420, display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center' }}>
+            <Alert>{finishError}</Alert>
+            <Btn size="lg" onClick={finish}>Try again</Btn>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.t3, fontSize: 14 }}>
+            <Spinner /> Setting up your workspace…
+          </div>
+        )}
+      </CenteredShell>
+    )
+  }
 
   // state.steps never includes 'done' — it's the fallback currentStep once
   // every real step is complete, so treat it as sitting one past the last one.
@@ -158,7 +205,6 @@ export function OnboardingV2Page() {
             />
           )}
           {activeStep === 'plan_review' && <PlanReviewStep />}
-          {activeStep === 'done' && <DoneStep onFinish={() => complete.mutateAsync()} />}
         </div>
       </div>
     </div>

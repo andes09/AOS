@@ -11,6 +11,39 @@ None. Both previously-stranded branches were merged to `main` on 2026-08-04
 
 ---
 
+## ✅ DONE — Cut two friction points out of signup (2026-08-04, uncommitted)
+
+Founders hit two screens whose only job was one more click. Both removed.
+
+- [x] **No Clerk organization step.** `OrgProvider` no longer renders
+      `<CreateOrganization />`. When there's no active org it adopts the
+      user's first existing membership, or silently creates
+      `"<FirstName>'s Workspace"`, then `setActive`s it. The backend is
+      unchanged — it still scopes everything off the JWT `org_id` claim, which
+      is why we adopt an org rather than remove the concept.
+      - ⚠️ Prod prereq: Clerk dashboard must have Organizations enabled **and**
+        "users can create organizations" on, or `createOrganization()` rejects
+        and the provider shows its error state.
+- [x] **No "You're all set / Go to your project" interstitial.** Reaching
+      `done` now auto-runs `POST /complete` and navigates to
+      `/app/projects/:id` (or `/app` when generation produced no project).
+      `DoneStep.tsx` deleted; the finish logic lives in `OnboardingV2Page` so
+      it covers both the plan-review path and the plan_review-off path.
+      Failure shows an inline error + "Try again" instead of bricking.
+- [x] Killed the stale local Omada processes (uvicorn on `:8001` running since
+      April, LandingPage vite since May). Docker `aos-postgres` / `aos-redis` /
+      `sem-search` left up.
+
+**Verification:** `tsc --noEmit` and `vite build` clean; all 4
+`tests/e2e/onboarding-v2.spec.ts` Playwright tests pass, with the walk test now
+asserting a redirect to `/app` instead of the interstitial heading.
+
+**Drive-by fix:** the walk test was already failing on `main` — it clicked
+`getByRole('button', {name: /A startup/})` but `PurposeStep` renders
+`role="radio"` options. Switched to `getByRole('radio', …)`.
+
+---
+
 ## ✅ SHIPPED — Groq rate limits stop plan generation (merged to main 2026-08-04, `b8437c4`)
 
 `RuntimeError: Groq API rate limit reached` was indistinguishable from every

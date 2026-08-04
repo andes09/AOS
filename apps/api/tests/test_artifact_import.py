@@ -104,8 +104,13 @@ _ANALYSIS_PAYLOAD = {
             "title": "Foundations",
             "description": "Set up the skeleton",
             "tasks": [
-                {"title": "Init repo", "dayOffset": 0},
-                {"title": "Pick stack", "description": "Keep it boring", "dayOffset": 1, "parallel": True},
+                {"title": "Init repo", "dayOffset": 0, "key": "init-repo"},
+                {
+                    "title": "Pick stack",
+                    "description": "Keep it boring",
+                    "dayOffset": 1,
+                    "dependsOn": ["init-repo"],
+                },
             ],
         },
         {
@@ -395,6 +400,71 @@ async def test_apply_creates_only_accepted_milestones(tmp_db):
         assert tasks[0].duration_minutes == 60
         assert tasks[0].scheduled_time is not None
         assert tasks[0].scheduled_time.strftime("%H:%M") == "09:30"
+        break
+
+
+@pytest.mark.asyncio
+async def test_apply_drops_dangling_dependency_into_rejected_milestone(tmp_db):
+    """A kept task's dependsOn pointing into a milestone the user rejected is
+    a legitimate, expected case (not a bug) — apply must still succeed and
+    just drop the dangling edge, per the non-strict persistence policy for
+    partial milestone acceptance."""
+    payload = {
+        "projectName": "Trail Buddy",
+        "problemStatement": "Hikers lose track of trail conditions",
+        "targetAudience": "Weekend hikers",
+        "coreFeatures": ["Trail status feed"],
+        "summary": "Two weeks to a hikeable MVP.",
+        "milestones": [
+            {
+                "title": "Foundations",
+                "tasks": [{"title": "Init repo", "dayOffset": 0, "key": "init-repo"}],
+            },
+            {
+                "title": "Core loop",
+                "tasks": [
+                    {"title": "Build map view", "dayOffset": 3, "dependsOn": ["init-repo"]},
+                ],
+            },
+        ],
+    }
+    org_id, team_id = await _seed_org_and_team()
+    with _patch_clerk():
+        async with _client() as client:
+            await _analyze(client, payload=payload)
+            # Reject milestone 0 ("Foundations", which "Build map view" depends
+            # on), accept only milestone 1 ("Core loop").
+            resp = await client.post(
+                "/api/onboarding/v2/import/apply",
+                json={"acceptedMilestoneIndexes": [1]},
+                headers=AUTH,
+            )
+    assert resp.status_code == 200
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from src.database import get_db
+    from src.models.milestone import Milestone
+    from src.models.project import Project
+    from src.models.task import Task
+
+    async for db in app.dependency_overrides[get_db]():
+        project = await db.scalar(select(Project).where(Project.team_id == team_id))
+        milestones = (
+            await db.execute(select(Milestone).where(Milestone.project_id == project.id))
+        ).scalars().all()
+        assert len(milestones) == 1
+
+        tasks = (
+            await db.execute(
+                select(Task)
+                .where(Task.milestone_id == milestones[0].id)
+                .options(selectinload(Task.depends_on))
+            )
+        ).scalars().all()
+        assert len(tasks) == 1
+        assert tasks[0].title == "Build map view"
+        assert tasks[0].depends_on == []
         break
 
 

@@ -1,7 +1,19 @@
 import enum
 import uuid
 from datetime import date, datetime, time
-from sqlalchemy import String, Text, Date, DateTime, Time, ForeignKey, Integer, Index, Boolean, false
+from sqlalchemy import (
+    String,
+    Text,
+    Date,
+    DateTime,
+    Time,
+    ForeignKey,
+    Integer,
+    Index,
+    Table,
+    Column,
+    CheckConstraint,
+)
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -12,6 +24,22 @@ class TaskStatus(enum.Enum):
     TODO = "todo"
     IN_PROGRESS = "in_progress"
     DONE = "done"
+
+
+# Self-referential prerequisite edges: a row (task_id, depends_on_task_id) means
+# `task_id` cannot be completed until `depends_on_task_id` is done. Composite PK
+# doubles as the index both blocking checks and claim_next_task need (task_id
+# leading). ON DELETE CASCADE both ways so regenerate/adjust's constant
+# delete+recreate of tasks never leaves orphaned edges behind.
+task_dependencies = Table(
+    "task_dependencies",
+    Base.metadata,
+    Column("task_id", UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), primary_key=True),
+    Column(
+        "depends_on_task_id", UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), primary_key=True
+    ),
+    CheckConstraint("task_id != depends_on_task_id", name="ck_task_dependencies_no_self_loop"),
+)
 
 
 class Task(Base):
@@ -59,10 +87,6 @@ class Task(Base):
     # NULL means "no explicit duration" — the card renders compact rather than
     # claiming a default block of grid space.
     duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # True when this task has no dependency on the task before it and can be
-    # tackled alongside its siblings. Drives the planner's "PARALLEL" tag and the
-    # client-derived "waits its turn" fade — set by the generator/adjuster.
-    parallel: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     # The user's latest progress note on this task, written in the day agenda.
     # Fed to the Groq adjuster so it can re-plan upcoming work around blockers
     # and slippage the user reports here.
@@ -91,3 +115,23 @@ class Task(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     milestone: Mapped["Milestone"] = relationship(back_populates="tasks")
+    # Prerequisite tasks that must be `done` before this one can start. Set
+    # only by the generator/adjuster (no manual dependency-editing UI exists).
+    # Every call site that serializes a task (task_json) must explicitly
+    # `.options(selectinload(Task.depends_on))` — same discipline as this
+    # file's other relationships (Milestone.tasks/Project.milestones), and
+    # required here specifically: SQLAlchemy's mapper-level `lazy="selectin"`
+    # default does not reliably auto-engage for a self-referential
+    # `secondary=` relationship like this one (verified empirically — an
+    # explicit query-time `selectinload()` loads it correctly, but the
+    # mapper-configured default silently never fires, leaving it to a
+    # synchronous lazy load that raises `MissingGreenlet` under asyncio). No
+    # reverse `dependents` relationship — nothing needs "what depends on me"
+    # today, and DB-level ON DELETE CASCADE alone keeps the join table clean
+    # when a task is deleted.
+    depends_on: Mapped[list["Task"]] = relationship(
+        "Task",
+        secondary=task_dependencies,
+        primaryjoin="Task.id == task_dependencies.c.task_id",
+        secondaryjoin="Task.id == task_dependencies.c.depends_on_task_id",
+    )

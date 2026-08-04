@@ -112,7 +112,7 @@ export function usePlannerMutations() {
         scheduledDate: input.scheduledDate ?? null,
         scheduledTime: input.scheduledTime ?? null,
         durationMinutes: input.durationMinutes ?? null,
-        parallel: false,
+        dependsOn: [],
         assigneeId: input.assigneeId ?? null,
         feedback: null,
       }

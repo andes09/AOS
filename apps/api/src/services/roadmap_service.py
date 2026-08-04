@@ -19,14 +19,14 @@ from datetime import date, datetime, time
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from src.models.developer import Developer
 from src.models.milestone import Milestone
 from src.models.onboarding_session import OnboardingSession
 from src.models.organization import Organization
 from src.models.project import Project
-from src.models.task import Task, TaskStatus
+from src.models.task import Task, TaskStatus, task_dependencies
 from src.models.team import Team
 from src.services import idea_interview
 
@@ -77,7 +77,7 @@ def task_json(task: Task) -> dict:
         # the frontend's time helpers would have to strip on every render.
         "scheduledTime": task.scheduled_time.strftime("%H:%M") if task.scheduled_time else None,
         "durationMinutes": task.duration_minutes,
-        "parallel": bool(task.parallel),
+        "dependsOn": [str(d.id) for d in task.depends_on],
         "assigneeId": str(task.assignee_id) if task.assignee_id else None,
         "feedback": task.feedback,
         "completedAt": task.completed_at.isoformat() if task.completed_at else None,
@@ -147,6 +147,7 @@ async def owned_task(task_id: str, project: Project, db: AsyncSession) -> Task:
         select(Task)
         .join(Milestone, Task.milestone_id == Milestone.id)
         .where(Task.id == tid, Milestone.project_id == project.id)
+        .options(selectinload(Task.depends_on))
     )
     if task is None:
         raise HTTPException(status_code=404, detail="task_not_found")
@@ -185,6 +186,7 @@ async def owned_tasks(task_ids: list[uuid.UUID], project: Project, db: AsyncSess
             select(Task)
             .join(Milestone, Task.milestone_id == Milestone.id)
             .where(Task.id.in_(task_ids), Milestone.project_id == project.id)
+            .options(selectinload(Task.depends_on))
         )
     ).scalars().all()
     return {t.id: t for t in rows}
@@ -199,54 +201,25 @@ async def owned_milestone(milestone_id: str, project: Project, db: AsyncSession)
     milestone = await db.scalar(
         select(Milestone)
         .where(Milestone.id == mid, Milestone.project_id == project.id)
-        .options(selectinload(Milestone.tasks))
+        .options(selectinload(Milestone.tasks).selectinload(Task.depends_on))
     )
     if milestone is None:
         raise HTTPException(status_code=404, detail="milestone_not_found")
     return milestone
 
 
-async def task_blocked_by_earlier_sibling(task: Task, project: Project, db: AsyncSession) -> bool:
+def task_is_blocked(task: Task) -> bool:
     """
-    True if `task` is a sequential (non-parallel) task that can't be completed
-    yet because an earlier sequential task in the plan is still unfinished.
-    Mirrors the "waits its turn" gating the planner UI computes client-side
-    (DayAgenda.tsx's continuous "Up next" stream) so the server enforces the
-    same rule instead of trusting the UI alone.
+    True if `task` has a prerequisite (`task.depends_on`) that isn't `done`
+    yet. Mirrors the "waits its turn" gating the planner UI computes
+    client-side (DayAgenda.tsx's continuous "Up next" stream) so the server
+    enforces the same rule instead of trusting the UI alone.
 
-    "Earlier" spans the whole project now, not a single calendar day — the
-    planner has one unlimited queue rather than day-by-day silos. Same
-    ordering convention as `claim_next_task` below: scheduled_date ascending
-    (nulls last), then scheduled_time (untimed leads), then plan order.
-
-    Never blocks parallel tasks — those have no dependency on what's before
-    them, scheduled or not.
+    Pure and synchronous — no query here — provided the caller eager-loads
+    `Task.depends_on` (see `owned_task`/`owned_milestone`'s `selectinload`).
+    A task with no dependencies is trivially never blocked.
     """
-    if task.parallel:
-        return False
-
-    siblings = (
-        await db.scalars(
-            select(Task)
-            .join(Milestone, Task.milestone_id == Milestone.id)
-            .where(Milestone.project_id == project.id)
-            .order_by(
-                Task.scheduled_date.is_(None),
-                Task.scheduled_date,
-                Task.scheduled_time.is_(None).desc(),
-                Task.scheduled_time,
-                Milestone.sort_order,
-                Task.sort_order,
-            )
-        )
-    ).all()
-
-    for sibling in siblings:
-        if sibling.id == task.id:
-            return False
-        if not sibling.parallel and _status_str(sibling.status) != TaskStatus.DONE.value:
-            return True
-    return False
+    return any(_status_str(d.status) != TaskStatus.DONE.value for d in task.depends_on)
 
 
 def require_brief(session: OnboardingSession) -> None:
@@ -362,7 +335,7 @@ async def list_tasks(
         query = query.where(Task.scheduled_date >= scheduled_after)
     if scheduled_before is not None:
         query = query.where(Task.scheduled_date <= scheduled_before)
-    query = query.order_by(Milestone.sort_order, Task.sort_order)
+    query = query.order_by(Milestone.sort_order, Task.sort_order).options(selectinload(Task.depends_on))
 
     rows = (await db.execute(query)).scalars().all()
     return list(rows)
@@ -370,13 +343,23 @@ async def list_tasks(
 
 async def claim_next_task(project: Project, developer: Developer, db: AsyncSession) -> Task | None:
     """
-    Claims the next `todo`, unassigned task in `project` by schedule order and
+    Claims the next `todo`, unassigned, unblocked task in `project` and
     self-assigns it to `developer`. Returns None if nothing's claimable.
 
-    "Next" has no dependency-graph meaning yet (Task has no blocking model) —
-    this is "next by schedule order": scheduled_date ascending (nulls last),
+    "Next" = not blocked by any unfinished dependency (a correlated NOT
+    EXISTS against `task_dependencies`, so no relationship-loading needed),
+    tie-broken by schedule order: scheduled_date ascending (nulls last),
     then milestone sort_order, then task sort_order.
     """
+    unmet_dependency = (
+        select(task_dependencies.c.task_id)
+        .join(aliased_dep := aliased(Task), aliased_dep.id == task_dependencies.c.depends_on_task_id)
+        .where(
+            task_dependencies.c.task_id == Task.id,
+            aliased_dep.status != TaskStatus.DONE.value,
+        )
+        .exists()
+    )
     task = await db.scalar(
         select(Task)
         .join(Milestone, Task.milestone_id == Milestone.id)
@@ -384,6 +367,7 @@ async def claim_next_task(project: Project, developer: Developer, db: AsyncSessi
             Milestone.project_id == project.id,
             Task.status == TaskStatus.TODO.value,
             Task.assignee_id.is_(None),
+            ~unmet_dependency,
         )
         .order_by(
             Task.scheduled_date.is_(None),  # False (has a date) sorts before True (null) — nulls last
@@ -392,12 +376,14 @@ async def claim_next_task(project: Project, developer: Developer, db: AsyncSessi
             Task.sort_order,
         )
         .limit(1)
+        .options(selectinload(Task.depends_on))
     )
     if task is None:
         return None
     task.assignee_id = developer.id
+    # No db.refresh(): expire_on_commit=False keeps this object accurate, and
+    # refresh() would re-expire the depends_on we just eager-loaded above.
     await db.commit()
-    await db.refresh(task)
     return task
 
 
@@ -411,6 +397,8 @@ async def complete_task(task: Task, note: str | None, db: AsyncSession) -> Task:
     task.completed_at = datetime.utcnow()
     if note is not None:
         task.completion_note = note
+    # No db.refresh(): `task` is passed in already eager-loaded (owned_task),
+    # expire_on_commit=False keeps it accurate, and refresh() would re-expire
+    # depends_on, forcing a lazy reload that raises under asyncio.
     await db.commit()
-    await db.refresh(task)
     return task

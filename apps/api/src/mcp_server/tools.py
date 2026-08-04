@@ -225,9 +225,12 @@ def register_tools(mcp: FastMCP) -> None:
             session = project.onboarding_session
             api_key = await idea_interview.resolve_api_key(org.clerk_org_id, db)
             try:
-                milestone = await roadmap_generator.regenerate_milestone(milestone, session, api_key, db)
+                await roadmap_generator.regenerate_milestone(milestone, session, api_key, db)
             except ValueError as exc:
                 raise ToolError(f"bad_key: {exc}")
             except RuntimeError as exc:
                 raise ToolError(f"upstream_error: {exc}")
+            # Re-fetch rather than trust the returned object — see the REST
+            # route's identical comment (routers/roadmap.py).
+            milestone = await svc.owned_milestone(milestone_id, project, db)
             return {"milestone": svc.milestone_json(milestone)}

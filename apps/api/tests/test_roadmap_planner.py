@@ -549,6 +549,109 @@ async def test_adjust_empty_output_is_a_noop(tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_adjust_new_task_can_depend_on_existing_done_task(tmp_db):
+    """A newly-adjusted todo task can declare a dependency on an existing
+    done/in_progress task via its real id (the `existing_tasks_by_id`
+    resolution path) — the old `parallel` boolean couldn't express this."""
+    seeded = await _seed()
+    mid = seeded["milestone_id"]
+    done_id = await _add_task_row(mid, title="Done work", status="done", sort_order=0)
+
+    output = (
+        {
+            "milestones": [
+                {
+                    "title": "M1",
+                    "tasks": [
+                        {
+                            "title": "Integration test",
+                            "description": "Depends on the now-done setup",
+                            "dayOffset": 1,
+                            "startTime": "10:00",
+                            "durationMinutes": 60,
+                            "dependsOn": [str(done_id)],
+                        }
+                    ],
+                }
+            ]
+        },
+        None,
+    )
+
+    with _patch_clerk(), \
+        patch("src.services.roadmap_adjuster._call_adjuster", new=AsyncMock(return_value=output)), \
+        patch("src.services.roadmap_adjuster.record_generation_cost"):
+        async with _client() as client:
+            resp = await client.post(_url(seeded["project_id"], "/adjust"), json={}, headers=AUTH)
+
+    assert resp.status_code == 200
+    tasks = resp.json()["milestones"][0]["tasks"]
+    new_task = next(t for t in tasks if t["title"] == "Integration test")
+    assert new_task["dependsOn"] == [str(done_id)]
+
+
+@pytest.mark.asyncio
+async def test_adjust_drops_dangling_dependency_without_failing(tmp_db):
+    """An adjust payload referencing a dependency that doesn't exist is
+    silently dropped — the adjuster never destructively fails on a graph
+    hiccup, matching its existing no-op-on-malformed-output philosophy."""
+    seeded = await _seed()
+    output = (
+        {
+            "milestones": [
+                {
+                    "title": "M1",
+                    "tasks": [{"title": "Orphaned", "dayOffset": 0, "dependsOn": ["ghost"]}],
+                }
+            ]
+        },
+        None,
+    )
+
+    with _patch_clerk(), \
+        patch("src.services.roadmap_adjuster._call_adjuster", new=AsyncMock(return_value=output)), \
+        patch("src.services.roadmap_adjuster.record_generation_cost"):
+        async with _client() as client:
+            resp = await client.post(_url(seeded["project_id"], "/adjust"), json={}, headers=AUTH)
+
+    assert resp.status_code == 200
+    tasks = resp.json()["milestones"][0]["tasks"]
+    orphaned = next(t for t in tasks if t["title"] == "Orphaned")
+    assert orphaned["dependsOn"] == []
+
+
+@pytest.mark.asyncio
+async def test_adjust_drops_cyclic_dependency_without_failing(tmp_db):
+    """Same non-destructive-failure guarantee for a cyclic dependsOn graph."""
+    seeded = await _seed()
+    output = (
+        {
+            "milestones": [
+                {
+                    "title": "M1",
+                    "tasks": [
+                        {"title": "A", "dayOffset": 0, "key": "a", "dependsOn": ["b"]},
+                        {"title": "B", "dayOffset": 0, "key": "b", "dependsOn": ["a"]},
+                    ],
+                }
+            ]
+        },
+        None,
+    )
+
+    with _patch_clerk(), \
+        patch("src.services.roadmap_adjuster._call_adjuster", new=AsyncMock(return_value=output)), \
+        patch("src.services.roadmap_adjuster.record_generation_cost"):
+        async with _client() as client:
+            resp = await client.post(_url(seeded["project_id"], "/adjust"), json={}, headers=AUTH)
+
+    assert resp.status_code == 200
+    tasks = resp.json()["milestones"][0]["tasks"]
+    assert {t["title"] for t in tasks} == {"A", "B"}
+    assert all(t["dependsOn"] == [] for t in tasks)
+
+
+@pytest.mark.asyncio
 async def test_adjust_409_without_a_roadmap(tmp_db):
     seeded = await _seed(with_project=True)
     from src.database import get_db

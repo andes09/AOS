@@ -106,7 +106,8 @@ export type ProposedTask = {
   dayOffset: number
   startTime?: string | null
   durationMinutes?: number | null
-  parallel: boolean
+  key?: string | null
+  dependsOn: string[]
 }
 
 export type ProposedMilestone = {

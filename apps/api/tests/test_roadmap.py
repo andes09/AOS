@@ -31,7 +31,7 @@ from src.models.team import Team
 from src.models.onboarding_session import OnboardingSession
 from src.models.project import Project
 from src.models.milestone import Milestone
-from src.models.task import Task
+from src.models.task import Task, task_dependencies
 
 ORG = "org_roadmap_test"
 USER = "user_roadmap"
@@ -125,6 +125,24 @@ def _url(project_id, suffix=""):
     return f"/api/projects/{project_id}/roadmap{suffix}"
 
 
+async def _add_dependency(task_id, *depends_on_ids):
+    """Seed an explicit task_dependencies edge directly — not a PATCH-able
+    field (TaskUpdateRequest has no such key), same as other tests reach into
+    the DB for fields the API doesn't expose. Inserts into the association
+    table directly rather than loading ORM objects and appending to
+    `.depends_on`, which would need an eager-loaded (or freshly-transient)
+    task — `db.get()` returns neither."""
+    async for db in app.dependency_overrides[get_db]():
+        for dep_id in depends_on_ids:
+            await db.execute(
+                task_dependencies.insert().values(
+                    task_id=uuid.UUID(task_id), depends_on_task_id=uuid.UUID(dep_id)
+                )
+            )
+        await db.commit()
+        break
+
+
 # ─── Groq fakes (mirrors test_roadmap_generator.py) ─────────────────────────────
 class _FakeToolCall:
     def __init__(self, name, payload):
@@ -187,6 +205,7 @@ async def test_get_roadmap_happy_path(tmp_db):
     assert body["id"] == str(project_id)
     assert body["status"] == "active"
     assert [m["title"] for m in body["milestones"]] == ["M0", "M1"]
+    assert body["milestones"][0]["tasks"][0]["dependsOn"] == []
 
 
 # ─── POST /api/projects/{project_id}/roadmap/generate (idempotent repair) ───────
@@ -503,8 +522,7 @@ async def test_patch_task_reorder_out_of_bounds(tmp_db, bad_order):
 
 @pytest.mark.asyncio
 async def test_patch_task_blocked_by_earlier_incomplete_sibling(tmp_db):
-    """T1 (sequential) can't be completed while T0, scheduled the same day and
-    also sequential, is still open."""
+    """T1 can't be completed while its explicit dependency T0 is still open."""
     org_id, team_id = await _seed_org()
     session_id = await _seed_session(org_id)
     project_id, _ = await _seed_roadmap(team_id, session_id)
@@ -513,18 +531,13 @@ async def test_patch_task_blocked_by_earlier_incomplete_sibling(tmp_db):
         async with _client() as client:
             roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
             t0_id, t1_id = (t["id"] for t in roadmap["milestones"][0]["tasks"])
-
-            for tid in (t0_id, t1_id):
-                resp = await client.patch(
-                    _url(project_id, f"/tasks/{tid}"), json={"scheduledDate": "2026-01-01"}, headers=AUTH
-                )
-                assert resp.status_code == 200
+            await _add_dependency(t1_id, t0_id)
 
             resp = await client.patch(
                 _url(project_id, f"/tasks/{t1_id}"), json={"status": "done"}, headers=AUTH
             )
             assert resp.status_code == 409
-            assert resp.json()["detail"] == "task_blocked_by_earlier_task"
+            assert resp.json()["detail"] == "task_blocked_by_dependency"
 
             roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
     t1 = next(t for t in roadmap["milestones"][0]["tasks"] if t["id"] == t1_id)
@@ -541,12 +554,7 @@ async def test_patch_task_allowed_after_earlier_sibling_done(tmp_db):
         async with _client() as client:
             roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
             t0_id, t1_id = (t["id"] for t in roadmap["milestones"][0]["tasks"])
-
-            for tid in (t0_id, t1_id):
-                resp = await client.patch(
-                    _url(project_id, f"/tasks/{tid}"), json={"scheduledDate": "2026-01-01"}, headers=AUTH
-                )
-                assert resp.status_code == 200
+            await _add_dependency(t1_id, t0_id)
 
             resp = await client.patch(
                 _url(project_id, f"/tasks/{t0_id}"), json={"status": "done"}, headers=AUTH
@@ -561,47 +569,10 @@ async def test_patch_task_allowed_after_earlier_sibling_done(tmp_db):
 
 
 @pytest.mark.asyncio
-async def test_patch_task_parallel_exempt_from_blocking(tmp_db):
-    """A parallel task has no dependency on the task before it, so it's never
-    blocked by an earlier unfinished sibling."""
-    org_id, team_id = await _seed_org()
-    session_id = await _seed_session(org_id)
-    project_id, _ = await _seed_roadmap(team_id, session_id)
-
-    with _patch_clerk():
-        async with _client() as client:
-            roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
-            t0_id, t1_id = (t["id"] for t in roadmap["milestones"][0]["tasks"])
-
-            for tid in (t0_id, t1_id):
-                resp = await client.patch(
-                    _url(project_id, f"/tasks/{tid}"), json={"scheduledDate": "2026-01-01"}, headers=AUTH
-                )
-                assert resp.status_code == 200
-
-    # `parallel` isn't a PATCH-able field (TaskUpdateRequest has no such key),
-    # so set it directly, same as other tests reach into the DB for fields the
-    # API doesn't expose.
-    async for db in app.dependency_overrides[get_db]():
-        t1 = await db.get(Task, uuid.UUID(t1_id))
-        t1.parallel = True
-        await db.commit()
-        break
-
-    with _patch_clerk():
-        async with _client() as client:
-            resp = await client.patch(
-                _url(project_id, f"/tasks/{t1_id}"), json={"status": "done"}, headers=AUTH
-            )
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "done"
-
-
-@pytest.mark.asyncio
-async def test_patch_task_blocked_by_earlier_unscheduled_sibling(tmp_db):
-    """Blocking now spans the whole plan, not a single calendar day — an
-    unscheduled task is still gated by an earlier unfinished non-parallel
-    task in plan order, same as a scheduled one."""
+async def test_patch_task_with_no_dependencies_is_never_blocked(tmp_db):
+    """A task with an empty depends_on is trivially never blocked, regardless
+    of an earlier unfinished sibling — there's no "exempt" flag anymore, this
+    is just the default."""
     org_id, team_id = await _seed_org()
     session_id = await _seed_session(org_id)
     project_id, _ = await _seed_roadmap(team_id, session_id)
@@ -614,12 +585,14 @@ async def test_patch_task_blocked_by_earlier_unscheduled_sibling(tmp_db):
             resp = await client.patch(
                 _url(project_id, f"/tasks/{t1_id}"), json={"status": "done"}, headers=AUTH
             )
-    assert resp.status_code == 409
-    assert resp.json()["detail"] == "task_blocked_by_earlier_task"
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "done"
 
 
 @pytest.mark.asyncio
-async def test_patch_task_unscheduled_allowed_after_earlier_sibling_done(tmp_db):
+async def test_patch_task_blocking_ignores_scheduled_date(tmp_db):
+    """Scheduling plays no role in blocking under the dependency-graph model —
+    only explicit edges do. Both tasks stay unscheduled throughout."""
     org_id, team_id = await _seed_org()
     session_id = await _seed_session(org_id)
     project_id, _ = await _seed_roadmap(team_id, session_id)
@@ -628,6 +601,13 @@ async def test_patch_task_unscheduled_allowed_after_earlier_sibling_done(tmp_db)
         async with _client() as client:
             roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
             t0_id, t1_id = (t["id"] for t in roadmap["milestones"][0]["tasks"])
+            await _add_dependency(t1_id, t0_id)
+
+            resp = await client.patch(
+                _url(project_id, f"/tasks/{t1_id}"), json={"status": "done"}, headers=AUTH
+            )
+            assert resp.status_code == 409
+            assert resp.json()["detail"] == "task_blocked_by_dependency"
 
             resp = await client.patch(
                 _url(project_id, f"/tasks/{t0_id}"), json={"status": "done"}, headers=AUTH
@@ -636,6 +616,76 @@ async def test_patch_task_unscheduled_allowed_after_earlier_sibling_done(tmp_db)
 
             resp = await client.patch(
                 _url(project_id, f"/tasks/{t1_id}"), json={"status": "done"}, headers=AUTH
+            )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_patch_task_blocked_by_cross_milestone_dependency(tmp_db):
+    """Dependencies aren't restricted to the same milestone."""
+    org_id, team_id = await _seed_org()
+    session_id = await _seed_session(org_id)
+    project_id, (m0, m1) = await _seed_roadmap(team_id, session_id)
+
+    with _patch_clerk():
+        async with _client() as client:
+            roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
+            t0_id = roadmap["milestones"][0]["tasks"][0]["id"]
+            t2_id = roadmap["milestones"][1]["tasks"][0]["id"]
+            await _add_dependency(t2_id, t0_id)
+
+            resp = await client.patch(
+                _url(project_id, f"/tasks/{t2_id}"), json={"status": "done"}, headers=AUTH
+            )
+            assert resp.status_code == 409
+            assert resp.json()["detail"] == "task_blocked_by_dependency"
+
+            resp = await client.patch(
+                _url(project_id, f"/tasks/{t0_id}"), json={"status": "done"}, headers=AUTH
+            )
+            assert resp.status_code == 200
+
+            resp = await client.patch(
+                _url(project_id, f"/tasks/{t2_id}"), json={"status": "done"}, headers=AUTH
+            )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_patch_task_blocked_until_all_dependencies_done(tmp_db):
+    """Convergence: a task with two prerequisites stays blocked until both are done."""
+    org_id, team_id = await _seed_org()
+    session_id = await _seed_session(org_id)
+    project_id, (m0, m1) = await _seed_roadmap(team_id, session_id)
+
+    with _patch_clerk():
+        async with _client() as client:
+            roadmap = (await client.get(_url(project_id), headers=AUTH)).json()
+            t0_id, t1_id = (t["id"] for t in roadmap["milestones"][0]["tasks"])
+            t2_id = roadmap["milestones"][1]["tasks"][0]["id"]
+            await _add_dependency(t2_id, t0_id, t1_id)
+
+            resp = await client.patch(
+                _url(project_id, f"/tasks/{t0_id}"), json={"status": "done"}, headers=AUTH
+            )
+            assert resp.status_code == 200
+
+            # Only one of two dependencies done — still blocked.
+            resp = await client.patch(
+                _url(project_id, f"/tasks/{t2_id}"), json={"status": "done"}, headers=AUTH
+            )
+            assert resp.status_code == 409
+            assert resp.json()["detail"] == "task_blocked_by_dependency"
+
+            resp = await client.patch(
+                _url(project_id, f"/tasks/{t1_id}"), json={"status": "done"}, headers=AUTH
+            )
+            assert resp.status_code == 200
+
+            resp = await client.patch(
+                _url(project_id, f"/tasks/{t2_id}"), json={"status": "done"}, headers=AUTH
             )
     assert resp.status_code == 200
     assert resp.json()["status"] == "done"

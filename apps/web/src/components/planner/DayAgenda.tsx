@@ -9,6 +9,8 @@ interface DayAgendaProps {
   /** The whole plan's not-done tasks, in plan order — this is a single
    *  continuous queue, not scoped to any particular calendar day. */
   tasks: FlatTask[]
+  /** Every task in the plan (unfiltered) by id, for resolving `dependsOn`. */
+  tasksById: Map<string, FlatTask>
   membersById: Map<string, RoadmapMember>
   colorOf: (task: FlatTask) => number | null
   /** Plan-wide progress, for the "Up next" subtitle. */
@@ -28,11 +30,14 @@ interface DayAgendaProps {
  *  checked off, keeping the focus on what's immediately next. */
 const VISIBLE_COUNT = 3
 
-/** A task's derived state within the queue, computed from `parallel` + order. */
+/** A task's derived state within the queue, computed from `dependsOn` + order. */
 interface Row {
   task: FlatTask
-  /** A non-parallel task blocked by an earlier unfinished non-parallel task. */
+  /** Blocked by an unmet dependency (some `dependsOn` task isn't `done`). */
   waiting: boolean
+  /** Ready now, and not simply the single next thing in the queue — i.e. an
+   *  additional, independently-startable track alongside whatever's first. */
+  isParallel: boolean
   /** Card opacity — waiting tasks fade progressively so the eye lands on the
    *  work that's actually actionable now. */
   opacity: number
@@ -48,6 +53,7 @@ interface Row {
  */
 export function DayAgenda({
   tasks,
+  tasksById,
   membersById,
   colorOf,
   done,
@@ -66,17 +72,19 @@ export function DayAgenda({
 
   // Every card fades a little more than the one above it, so the eye lands on
   // the most immediate task and later work recedes down the queue. The fade is
-  // purely positional (independent of the parallel/waiting logic below), which
-  // is what the design calls for. `waiting` still drives the "waits its turn"
-  // tag: the first sequential task gates later sequential ones; parallel tasks
-  // are never blocked.
+  // purely positional (independent of the waiting logic below), which is what
+  // the design calls for. `waiting` is a real dependency-graph check: a task
+  // waits if any of its `dependsOn` tasks isn't `done` yet. `isParallel` tags
+  // every ready task except the first one encountered — "workable right now,
+  // and not simply the one thing you'd do next."
   const rows: Row[] = []
-  let gated = false
+  let firstReadySeen = false
   upNext.forEach((task, i) => {
-    const waiting = !task.parallel && gated
+    const waiting = task.dependsOn.some(id => tasksById.get(id)?.status !== 'done')
+    const isParallel = !waiting && firstReadySeen
     const opacity = Math.max(0.4, 1 - i * 0.18)
-    rows.push({ task, waiting, opacity })
-    if (!task.parallel) gated = true
+    rows.push({ task, waiting, isParallel, opacity })
+    if (!waiting) firstReadySeen = true
   })
 
   return (
@@ -102,11 +110,12 @@ export function DayAgenda({
         </p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-          {rows.slice(0, VISIBLE_COUNT).map(({ task, waiting, opacity }) => (
+          {rows.slice(0, VISIBLE_COUNT).map(({ task, waiting, isParallel, opacity }) => (
             <TaskRow
               key={task.id}
               task={task}
               waiting={waiting}
+              isParallel={isParallel}
               opacity={opacity}
               colorIndex={colorOf(task)}
               member={task.assigneeId ? membersById.get(task.assigneeId) ?? null : null}
@@ -136,6 +145,7 @@ export function DayAgenda({
 function TaskRow({
   task,
   waiting,
+  isParallel,
   opacity,
   colorIndex,
   member,
@@ -145,6 +155,7 @@ function TaskRow({
 }: {
   task: FlatTask
   waiting: boolean
+  isParallel: boolean
   opacity: number
   colorIndex: number | null
   member: RoadmapMember | null
@@ -228,7 +239,7 @@ function TaskRow({
               {task.title}
             </span>
           </button>
-          {task.parallel && <span style={parallelTagStyle}>PARALLEL</span>}
+          {isParallel && <span style={parallelTagStyle}>PARALLEL</span>}
           {waiting && <span style={waitingTagStyle}>waits its turn</span>}
           <span style={{ flex: 1 }} />
           {member && <Avatar name={member.name} colorIndex={member.colorIndex} avatarUrl={member.avatarUrl} initials={member.initials} size="xs" />}

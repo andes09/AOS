@@ -8,15 +8,15 @@ docs/plans/2026-07-20-anti-dormancy-mvp.md.
 Nullable: a brand-new developer has no activity yet, and the dormancy read
 falls back to Organization.onboarding_completed_at via COALESCE.
 
-Revision ID: 0046
-Revises: 0045
+Revision ID: 0047
+Revises: 0046
 Create Date: 2026-08-03
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = '0046'
-down_revision = '0045'
+revision = '0047'
+down_revision = '0046'
 branch_labels = None
 depends_on = None
 

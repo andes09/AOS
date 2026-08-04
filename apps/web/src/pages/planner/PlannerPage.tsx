@@ -16,12 +16,13 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core'
-import { Search, Sparkles } from 'lucide-react'
+import { Map, GitBranch, Search, Sparkles } from 'lucide-react'
 import { ApiError } from '../../lib/api'
 import { Alert } from '../../components/ui/Alert'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Modal } from '../../components/ui/Modal'
+import { SegmentedControl, type SegmentedOption } from '../../components/ui/SegmentedControl'
 import { addDays, mondayOf, parseISO, toISO } from '../../lib/date'
 import { PlannerSidebar } from '../../components/planner/PlannerSidebar'
 import { PlannerToolbar } from '../../components/planner/PlannerToolbar'
@@ -30,6 +31,7 @@ import type { PlannerOutletContext } from '../../components/planner/plannerViews
 import { CalendarGrid } from '../../components/planner/CalendarGrid'
 import { DayAgenda } from '../../components/planner/DayAgenda'
 import { MilestoneMap } from '../../components/planner/MilestoneMap'
+import { DependencyGraph } from '../../components/planner/DependencyGraph'
 import { ListView } from '../../components/planner/ListView'
 import { BoardView } from '../../components/planner/BoardView'
 import { UnscheduledTray } from '../../components/planner/UnscheduledTray'
@@ -44,6 +46,14 @@ import { EMPTY_FILTERS, toggleInSet, UNASSIGNED, type PlannerFilters } from './p
 const START_HOUR = 7
 const END_HOUR = 20
 
+/** The two ways "The plan" modal can show the same roadmap. Modal-internal —
+ *  unlike PlannerView, this never leaves PlannerPage, so it isn't shared via
+ *  plannerViews.tsx. */
+const PLAN_MAP_TAB_OPTIONS: readonly SegmentedOption<'milestones' | 'dependencies'>[] = [
+  { value: 'milestones', label: 'Milestones', icon: <Map size={14} /> },
+  { value: 'dependencies', label: 'Dependencies', icon: <GitBranch size={14} /> },
+]
+
 export function PlannerPage() {
   // `view` and the people-panel collapse state live in the layout so the top
   // bar (switcher + panel toggle) and this page share them.
@@ -56,6 +66,7 @@ export function PlannerPage() {
   const [openTaskId, setOpenTaskId] = useState<string | null>(null)
   const [draggingTask, setDraggingTask] = useState<FlatTask | null>(null)
   const [planMapOpen, setPlanMapOpen] = useState(false)
+  const [planMapTab, setPlanMapTab] = useState<'milestones' | 'dependencies'>('milestones')
   // Ask right away when there's no plan yet (fresh out of onboarding), rather
   // than leaving generation as a button the user has to notice on their own.
   const [askOpen, setAskOpen] = useState(true)
@@ -383,8 +394,20 @@ export function PlannerPage() {
         onSave={patch => openTask && updateTask.mutate({ id: openTask.id, patch })}
       />
 
-      <Modal open={planMapOpen} onClose={() => setPlanMapOpen(false)} title="The plan" width={880}>
-        <MilestoneMap milestones={data.roadmap?.milestones ?? []} />
+      <Modal open={planMapOpen} onClose={() => setPlanMapOpen(false)} title="The plan" width={960}>
+        <SegmentedControl
+          options={PLAN_MAP_TAB_OPTIONS}
+          value={planMapTab}
+          onChange={setPlanMapTab}
+          ariaLabel="Plan map view"
+          size="sm"
+          style={{ marginBottom: 'var(--space-4)' }}
+        />
+        {planMapTab === 'milestones' ? (
+          <MilestoneMap milestones={data.roadmap?.milestones ?? []} />
+        ) : (
+          <DependencyGraph tasksById={data.tasksById} colorOf={colorOf} onOpen={t => setOpenTaskId(t.id)} />
+        )}
       </Modal>
 
       <AssistantChat

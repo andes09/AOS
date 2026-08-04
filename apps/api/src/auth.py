@@ -9,6 +9,7 @@ from clerk_backend_api.security.types import AuthenticateRequestOptions
 from src.config import settings
 
 logger = logging.getLogger(__name__)
+from src.logging_config import org_id_var, user_id_var
 from src.database import get_db
 from src.models.developer import AppRole, Developer
 from src.models.organization import Organization
@@ -27,10 +28,20 @@ class _BearerRequest:
 
 async def _verify_token(credentials: HTTPAuthorizationCredentials) -> dict:
     """Verify Clerk JWT via JWKS and return the claims payload."""
-    state = await _clerk.authenticate_request_async(
-        _BearerRequest(credentials.credentials),
-        AuthenticateRequestOptions(secret_key=settings.clerk_secret_key),
-    )
+    try:
+        state = await _clerk.authenticate_request_async(
+            _BearerRequest(credentials.credentials),
+            AuthenticateRequestOptions(secret_key=settings.clerk_secret_key),
+        )
+    except Exception:
+        # Clerk being unreachable / misconfigured looks identical to a bad token
+        # from the client's side (401). Distinguish them in the logs, or an
+        # outage reads as "everyone's tokens went bad at once".
+        logger.exception("Clerk token verification call failed — treating as unauthenticated")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not verify credentials",
+        )
     if not state.is_signed_in or state.payload is None:
         logger.warning("Clerk auth rejected: reason=%s", state.reason)
         raise HTTPException(
@@ -58,6 +69,12 @@ async def _get_first_admin_ids(db: AsyncSession) -> tuple[str, str]:
     )
     row = result.first()
     if row is None:
+        # A misconfiguration, not a client error — every request will 401 until
+        # an admin Developer exists, so make the cause obvious.
+        logger.error(
+            "clerk_auth flag is disabled but no admin Developer with a clerk_user_id "
+            "exists — all authenticated routes will return 401 until one is seeded"
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="clerk_auth is disabled but no admin user found in database",
@@ -76,6 +93,7 @@ async def get_current_user_id(
     """
     if not settings.is_feature_enabled("clerk_auth"):
         user_id, _ = await _get_first_admin_ids(db)
+        user_id_var.set(user_id)
         return user_id
     if credentials is None:
         raise HTTPException(
@@ -85,10 +103,13 @@ async def get_current_user_id(
     payload = await _verify_token(credentials)
     user_id = payload.get("sub")
     if not user_id:
+        logger.warning("Token verified but carries no sub claim: claims=%s", list(payload.keys()))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
         )
+    # Stamps this user onto every log record for the rest of the request.
+    user_id_var.set(user_id)
     return user_id
 
 
@@ -103,6 +124,7 @@ async def get_current_org_id(
     """
     if not settings.is_feature_enabled("clerk_auth"):
         _, org_id = await _get_first_admin_ids(db)
+        org_id_var.set(org_id)
         return org_id
     if credentials is None:
         raise HTTPException(
@@ -120,4 +142,5 @@ async def get_current_org_id(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No organisation context — sign in with an organisation account.",
         )
+    org_id_var.set(org_id)
     return org_id

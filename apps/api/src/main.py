@@ -1,10 +1,23 @@
 import logging
 import os as _os
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Depends, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from src.config import settings
-from src.auth import get_current_user_id
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+# Must run before anything else emits a log record, otherwise those early
+# records hit a handler-less root logger and vanish. See logging_config.py.
+from src.logging_config import setup_logging
+
+setup_logging()
+
+from src.config import settings  # noqa: E402
+from src.auth import get_current_user_id  # noqa: E402
+from src.request_logging import RequestContextMiddleware  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +25,9 @@ _sentry_dsn = _os.getenv("SENTRY_DSN")
 if _sentry_dsn:
     import sentry_sdk
     sentry_sdk.init(dsn=_sentry_dsn, traces_sample_rate=0.1, environment=_os.getenv("ENVIRONMENT", "development"))
+    logger.info("sentry initialised", extra={"environment": _os.getenv("ENVIRONMENT", "development")})
+else:
+    logger.warning("SENTRY_DSN not set — server exceptions will only be visible in stdout logs")
 
 from src.routers import sprints as sprints_router
 from src.routers import alerts as alerts_router
@@ -34,14 +50,35 @@ from src.routers.github_webhooks import router as github_webhooks_router
 from src.routers.platform_admin import router as platform_admin_router
 from src.routers.mcp_oauth_consent import router as mcp_oauth_consent_router
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info(
+        "API starting",
+        extra={"environment": settings.environment, "sentry": bool(_sentry_dsn)},
+    )
+    # Surface a bad DATABASE_URL at boot rather than on the first user request.
+    try:
+        from sqlalchemy import text
+        from src.database import engine
+
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        logger.info("database connectivity OK")
+    except Exception:
+        logger.exception("database connectivity check FAILED at startup — API will serve errors")
+    yield
+    logger.info("API shutting down")
+
+
 app = FastAPI(
     title="Omada API",
     version="0.1.0",
     docs_url="/docs" if not settings.is_production else None,
+    lifespan=lifespan,
 )
 
 _allowed_origins = settings.allowed_origins
-print(f"[CORS] allowed_origins={_allowed_origins}", flush=True)
+logger.info("CORS configured", extra={"allowed_origins": _allowed_origins})
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,12 +88,70 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Added after CORSMiddleware so it runs *inside* it: Starlette applies
+# middleware in reverse registration order, and we want the request id bound
+# before any route code runs, and released after it returns.
+app.add_middleware(RequestContextMiddleware)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """422s are usually a frontend/backend contract drift — log what failed.
+
+    FastAPI's built-in handler returns the same body silently, which makes a
+    broken payload shape invisible server-side.
+    """
+    logger.warning(
+        "request validation failed for %s %s",
+        request.method,
+        request.url.path,
+        extra={"http_path": request.url.path, "validation_errors": exc.errors()},
+    )
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """Log deliberate 4xx/5xx aborts, which otherwise leave no server-side trace.
+
+    5xx raised as HTTPException is a real defect, so it gets a stack trace;
+    4xx is expected control flow and stays at INFO/WARNING.
+    """
+    if exc.status_code >= 500:
+        logger.exception(
+            "HTTPException %s for %s %s", exc.status_code, request.method, request.url.path,
+            extra={"http_status": exc.status_code, "http_path": request.url.path},
+        )
+    elif exc.status_code in (401, 403, 404):
+        logger.info(
+            "HTTP %s for %s %s: %s", exc.status_code, request.method, request.url.path, exc.detail,
+            extra={"http_status": exc.status_code, "http_path": request.url.path},
+        )
+    else:
+        logger.warning(
+            "HTTP %s for %s %s: %s", exc.status_code, request.method, request.url.path, exc.detail,
+            extra={"http_status": exc.status_code, "http_path": request.url.path},
+        )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None),
+    )
 
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    logger.exception("Unhandled exception for %s %s", request.method, request.url.path)
+    # RequestContextMiddleware already logged this with timing + client context.
+    # Only log here if it didn't (e.g. a failure raised outside its reach), so a
+    # single 500 never produces two stack traces.
+    if not getattr(request.state, "exception_logged", False):
+        logger.exception("Unhandled exception for %s %s", request.method, request.url.path)
     response = JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    # Echo the correlation id on failures too — this is precisely the response a
+    # user will screenshot, and it's the key to finding the trace in the logs.
+    request_id = getattr(request.state, "request_id", None)
+    if request_id:
+        response.headers["X-Request-ID"] = request_id
     # ServerErrorMiddleware sits OUTSIDE CORSMiddleware, so 500s skip the CORS
     # layer and reach the browser without CORS headers — surfacing as a
     # misleading "blocked by CORS policy" error. Re-add them here so the real
@@ -95,6 +190,11 @@ app.include_router(mcp_oauth_consent_router)
 
 @app.get("/health")
 async def health():
+    # Deliberately does NOT touch the database. This is Railway's healthcheck
+    # (railway.toml), so a DB round-trip here would turn pool exhaustion into a
+    # failed healthcheck and a container restart — an availability risk taken on
+    # for no observability gain, since DB failures are already logged at startup
+    # (lifespan) and on every request that actually needs the DB.
     return {"status": "ok", "environment": settings.environment}
 
 

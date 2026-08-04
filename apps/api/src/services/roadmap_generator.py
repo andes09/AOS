@@ -217,17 +217,35 @@ async def _call_planner(api_key: str, system: str, user_content: str, tool: dict
             )
             break
         except AuthenticationError as exc:
+            logger.error("Groq authentication failed — check GROQ_API_KEY", exc_info=True)
             raise ValueError("Invalid Groq API key.") from exc
         except RateLimitError as exc:
+            logger.warning("Groq rate limit hit on %s (attempt %s)", tool_name, attempt + 1)
             raise RuntimeError(
                 "Groq API rate limit reached. Please try again in a moment."
             ) from exc
         except BadRequestError as exc:
             if getattr(exc, "code", None) == "tool_use_failed" and attempt < _MAX_TOOL_RETRIES:
+                # The model returned a malformed tool call. Retrying usually
+                # fixes it, but a rising rate here means the prompt or schema
+                # has drifted — so don't retry silently.
+                logger.warning(
+                    "Groq tool_use_failed, retrying",
+                    extra={"tool": tool_name, "attempt": attempt + 1, "max_retries": _MAX_TOOL_RETRIES},
+                )
                 continue
+            logger.error("Groq bad request for %s: %s", tool_name, exc, exc_info=True)
             raise RuntimeError(f"Groq API error: {exc}") from exc
         except APIError as exc:
+            logger.error("Groq API error for %s: %s", tool_name, exc, exc_info=True)
             raise RuntimeError(f"Groq API error: {exc}") from exc
+
+    if response is None:
+        # Unreachable today (the final attempt re-raises rather than continuing),
+        # but an off-by-one in _MAX_TOOL_RETRIES would otherwise surface as an
+        # opaque AttributeError on None instead of naming the real cause.
+        logger.error("Groq returned no response for %s after all retries", tool_name)
+        raise RuntimeError("The planner did not return a roadmap. Please try again.")
 
     tool_calls = response.choices[0].message.tool_calls or []
     call = next((t for t in tool_calls if t.function.name == tool_name), None)

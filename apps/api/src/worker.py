@@ -1,6 +1,73 @@
+import logging
+import uuid
+
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import (
+    setup_logging as celery_setup_logging,
+    task_failure,
+    task_prerun,
+    task_retry,
+    worker_ready,
+    worker_shutdown,
+)
+
 from src.config import settings
+from src.logging_config import request_id_var, setup_logging
+
+logger = logging.getLogger(__name__)
+
+
+@celery_setup_logging.connect
+def _configure_celery_logging(**_kwargs) -> None:
+    """Stop Celery replacing the root logger config with its own.
+
+    Connecting to this signal disables Celery's default logging setup entirely,
+    so worker output uses the same format/handler as the API — one log shape
+    across both processes.
+    """
+    setup_logging(force=True)
+
+
+@task_prerun.connect
+def _bind_task_context(task_id=None, task=None, **_kwargs) -> None:
+    """Give every task run a correlation id, mirroring the API's request id."""
+    request_id_var.set(task_id or uuid.uuid4().hex)
+    logger.info("task started", extra={"task_name": getattr(task, "name", None), "task_id": task_id})
+
+
+@task_failure.connect
+def _log_task_failure(task_id=None, exception=None, sender=None, einfo=None, **_kwargs) -> None:
+    """Celery swallows task exceptions into the result backend by default.
+
+    Without this the only trace of a failed background job is a `FAILURE`
+    result nobody reads — the roadmap prewarm and GitHub reconciliation sweep
+    would fail completely silently.
+    """
+    logger.error(
+        "task FAILED: %s", getattr(sender, "name", "unknown"),
+        exc_info=(type(exception), exception, exception.__traceback__) if exception else None,
+        extra={"task_name": getattr(sender, "name", None), "task_id": task_id},
+    )
+
+
+@task_retry.connect
+def _log_task_retry(request=None, reason=None, sender=None, **_kwargs) -> None:
+    logger.warning(
+        "task retrying: %s (%s)", getattr(sender, "name", "unknown"), reason,
+        extra={"task_name": getattr(sender, "name", None), "reason": str(reason)},
+    )
+
+
+@worker_ready.connect
+def _log_worker_ready(**_kwargs) -> None:
+    logger.info("celery worker ready", extra={"environment": settings.environment})
+
+
+@worker_shutdown.connect
+def _log_worker_shutdown(**_kwargs) -> None:
+    logger.info("celery worker shutting down")
+
 
 celery_app = Celery(
     "agile-os",
@@ -39,3 +106,8 @@ if settings.is_feature_enabled("experimental.github_autocomplete"):
             "schedule": crontab(minute=0, hour="*/6"),
         },
     }
+    logger.info("beat schedule registered: github-reconciliation-sweep every 6h")
+else:
+    logger.info(
+        "experimental.github_autocomplete disabled — no reconciliation sweep scheduled"
+    )

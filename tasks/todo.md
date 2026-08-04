@@ -46,14 +46,15 @@ the break only surfaces at `alembic upgrade head` on a duplicate revision id.
 — constants are imported at line 42–44, well above the line-70 use, and an AST
 walk shows exactly three interpolations and no stray braces.
 
-**Follow-ups not taken (out of scope):**
-- `aiosqlite` is an undeclared test dependency — required by `conftest.py`'s
-  SQLite async engine but absent from `apps/api/pyproject.toml` and `uv.lock`.
-  It survives in the main venv only as a manual `uv pip install`, so every
-  fresh worktree fails 13 tests until someone installs it by hand. Should be
-  added to the `dev` extra.
-- Both branches' `origin` refs are now stale; the onboarding one was rebased,
-  so updating it would need `--force-with-lease`. Nothing pushed.
+**Follow-up fixed.** `aiosqlite` was an undeclared test dependency — required by
+`conftest.py`'s `sqlite+aiosqlite:///:memory:` engine but absent from
+`apps/api/pyproject.toml` and `uv.lock`, surviving in the main venv only as a
+manual `uv pip install`. Every fresh worktree failed 13 tests until someone
+installed it by hand. Now declared in the `dev` extra and locked; verified by
+`uv sync --extra dev` alone in a throwaway worktree off `main`.
+
+**Still open:** both branches' `origin` refs are stale; the onboarding one was
+rebased, so updating it would need `--force-with-lease`.
 
 ---
 

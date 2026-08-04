@@ -39,6 +39,8 @@ dev = [
     "pytest-httpx>=0.30.0",
     "httpx>=0.27.0",
     "factory-boy>=3.3.0",
+    # conftest.py runs the suite against sqlite+aiosqlite:///:memory:.
+    "aiosqlite>=0.20.0",
 ]
 
 [build-system]

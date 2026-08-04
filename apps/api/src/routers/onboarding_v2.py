@@ -772,6 +772,38 @@ async def complete_chat(
     return await _build_state(org, user_id, db)
 
 
+@router.post("/chat/reopen")
+async def reopen_chat(
+    user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Recovery path for a session that reached "completed" without a usable
+    brief — e.g. `/chat/complete` overrode a too-short interview, or every
+    extraction call failed. Without this, IdeaChatStep's disabled input left
+    the founder stuck: no way to add detail, and /plan/draft 409s forever.
+
+    Refuses once a project already exists for this session: at that point
+    the interview transcript is historical record, not something generation
+    reads from, so reopening it wouldn't do anything.
+    """
+    org = await _get_org(clerk_org_id, db)
+    session = await _get_session(org, db)
+    if session is None:
+        raise HTTPException(status_code=409, detail="chat_not_started")
+    if session.status == "completed":
+        project = await db.scalar(
+            select(Project).where(Project.onboarding_session_id == session.id)
+        )
+        if project is not None:
+            raise HTTPException(status_code=409, detail="project_already_created")
+        session.status = "in_progress"
+        session.completed_at = None
+        session.awaiting_confirmation = False
+        await db.commit()
+    return await _build_state(org, user_id, db)
+
+
 @router.post("/complete")
 async def complete_onboarding(
     user_id: str = Depends(get_current_user_id),

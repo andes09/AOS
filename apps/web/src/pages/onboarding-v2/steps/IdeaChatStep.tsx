@@ -11,9 +11,23 @@ import { Btn, C, Spinner, WARM } from '../theme'
 export function IdeaChatStep() {
   const chat = useIdeaChat()
   const [draft, setDraft] = useState('')
+  const [reopening, setReopening] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const disabled = chat.isStreaming || chat.status === 'completed'
+  // A session can reach "completed" with nothing usable in the brief (e.g.
+  // extraction failed on every turn) — without a way back the founder is
+  // stuck with a disabled input and a roadmap that can never draft.
+  const stuckEmpty = chat.status === 'completed' && !hasBriefContent(chat.brief)
+
+  const reopen = async () => {
+    setReopening(true)
+    try {
+      await chat.reopen()
+    } finally {
+      setReopening(false)
+    }
+  }
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -52,6 +66,15 @@ export function IdeaChatStep() {
           {chat.error && (
             <div role="alert" style={{ margin: '0 16px 12px', background: C.dangerBg, border: `1px solid ${C.dangerBd}`, borderRadius: 8, padding: '9px 12px', fontSize: 12.5, color: C.danger }}>
               {chat.error}
+            </div>
+          )}
+
+          {stuckEmpty && (
+            <div role="alert" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, margin: '0 16px 12px', background: C.dangerBg, border: `1px solid ${C.dangerBd}`, borderRadius: 8, padding: '9px 12px', fontSize: 12.5, color: C.danger }}>
+              <span>This session ended without enough detail to build a plan.</span>
+              <Btn variant="outline" size="sm" onClick={() => void reopen()} disabled={reopening}>
+                {reopening ? 'Resuming…' : 'Continue the conversation'}
+              </Btn>
             </div>
           )}
 

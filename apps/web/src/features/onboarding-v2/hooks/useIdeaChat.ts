@@ -113,6 +113,12 @@ export function useIdeaChat() {
     invalidateFlowState()
   }, [api, invalidateFlowState])
 
+  const reopen = useCallback(async () => {
+    await api.reopenChat()
+    setStatus('in_progress')
+    invalidateFlowState()
+  }, [api, invalidateFlowState])
+
   return {
     messages,
     status,
@@ -126,5 +132,7 @@ export function useIdeaChat() {
     send,
     /** User override: end the interview without waiting for the AI to judge it done. */
     complete,
+    /** Recovery: resume a session stuck "completed" with no usable brief. */
+    reopen,
   }
 }

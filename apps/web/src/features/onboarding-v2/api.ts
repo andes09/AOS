@@ -225,6 +225,9 @@ export function createOnboardingApi(getToken: GetToken, apiUrl: string = DEFAULT
     getChat: () => request<ChatPayload>('/api/onboarding/v2/chat'),
     completeChat: () =>
       request<OnboardingState>('/api/onboarding/v2/chat/complete', { method: 'POST' }),
+    /** Recovery path: reopen a session stuck "completed" with no usable brief. */
+    reopenChat: () =>
+      request<OnboardingState>('/api/onboarding/v2/chat/reopen', { method: 'POST' }),
 
     /**
      * Send a user message; the assistant reply streams back over SSE.

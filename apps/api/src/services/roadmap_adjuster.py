@@ -28,6 +28,7 @@ from src.models.task import Task
 from src.models.team import Team
 from src.services import roadmap_generator
 from src.services.cost_tracker import record_generation_cost
+from src.services.llm_errors import RATE_LIMIT_MESSAGE, LLMRateLimitError
 from src.services.roadmap_shapes import record_plan_quality, resolve_task_dependencies
 from src.services.task_ids import allocate_short_ids
 
@@ -161,7 +162,7 @@ async def _call_tool(api_key: str, system: str, user_content: str, tool: dict):
     except AuthenticationError as exc:
         raise ValueError("Invalid Groq API key.") from exc
     except RateLimitError as exc:
-        raise RuntimeError("Groq rate limit reached. Please try again in a moment.") from exc
+        raise LLMRateLimitError(RATE_LIMIT_MESSAGE) from exc
     except APIError as exc:
         raise RuntimeError(f"Groq API error: {exc}") from exc
 

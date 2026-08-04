@@ -55,6 +55,7 @@ from src.services import (
     roadmap_generator,
 )
 from src.services import roadmap_service as svc
+from src.services.llm_errors import LLMRateLimitError
 from src.services.task_ids import allocate_short_id
 
 logger = logging.getLogger(__name__)
@@ -141,6 +142,8 @@ async def generate(
         await roadmap_generator.regenerate_roadmap(session, team, api_key, db)
     except ValueError as exc:  # bad key
         raise HTTPException(status_code=402, detail=str(exc))
+    except LLMRateLimitError as exc:  # provider quota — retrying now won't help
+        raise HTTPException(status_code=429, detail=str(exc))
     except RuntimeError as exc:  # upstream / model failure
         raise HTTPException(status_code=502, detail=str(exc))
 
@@ -166,6 +169,8 @@ async def regenerate(
         await roadmap_generator.regenerate_roadmap(session, team, api_key, db)
     except ValueError as exc:  # bad key
         raise HTTPException(status_code=402, detail=str(exc))
+    except LLMRateLimitError as exc:  # provider quota — retrying now won't help
+        raise HTTPException(status_code=429, detail=str(exc))
     except RuntimeError as exc:  # upstream / model failure
         raise HTTPException(status_code=502, detail=str(exc))
 
@@ -196,6 +201,8 @@ async def adjust(
         await roadmap_adjuster.adjust_roadmap(project, api_key, db)
     except ValueError as exc:  # bad key
         raise HTTPException(status_code=402, detail=str(exc))
+    except LLMRateLimitError as exc:  # provider quota — retrying now won't help
+        raise HTTPException(status_code=429, detail=str(exc))
     except RuntimeError as exc:  # upstream / model failure
         raise HTTPException(status_code=502, detail=str(exc))
 
@@ -221,6 +228,8 @@ async def regenerate_milestone_endpoint(
         await roadmap_generator.regenerate_milestone(milestone, session, api_key, db)
     except ValueError as exc:  # bad key
         raise HTTPException(status_code=402, detail=str(exc))
+    except LLMRateLimitError as exc:  # provider quota — retrying now won't help
+        raise HTTPException(status_code=429, detail=str(exc))
     except RuntimeError as exc:  # upstream / model failure
         raise HTTPException(status_code=502, detail=str(exc))
 

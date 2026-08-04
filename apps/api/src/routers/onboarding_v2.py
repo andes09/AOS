@@ -44,6 +44,7 @@ from src.models.organization import Organization
 from src.models.project import Project
 from src.models.team import Team
 from src.services import idea_interview, roadmap_generator
+from src.services.llm_errors import LLMRateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -687,6 +688,15 @@ async def _plan_draft_event_stream(
                 session, team, api_key, db, on_progress
             )
             await queue.put(("done", {"projectId": str(project.id)}))
+        except LLMRateLimitError:
+            # Distinct from a generic failure: nothing is wrong with the brief
+            # and there's nothing to retry right now, so the step says so
+            # instead of offering a regenerate that would fail the same way.
+            logger.warning(
+                "[onboarding] plan draft rate-limited for session %s", session.id
+            )
+            await db.rollback()
+            await queue.put(("error", {"message": "rate_limited"}))
         except Exception:
             logger.exception(
                 "[onboarding] plan draft generation failed for session %s", session.id
@@ -795,10 +805,17 @@ async def complete_onboarding(
                 team = await _resolve_team(org, db)
                 api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
                 project = await roadmap_generator.generate_roadmap(session, team, api_key, db)
-            except Exception:
-                logger.exception(
-                    "[onboarding] roadmap generation failed for session %s", session.id
-                )
+            except Exception as exc:
+                # A rate limit is expected traffic, not a defect — log it flat
+                # so it doesn't read as a bug in the traces.
+                if isinstance(exc, LLMRateLimitError):
+                    logger.warning(
+                        "[onboarding] roadmap generation rate-limited for session %s", session.id
+                    )
+                else:
+                    logger.exception(
+                        "[onboarding] roadmap generation failed for session %s", session.id
+                    )
                 # Rollback expires every object already loaded on `db` (including
                 # `org`) -- re-fetch it before touching it again below.
                 await db.rollback()

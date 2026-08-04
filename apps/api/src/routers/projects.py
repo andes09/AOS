@@ -42,6 +42,7 @@ from src.models.project import Project, ProjectStatus
 from src.models.team import Team
 from src.routers.project_common import _get_org, _owned_project
 from src.services import idea_interview, roadmap_generator
+from src.services.llm_errors import LLMRateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -413,6 +414,8 @@ async def generate_project(
         project = await roadmap_generator.generate_roadmap(session, team, api_key, db)
     except ValueError as exc:  # bad key
         raise HTTPException(status_code=402, detail=str(exc))
+    except LLMRateLimitError as exc:  # provider quota — retrying now won't help
+        raise HTTPException(status_code=429, detail=str(exc))
     except RuntimeError as exc:  # upstream / model failure
         raise HTTPException(status_code=502, detail=str(exc))
 

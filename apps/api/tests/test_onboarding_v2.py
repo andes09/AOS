@@ -3,8 +3,10 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from httpx import AsyncClient, ASGITransport
+from openai import RateLimitError
 
 from src.main import app
 
@@ -901,6 +903,32 @@ async def test_plan_draft_502_when_generation_fails(tmp_db):
     events = _parse_sse(resp.text)
     assert events[-1][0] == "error"
     assert events[-1][1]["message"] == "roadmap_generation_failed"
+
+
+@pytest.mark.asyncio
+async def test_plan_draft_reports_rate_limit_distinctly(tmp_db):
+    """A Groq 429 stops the generation and comes back as its own `rate_limited`
+    error, not the generic failure — the review step tells the founder to wait
+    and retry instead of implying their brief is the problem."""
+    org_id, team_id = await _seed_org_and_team()
+    await _complete_profile_and_chat(org_id, team_id, {"projectName": "Draft Co"})
+
+    rate_limited = RateLimitError(
+        "Rate limit reached",
+        response=httpx.Response(429, request=httpx.Request("POST", "http://groq.test")),
+        body={"code": "rate_limit_exceeded"},
+    )
+    fake_groq = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+        create=AsyncMock(side_effect=rate_limited)
+    )))
+
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake_groq):
+        async with _client() as client:
+            resp = await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)
+    events = _parse_sse(resp.text)
+    assert events[-1] == ("error", {"message": "rate_limited"})
+    # Terminal, not retried: one call, then stop.
+    assert fake_groq.chat.completions.create.await_count == 1
 
 
 @pytest.mark.asyncio

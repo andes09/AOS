@@ -13,8 +13,10 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from httpx import AsyncClient, ASGITransport
+from openai import RateLimitError
 
 from src.main import app
 from src.database import get_db
@@ -393,6 +395,32 @@ async def test_full_creation_flow(tmp_db):
                 f"/api/projects/sessions/{session_id}/generate", headers=AUTH
             )
     assert gen_resp2.json()["id"] == body["id"]
+    assert fake_groq.chat.completions.create.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_returns_429_when_groq_rate_limits(tmp_db):
+    """A provider rate limit is its own status, not a generic 502 — the UI
+    surfaces "try again in a moment" and nothing is persisted."""
+    org_id, _ = await _seed_org()
+    session_id = await _seed_session(org_id, brief={"projectName": "X"})
+
+    rate_limited = RateLimitError(
+        "Rate limit reached",
+        response=httpx.Response(429, request=httpx.Request("POST", "http://groq.test")),
+        body={"code": "rate_limit_exceeded"},
+    )
+    fake_groq = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+        create=AsyncMock(side_effect=rate_limited)
+    )))
+
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake_groq):
+        async with _client() as client:
+            resp = await client.post(
+                f"/api/projects/sessions/{session_id}/generate", headers=AUTH
+            )
+    assert resp.status_code == 429
+    assert "rate limit" in resp.json()["detail"].lower()
     assert fake_groq.chat.completions.create.await_count == 1
 
 

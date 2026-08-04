@@ -35,6 +35,7 @@ from src.routers.onboarding_v2 import _build_state, _get_org, _get_or_create_ses
 from src.schemas.project_brief import anthropic_tool_properties
 from src.services import idea_interview, roadmap_generator, roadmap_shapes
 from src.services.cost_tracker import record_generation_cost
+from src.services.llm_errors import LLMRateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +216,8 @@ async def analyze_import(
         data, usage = await roadmap_generator._call_planner(api_key, system, user_content, _ANALYZE_TOOL)
     except ValueError as exc:  # bad key
         raise HTTPException(status_code=402, detail=str(exc))
+    except LLMRateLimitError as exc:  # provider quota — retrying now won't help
+        raise HTTPException(status_code=429, detail=str(exc))
     except RuntimeError as exc:  # upstream / model failure
         raise HTTPException(status_code=502, detail=str(exc))
 

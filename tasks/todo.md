@@ -6,8 +6,45 @@ _Last reconciled against `main` on 2026-08-04 (HEAD `6e42fb6`)._
 
 ## 🚧 IN FLIGHT — unmerged branches
 
-None. Both previously-stranded branches were merged to `main` on 2026-08-04
+- `fix/planner-rate-limit-stops-generation` — Groq 429s now stop plan
+  generation instead of cascading into more calls. See the section below.
+
+Both previously-stranded branches were merged to `main` on 2026-08-04
 (see "Stranded branch cleanup" below). Everything else in this file is on `main`.
+
+---
+
+## 🚧 Groq rate limits stop plan generation (2026-08-04)
+
+`RuntimeError: Groq API rate limit reached` was indistinguishable from every
+other upstream failure, so each layer treated it as retryable.
+
+- [x] `services/llm_errors.py` — `LLMRateLimitError` (a `RuntimeError`
+      subclass, so existing `except RuntimeError -> 502` arms still work) plus
+      `is_rate_limit()`, which catches a rate limit delivered *mid-stream* as
+      a bare `APIError` (the SDK only maps HTTP responses to
+      `RateLimitError`).
+- [x] Raise it from all three Groq services (generator, adjuster, interview),
+      with one shared message.
+- [x] `_call_planner_stream` checks `is_rate_limit` *before* the
+      tool_use_failed retry, so a 429 never spends another attempt.
+- [x] `prewarm_roadmap` (Celery) gives up instead of `self.retry(countdown=15)`
+      — 15s later it's the same quota window, and the prefetch is optional.
+- [x] `POST /plan/draft` emits `error: rate_limited` (its own code, not
+      `roadmap_generation_failed`); PlanReviewStep says so and offers
+      "Try again" next to "Continue anyway".
+- [x] REST/MCP surfaces map it to **429** (was 502): roadmap
+      generate/regenerate/adjust/milestone-regenerate, projects
+      sessions/{id}/generate, artifact import analyze, MCP `rate_limited:`.
+
+### Review
+
+Verified by tests, not inspection: no-retry on both call paths (`await_count
+== 1`), mid-stream 429 recognised, nothing persisted on failure, prewarm skips
+retry while other failures still retry, `/plan/draft` emits `rate_limited`,
+and the REST path returns 429. Full API suite: 378 passed, 3 pre-existing
+failures (`test_features`, `test_project_brief`, `test_sprints_router` — all
+fail identically on a stashed tree). `tsc --noEmit` clean.
 
 ---
 

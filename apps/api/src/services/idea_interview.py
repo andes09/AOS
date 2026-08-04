@@ -25,6 +25,7 @@ from src.config import settings
 from src.models.onboarding_session import OnboardingMessage, OnboardingSession
 from src.schemas.project_brief import anthropic_tool_properties, content_field_aliases
 from src.services.cost_tracker import record_generation_cost
+from src.services.llm_errors import RATE_LIMIT_MESSAGE, LLMRateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -290,9 +291,7 @@ async def run_interview_turn(
     except AuthenticationError as exc:
         raise ValueError("Invalid Groq API key.") from exc
     except RateLimitError as exc:
-        raise RuntimeError(
-            "Groq API rate limit reached. Please wait a moment and try again."
-        ) from exc
+        raise LLMRateLimitError(RATE_LIMIT_MESSAGE) from exc
     except APIError as exc:
         raise RuntimeError(f"Groq API error: {exc}") from exc
 

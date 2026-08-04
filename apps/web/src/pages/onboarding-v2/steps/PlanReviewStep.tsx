@@ -77,6 +77,10 @@ export function PlanReviewStep() {
   })
 
   const draftFailed = draftPlan.isError && !projectId
+  // The server sends this instead of a generic failure when Groq rate-limits
+  // the generation (see _plan_draft_event_stream): nothing is wrong with the
+  // brief, so the step offers a retry rather than only "continue anyway".
+  const rateLimited = draftFailed && (draftPlan.error as Error | null)?.message === 'rate_limited'
   const busy = confirmPlan.isPending
 
   // Draft in flight, or drafted but roadmap still loading.
@@ -86,10 +90,11 @@ export function PlanReviewStep() {
   // Draft the roadmap once if no project exists yet (chat path). A ref guards
   // against re-firing on re-render; the query above picks up the projectId.
   const draftedRef = useRef(false)
+  const startDraft = () => draftPlan.mutate(pct => setProgress(p => Math.max(p, pct)))
   useEffect(() => {
     if (!projectId && !draftedRef.current && !draftPlan.isPending) {
       draftedRef.current = true
-      draftPlan.mutate(pct => setProgress(p => Math.max(p, pct)))
+      startDraft()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, draftPlan])
@@ -116,10 +121,26 @@ export function PlanReviewStep() {
 
       {draftFailed && (
         <>
-          <Alert>We couldn't draft your roadmap just now. You can continue — we'll try again as you finish up, and you can always generate it from your project.</Alert>
-          <Btn size="lg" onClick={() => confirmPlan.mutate()} disabled={busy} style={{ alignSelf: 'flex-start' }}>
-            {busy ? 'Finishing…' : 'Continue anyway →'}
-          </Btn>
+          <Alert>
+            {rateLimited
+              ? "Omada's planner is rate-limited right now — nothing's wrong with your brief. Give it a moment and try again, or continue and we'll draft it as you finish up."
+              : "We couldn't draft your roadmap just now. You can continue — we'll try again as you finish up, and you can always generate it from your project."}
+          </Alert>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, alignSelf: 'flex-start' }}>
+            {rateLimited && (
+              <Btn size="lg" onClick={startDraft} disabled={busy || draftPlan.isPending}>
+                Try again
+              </Btn>
+            )}
+            <Btn
+              size="lg"
+              variant={rateLimited ? 'outline' : undefined}
+              onClick={() => confirmPlan.mutate()}
+              disabled={busy || draftPlan.isPending}
+            >
+              {busy ? 'Finishing…' : 'Continue anyway →'}
+            </Btn>
+          </div>
         </>
       )}
 

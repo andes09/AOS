@@ -38,6 +38,7 @@ from src.models.task import Task
 from src.models.team import Team
 from src.services.cost_tracker import record_generation_cost
 from src.services.idea_interview import _PURPOSE_GUIDANCE
+from src.services.llm_errors import RATE_LIMIT_MESSAGE, LLMRateLimitError, is_rate_limit
 from src.services.roadmap_shapes import (
     MAX_DAY_OFFSET as _MAX_DAY_OFFSET,
     MAX_MILESTONES as _MAX_MILESTONES,
@@ -243,9 +244,7 @@ async def _call_planner(api_key: str, system: str, user_content: str, tool: dict
             raise ValueError("Invalid Groq API key.") from exc
         except RateLimitError as exc:
             logger.warning("Groq rate limit hit on %s (attempt %s)", tool_name, attempt + 1)
-            raise RuntimeError(
-                "Groq API rate limit reached. Please try again in a moment."
-            ) from exc
+            raise LLMRateLimitError(RATE_LIMIT_MESSAGE) from exc
         except BadRequestError as exc:
             if getattr(exc, "code", None) == "tool_use_failed" and attempt < _MAX_TOOL_RETRIES:
                 # The model returned a malformed tool call. Retrying usually
@@ -331,10 +330,16 @@ async def _call_planner_stream(
         except AuthenticationError as exc:
             raise ValueError("Invalid Groq API key.") from exc
         except RateLimitError as exc:
-            raise RuntimeError(
-                "Groq API rate limit reached. Please try again in a moment."
-            ) from exc
+            logger.warning("Groq rate limit hit streaming %s (attempt %s)", tool_name, attempt + 1)
+            raise LLMRateLimitError(RATE_LIMIT_MESSAGE) from exc
         except APIError as exc:
+            # Checked before the tool_use_failed retry: a rate limit that
+            # arrives mid-stream isn't a RateLimitError (see llm_errors.
+            # is_rate_limit), and it must stop the generation rather than
+            # spend another attempt on the same exhausted quota.
+            if is_rate_limit(exc):
+                logger.warning("Groq rate limit mid-stream on %s: %s", tool_name, exc)
+                raise LLMRateLimitError(RATE_LIMIT_MESSAGE) from exc
             if getattr(exc, "code", None) == "tool_use_failed" and attempt < _MAX_TOOL_RETRIES:
                 continue
             raise RuntimeError(f"Groq API error: {exc}") from exc
@@ -605,6 +610,13 @@ def prewarm_roadmap(self, session_id: str):
 
     try:
         asyncio.run(_run())
+    except LLMRateLimitError:
+        # Give up instead of retrying: 15 seconds later we'd hit the same
+        # quota window, and this task is only a prefetch — POST /plan/draft
+        # generates on demand when the founder actually reaches plan-review.
+        logger.warning(
+            "prewarm_roadmap: Groq rate limit for session %s, skipping prewarm", session_id
+        )
     except Exception as exc:  # pragma: no cover — exercised via retry semantics, not unit tests
         logger.exception("prewarm_roadmap failed for session %s", session_id)
         raise self.retry(exc=exc, countdown=15)

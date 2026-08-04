@@ -9,11 +9,12 @@ import json
 import uuid
 from datetime import date
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 import pytest_asyncio
-from openai import APIError, BadRequestError
+from openai import APIError, BadRequestError, RateLimitError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import selectinload
@@ -28,6 +29,7 @@ from src.models.milestone import Milestone
 from src.models.task import Task, task_dependencies
 from src.services import roadmap_generator
 from src.services.idea_interview import _PURPOSE_GUIDANCE
+from src.services.llm_errors import LLMRateLimitError
 
 _REQUIRED_TABLES = [
     Organization.__table__,
@@ -351,6 +353,85 @@ async def test_call_planner_stream_empty_arguments_raises():
             raise AssertionError("expected RuntimeError")
         except RuntimeError as exc:
             assert "did not return a roadmap" in str(exc)
+
+
+# ─── rate limits are terminal, never retried ───────────────────────────────────
+
+def _rate_limit_error():
+    """A Groq 429 as an HTTP response — what both call paths normally see."""
+    resp = httpx.Response(
+        429, request=httpx.Request("POST", "http://groq.test"),
+        json={"error": {"code": "rate_limit_exceeded"}},
+    )
+    return RateLimitError(
+        "Rate limit reached", response=resp, body={"code": "rate_limit_exceeded"}
+    )
+
+
+def _rate_limit_stream_error():
+    """A rate limit delivered mid-stream, which reaches us as a bare APIError
+    for the same reason _tool_use_failed_stream_error does."""
+    return APIError(
+        "Rate limit reached for model",
+        httpx.Request("POST", "http://groq.test"),
+        body={"code": "rate_limit_exceeded"},
+    )
+
+
+async def test_call_planner_rate_limit_stops_without_retrying():
+    create_mock = AsyncMock(side_effect=[_rate_limit_error() for _ in range(10)])
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create_mock)))
+
+    with _patch_groq(fake), pytest.raises(LLMRateLimitError):
+        await roadmap_generator._call_planner(
+            "sk-key", "sys", "user", roadmap_generator._ROADMAP_TOOL
+        )
+
+    assert create_mock.await_count == 1
+
+
+async def test_call_planner_stream_rate_limit_stops_without_retrying():
+    create_mock = AsyncMock(side_effect=[_rate_limit_error() for _ in range(10)])
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create_mock)))
+
+    with _patch_groq(fake), pytest.raises(LLMRateLimitError):
+        await roadmap_generator._call_planner_stream(
+            "sk-key", "sys", "user", roadmap_generator._ROADMAP_TOOL, None
+        )
+
+    assert create_mock.await_count == 1
+
+
+async def test_call_planner_stream_mid_stream_rate_limit_stops_without_retrying():
+    """The streamed path has to sniff the error code (see llm_errors.
+    is_rate_limit) — otherwise this would fall through to the generic
+    'Groq API error' arm and lose the reason."""
+    create_mock = AsyncMock(side_effect=[
+        _RaisingStream(_rate_limit_stream_error()) for _ in range(10)
+    ])
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create_mock)))
+
+    with _patch_groq(fake), pytest.raises(LLMRateLimitError):
+        await roadmap_generator._call_planner_stream(
+            "sk-key", "sys", "user", roadmap_generator._ROADMAP_TOOL, None
+        )
+
+    assert create_mock.await_count == 1
+
+
+async def test_generate_roadmap_rate_limit_persists_nothing(roadmap_db):
+    team_id, session_id = await _seed(roadmap_db)
+    create_mock = AsyncMock(side_effect=[_rate_limit_error() for _ in range(10)])
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create_mock)))
+
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_groq(fake), pytest.raises(LLMRateLimitError):
+            await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
+
+    async with roadmap_db() as db:
+        assert (await db.execute(select(Project))).scalars().all() == []
 
 
 # ─── _tech_stack_prompt / _brief_prompt ────────────────────────────────────────
@@ -850,3 +931,47 @@ async def test_prewarm_roadmap_async_noop_when_no_groq_key(roadmap_db):
     assert fake.chat.completions.create.await_count == 0
     async with roadmap_db() as db:
         assert (await db.execute(select(Project))).scalars().all() == []
+
+
+# ─── prewarm_roadmap (the Celery task's retry policy) ──────────────────────────
+
+class _FakeSessionCtx:
+    """Stands in for AsyncSessionLocal() — the prewarm task only needs the
+    context manager and a rollback on the error path."""
+
+    async def __aenter__(self):
+        return SimpleNamespace(rollback=AsyncMock())
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _patch_prewarm(error):
+    return (
+        patch("src.services.roadmap_generator.AsyncSessionLocal", _FakeSessionCtx),
+        patch(
+            "src.services.roadmap_generator._prewarm_roadmap_async",
+            AsyncMock(side_effect=error),
+        ),
+        patch.object(
+            roadmap_generator.prewarm_roadmap, "retry",
+            MagicMock(return_value=RuntimeError("retried")),
+        ),
+    )
+
+
+def test_prewarm_roadmap_task_does_not_retry_on_rate_limit():
+    """Retrying 15s into the same quota window just burns it again — and the
+    prefetch is optional, since /plan/draft generates on demand."""
+    sessions, prewarm, retry = _patch_prewarm(LLMRateLimitError("rate limited"))
+    with sessions, prewarm, retry as retry_mock:
+        roadmap_generator.prewarm_roadmap.run(str(uuid.uuid4()))
+    retry_mock.assert_not_called()
+
+
+def test_prewarm_roadmap_task_still_retries_other_failures():
+    sessions, prewarm, retry = _patch_prewarm(RuntimeError("Groq API error: boom"))
+    with sessions, prewarm, retry as retry_mock:
+        with pytest.raises(RuntimeError):
+            roadmap_generator.prewarm_roadmap.run(str(uuid.uuid4()))
+    retry_mock.assert_called_once()

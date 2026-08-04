@@ -46,11 +46,36 @@ async def receive_github_webhook(request: Request, db: AsyncSession = Depends(ge
     body = await request.body()
     signature = request.headers.get("x-hub-signature-256")
     if not verify_signature(settings.github_app_webhook_secret, body, signature):
+        # Separate the causes: an unset secret silently rejects *every* delivery,
+        # so autocomplete just stops working with no other symptom. Never log the
+        # secret or the provided signature.
+        if not settings.github_app_webhook_secret:
+            logger.error(
+                "GITHUB_APP_WEBHOOK_SECRET is not configured — rejecting every "
+                "GitHub webhook delivery"
+            )
+        else:
+            logger.warning(
+                "GitHub webhook signature verification failed",
+                extra={
+                    "has_signature_header": bool(signature),
+                    "event": request.headers.get("x-github-event"),
+                    "delivery_id": request.headers.get("x-github-delivery"),
+                },
+            )
         raise HTTPException(status_code=401, detail="invalid_signature")
 
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
+        logger.warning(
+            "GitHub webhook body was not valid JSON",
+            extra={
+                "event": request.headers.get("x-github-event"),
+                "delivery_id": request.headers.get("x-github-delivery"),
+                "body_bytes": len(body),
+            },
+        )
         raise HTTPException(status_code=400, detail="invalid_payload")
 
     event_type = request.headers.get("x-github-event", "")

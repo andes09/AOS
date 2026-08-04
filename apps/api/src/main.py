@@ -100,12 +100,21 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
     FastAPI's built-in handler returns the same body silently, which makes a
     broken payload shape invisible server-side.
+
+    Only the field location, error type and message are logged. Pydantic's
+    `errors()` also carries `input` — the offending value itself — which for a
+    route like POST /api/settings/anthropic-key would write a customer's API
+    key straight into the logs. The response body is unchanged.
     """
+    safe_errors = [
+        {"loc": e.get("loc"), "type": e.get("type"), "msg": e.get("msg")}
+        for e in exc.errors()
+    ]
     logger.warning(
         "request validation failed for %s %s",
         request.method,
         request.url.path,
-        extra={"http_path": request.url.path, "validation_errors": exc.errors()},
+        extra={"http_path": request.url.path, "validation_errors": safe_errors},
     )
     return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 

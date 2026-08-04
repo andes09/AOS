@@ -6,15 +6,12 @@ _Last reconciled against `main` on 2026-08-04 (HEAD `6e42fb6`)._
 
 ## 🚧 IN FLIGHT — unmerged branches
 
-- `fix/planner-rate-limit-stops-generation` — Groq 429s now stop plan
-  generation instead of cascading into more calls. See the section below.
-
-Both previously-stranded branches were merged to `main` on 2026-08-04
+None. Both previously-stranded branches were merged to `main` on 2026-08-04
 (see "Stranded branch cleanup" below). Everything else in this file is on `main`.
 
 ---
 
-## 🚧 Groq rate limits stop plan generation (2026-08-04)
+## ✅ SHIPPED — Groq rate limits stop plan generation (merged to main 2026-08-04, `b8437c4`)
 
 `RuntimeError: Groq API rate limit reached` was indistinguishable from every
 other upstream failure, so each layer treated it as retryable.

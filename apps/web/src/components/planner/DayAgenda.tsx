@@ -219,8 +219,8 @@ function TaskRow({
       style={{
         display: 'flex',
         gap: 'var(--space-3)',
-        padding: '16px 18px',
-        borderRadius: 'var(--radius-lg)',
+        padding: '12px 14px',
+        borderRadius: 16,
         border: '1px solid var(--color-border-subtle)',
         background: 'var(--color-bg-elevated)',
         boxShadow: 'var(--shadow-sm)',
@@ -229,7 +229,7 @@ function TaskRow({
         opacity: done ? 0.65 : opacity,
       }}
     >
-      {checkbox(20)}
+      {checkbox(18)}
 
       {/* Body */}
       <div style={{ minWidth: 0, flex: 1 }}>
@@ -348,7 +348,7 @@ const addNoteBtnStyle: CSSProperties = {
 const planMapWrapStyle: CSSProperties = {
   position: 'fixed',
   left: '50%',
-  bottom: '10vh',
+  bottom: '16vh',
   transform: 'translateX(-50%)',
   zIndex: 10,
 }

@@ -55,6 +55,13 @@ class OnboardingSession(Base):
     # interview regardless of what they say — see idea_interview.run_interview_turn.
     awaiting_confirmation: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     github_skipped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Set by POST /github/needs-setup: the founder has no GitHub account and no
+    # git installed, so the roadmap gets a fixed "Get set up with GitHub"
+    # milestone prepended (see services/github_setup_plan). Deliberately
+    # distinct from github_skipped_at, which only ever meant "not right now" —
+    # sessions that skipped before this existed must not retroactively grow a
+    # beginner setup milestone when their roadmap is regenerated.
+    github_setup_needed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Which build_plan sub-flow this session took: "chat" or "import". Null
     # until the user picks (see PUT /plan-source in onboarding_v2.py). Once set

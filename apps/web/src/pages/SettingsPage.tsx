@@ -18,6 +18,12 @@ interface InviteResponse {
   status: string
 }
 
+interface GithubStatus {
+  connected: boolean
+  login?: string | null
+  needsReconnect?: boolean
+}
+
 interface InvitationItem {
   id: string
   email: string
@@ -44,6 +50,10 @@ export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
   const [deleteConfirm, setDeleteConfirm] = useState('')
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [github, setGithub] = useState<GithubStatus | null>(null)
+  const [githubLoading, setGithubLoading] = useState(true)
+  const [githubBusy, setGithubBusy] = useState(false)
+  const [githubError, setGithubError] = useState<string | null>(null)
 
   async function handleDeleteAccount() {
     setDeleting(true)
@@ -102,11 +112,55 @@ export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
     })
   }
 
+  async function fetchGithubStatus() {
+    try {
+      setGithub(await get<GithubStatus>('/api/integrations/github/status'))
+    } catch (err) {
+      logger.error('Failed to load GitHub status', err)
+      setGithub({ connected: false })
+    } finally {
+      setGithubLoading(false)
+    }
+  }
+
+  async function handleGithubConnect() {
+    setGithubBusy(true)
+    setGithubError(null)
+    try {
+      // return_to must stay query-string-free: the OAuth callback appends
+      // "?github=connected" to it by plain concatenation (see
+      // integrations/github/router.py), so anything with a "?" already in it
+      // comes back malformed. DashboardLayout reopens this modal on return.
+      const data = await get<{ auth_url: string }>('/api/integrations/github/connect?return_to=/app')
+      window.location.href = data.auth_url
+    } catch (err) {
+      setGithubError(err instanceof Error ? err.message : 'Failed to start GitHub connection')
+      setGithubBusy(false)
+    }
+  }
+
+  async function handleGithubDisconnect() {
+    setGithubBusy(true)
+    setGithubError(null)
+    try {
+      await del('/api/integrations/github/disconnect')
+      setGithub({ connected: false })
+    } catch (err) {
+      setGithubError(err instanceof Error ? err.message : 'Failed to disconnect GitHub')
+    } finally {
+      setGithubBusy(false)
+    }
+  }
+
   useEffect(() => {
     if (isLead) {
       fetchInvitations()
     }
   }, [isLead])
+
+  useEffect(() => {
+    fetchGithubStatus()
+  }, [])
 
   const sectionGap = { marginTop: 16 }
 
@@ -209,8 +263,54 @@ export function SettingsPage({ onClose }: { onClose?: () => void } = {}) {
         </Card>
       )}
 
+      {/* GitHub — the only place to connect outside onboarding. The onboarding
+          "I don't have GitHub yet" path ends in a task pointing right here. */}
+      <Card style={isLead ? sectionGap : {}}>
+        <CardHeader>
+          <span style={{ color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
+            GitHub
+          </span>
+          {github?.connected && !github.needsReconnect && (
+            <Badge variant="success">Connected</Badge>
+          )}
+          {github?.needsReconnect && <Badge variant="warning">Reconnect needed</Badge>}
+        </CardHeader>
+        <CardBody>
+          {githubLoading ? (
+            <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: 0 }}>Loading…</p>
+          ) : github?.connected && !github.needsReconnect ? (
+            <>
+              <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: '0 0 12px' }}>
+                Connected as <strong style={{ color: 'var(--color-text-primary)' }}>{github.login}</strong>. Put a
+                task's ID (like AOS-142) in a branch name or pull request title and Omada
+                marks it done when the work lands.
+              </p>
+              <Button variant="secondary" size="sm" onClick={handleGithubDisconnect} disabled={githubBusy}>
+                {githubBusy ? 'Disconnecting…' : 'Disconnect'}
+              </Button>
+            </>
+          ) : (
+            <>
+              <p style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', margin: '0 0 12px' }}>
+                {github?.needsReconnect
+                  ? 'Your connection predates our GitHub App install flow and needs renewing before Omada can read the repo again.'
+                  : 'Connect your repository so Omada can see your code and tick tasks off automatically as you push work.'}
+              </p>
+              <Button variant="primary" size="sm" onClick={handleGithubConnect} disabled={githubBusy}>
+                {githubBusy ? 'Redirecting…' : github?.needsReconnect ? 'Reconnect GitHub →' : 'Connect GitHub →'}
+              </Button>
+            </>
+          )}
+          {githubError && (
+            <div style={{ color: 'var(--color-danger)', fontSize: 'var(--text-sm)', marginTop: 8 }}>
+              {githubError}
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
       {/* Delete Account */}
-      <Card style={{ ...(isLead ? sectionGap : {}), borderColor: 'var(--color-danger)' }}>
+      <Card style={{ ...sectionGap, borderColor: 'var(--color-danger)' }}>
         <CardHeader>
           <span style={{ color: 'var(--color-danger)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-base)', fontWeight: 600 }}>
             Delete Account

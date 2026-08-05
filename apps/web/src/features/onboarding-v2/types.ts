@@ -68,6 +68,9 @@ export type OnboardingState = {
     login: string | null
     skipped: boolean
     needsReconnect: boolean
+    /** The founder said they've never used GitHub — stronger than `skipped`,
+     *  and what puts a GitHub setup milestone at the front of their plan. */
+    needsSetup: boolean
   }
   profile: {
     name: string | null

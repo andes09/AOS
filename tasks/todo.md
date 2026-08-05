@@ -11,6 +11,60 @@ None. Both previously-stranded branches were merged to `main` on 2026-08-04
 
 ---
 
+## ✅ DONE — "I don't have GitHub yet" plans the setup (2026-08-05, worktree `onboarding-no-github`)
+
+The onboarding GitHub step assumed the founder already had GitHub; its only way
+out was a silent "Skip for now" that told the roadmap generator nothing. A true
+beginner got a plan assuming infrastructure they didn't have, and no route back.
+
+- [x] **The button.** `GithubStep.tsx`'s "Skip for now" is replaced by
+      **"I don't have GitHub yet"** → `POST /api/onboarding/v2/github/needs-setup`,
+      which stamps the new `onboarding_sessions.github_setup_needed_at`
+      (migration `0051`) alongside `github_skipped_at`, so the step-completion
+      logic in `_build_state` is untouched. The `needsReconnect` variant keeps
+      the plain skip — a legacy connection proves they already have GitHub.
+- [x] **The milestone.** New `services/github_setup_plan.ensure_github_setup_milestone`
+      prepends a fixed 6-task "Get set up with GitHub" milestone at
+      `sort_order 0` (account → install git → configure identity → `gh auth login`
+      → create+push the repo → connect Omada), shifting the generated ones down.
+      Idempotent by milestone title; reuses `roadmap_shapes._add_tasks` and
+      `task_ids.allocate_short_ids` so the tasks are ordinary tasks.
+- [x] **Why hardcoded, not prompted.** `_maybe_prewarm_roadmap` fires the moment
+      the interview ends — *before* the GitHub step — so a prompt-only signal
+      would land after generation about half the time. And the planner can't
+      describe Omada's own connect flow. `_GITHUB_SETUP_GUIDANCE` is added to
+      `_brief_prompt` purely so `_ENV_SETUP_GUIDANCE` doesn't emit a rival
+      "install git" task.
+- [x] **Hooked in at 4 points**, all idempotent: `generate_roadmap`,
+      `regenerate_roadmap` (its deletes take the milestone with them),
+      `POST /plan/draft`'s already-exists fast path (the prewarm race, and the
+      import path), and `POST /complete` (the plan_review-off flow). The last
+      two are best-effort — a failure logs and still returns the plan.
+- [x] **Somewhere to actually connect.** There was no post-onboarding GitHub UI
+      at all, so the final task pointed nowhere. Added a GitHub card to
+      `SettingsPage` (connect / status / disconnect over the existing
+      `/api/integrations/github/*` endpoints) and a `?github=` handler in
+      `DashboardLayout` that reopens the Settings modal on return from the App
+      install, since Settings is a modal with no route of its own.
+
+**Verification:** `alembic upgrade head` → `alembic heads` shows a single head
+`0051`, and the migration round-trips (`downgrade -1` then back). 393 API tests
+pass, including 13 new ones — the load-bearing one is
+`test_plan_draft_adds_github_setup_to_an_already_generated_plan`, which
+reproduces the prewarm race this design exists to survive. `tsc --noEmit` clean;
+all 5 onboarding Playwright tests pass.
+
+⚠️ 3 API tests fail on this branch (`test_features::test_local_yaml_loads`,
+`test_project_brief::test_brief_tool_derivation_...`,
+`test_sprints_router::test_current_sprint_...`) — all three reproduce on a clean
+`origin/main` checkout, unrelated to this work.
+
+**Known boundary:** `roadmap_adjuster.adjust_roadmap` can re-plan the setup
+milestone's `todo` tasks if the model returns that exact milestone title. Left
+as-is — adjust is user-initiated re-planning of upcoming work.
+
+---
+
 ## ✅ DONE — Cut two friction points out of signup (2026-08-04, uncommitted)
 
 Founders hit two screens whose only job was one more click. Both removed.

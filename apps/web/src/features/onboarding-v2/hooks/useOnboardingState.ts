@@ -43,6 +43,11 @@ export function useOnboardingState() {
     onSuccess: setState,
   })
 
+  const needsGithubSetup = useMutation({
+    mutationFn: () => api.needsGithubSetup(),
+    onSuccess: setState,
+  })
+
   const saveProfile = useMutation({
     mutationFn: (profile: { name: string; phone: string }) => api.saveProfile(profile),
     onSuccess: setState,
@@ -90,6 +95,7 @@ export function useOnboardingState() {
     error: query.error,
     refresh: query.refetch,
     skipGithub,
+    needsGithubSetup,
     saveProfile,
     savePurpose,
     saveTechStack,

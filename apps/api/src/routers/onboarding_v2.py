@@ -43,7 +43,7 @@ from src.models.onboarding_session import OnboardingMessage, OnboardingSession
 from src.models.organization import Organization
 from src.models.project import Project
 from src.models.team import Team
-from src.services import idea_interview, roadmap_generator
+from src.services import github_setup_plan, idea_interview, roadmap_generator
 from src.services.llm_errors import LLMRateLimitError
 
 logger = logging.getLogger(__name__)
@@ -294,6 +294,9 @@ async def _build_state(
             "login": connection.github_login if connection else None,
             "skipped": github_skipped,
             "needsReconnect": needs_reconnect,
+            # "I've never used GitHub" rather than "not right now" — drives the
+            # injected setup milestone (see POST /github/needs-setup).
+            "needsSetup": bool(session and session.github_setup_needed_at),
         },
         "profile": {
             # Auto-provisioned rows carry name == clerk_user_id; never echo that.
@@ -357,6 +360,31 @@ async def skip_github(
 ):
     org = await _get_org(clerk_org_id, db)
     session = await _get_or_create_session(org, user_id, db)
+    if session.github_skipped_at is None:
+        session.github_skipped_at = datetime.utcnow()
+    await db.commit()
+    return await _build_state(org, user_id, db)
+
+
+@router.post("/github/needs-setup")
+async def github_needs_setup(
+    user_id: str = Depends(get_current_user_id),
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """"I don't have GitHub yet" — the beginner's way past this step.
+
+    Stronger than POST /github/skip: as well as advancing the flow, it records
+    that the founder has no GitHub account and no git, which makes
+    services/github_setup_plan prepend a fixed "Get set up with GitHub"
+    milestone to their roadmap. Stamping github_skipped_at too is what actually
+    advances the step — _build_state's github_done/repo_done logic is left
+    entirely untouched by this feature.
+    """
+    org = await _get_org(clerk_org_id, db)
+    session = await _get_or_create_session(org, user_id, db)
+    if session.github_setup_needed_at is None:
+        session.github_setup_needed_at = datetime.utcnow()
     if session.github_skipped_at is None:
         session.github_skipped_at = datetime.utcnow()
     await db.commit()
@@ -854,6 +882,26 @@ async def complete_onboarding(
                 org = await _get_org(clerk_org_id, db)
                 project = None
 
+        if project is not None:
+            # Covers the plan_review-off flow, where POST /plan/draft never
+            # runs: the prewarm may have generated this plan before the
+            # founder said they don't have GitHub. Idempotent, so calling it
+            # again on a plan generate_roadmap just built above is a no-op.
+            # session_id is captured up front: rollback expires `session`, and
+            # reading an expired attribute lazy-loads outside an async context
+            # (see generate_roadmap_once's note on the same hazard).
+            session_id = session.id
+            try:
+                if await github_setup_plan.ensure_github_setup_milestone(session, project, db):
+                    await db.commit()
+            except Exception:
+                await db.rollback()
+                org = await _get_org(clerk_org_id, db)
+                logger.exception(
+                    "[onboarding] failed to add GitHub setup milestone for session %s",
+                    session_id,
+                )
+
     if org.onboarding_completed_at is None:
         org.onboarding_completed_at = datetime.utcnow()
         await db.commit()
@@ -1015,7 +1063,26 @@ async def draft_plan(
         select(Project).where(Project.onboarding_session_id == session.id)
     )
     if project is not None:
-        return {"projectId": str(project.id)}
+        # The plan already exists — either the prewarm beat the founder here
+        # (likely: it starts the moment the interview ends, before the GitHub
+        # step) or this is the import path. Either way generation ran without
+        # knowing about "I don't have GitHub yet", so the setup milestone gets
+        # added now. Best-effort, exactly like _maybe_prewarm_roadmap: a
+        # failure here must never cost the founder their drafted plan.
+        # session_id/project_id are read before the try: rollback expires both
+        # objects, and reading an expired attribute afterwards lazy-loads
+        # outside an async context (see generate_roadmap_once's note).
+        session_id, project_id = session.id, project.id
+        try:
+            if await github_setup_plan.ensure_github_setup_milestone(session, project, db):
+                await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.exception(
+                "[onboarding] failed to add GitHub setup milestone for session %s",
+                session_id,
+            )
+        return {"projectId": str(project_id)}
 
     if session.status != "completed" or not session.project_brief:
         raise HTTPException(status_code=409, detail="brief_incomplete")

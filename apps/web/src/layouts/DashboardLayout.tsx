@@ -8,6 +8,7 @@ import { TopBar } from '../components/layout/TopBar'
 import { SettingsPage } from '../pages/SettingsPage'
 import { useApi } from '../lib/api'
 import { useFeatureFlags } from '../featureFlags'
+import { parseGithubRedirect } from '../features/onboarding-v2/api'
 import type { ProjectSummary } from '../features/projects/types'
 import { usePlannerViewOptions, type PlannerOutletContext, type PlannerView } from '../components/planner/plannerViews'
 
@@ -36,6 +37,19 @@ export function DashboardLayout() {
       localStorage.setItem(LANES_KEY, next ? '0' : '1')
       return next
     })
+
+  // GitHub's install flow redirects back to /app?github=connected|error (the
+  // Settings card asks for return_to=/app, since Settings is a modal and has
+  // no route of its own). Reopen the modal so the founder lands back on the
+  // card that sent them, then drop the param so a refresh doesn't repeat it.
+  useEffect(() => {
+    if (!parseGithubRedirect(window.location.search)) return
+    setSettingsOpen(true)
+    const url = new URL(window.location.href)
+    url.searchParams.delete('github')
+    url.searchParams.delete('reason')
+    window.history.replaceState({}, '', url.pathname + url.search)
+  }, [])
 
   // Views can be killed per-flag (see TopBar's switcher); if the current one
   // goes dark, fall back to 'day', the one view with no flag of its own.

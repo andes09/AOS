@@ -13,7 +13,19 @@ const SCOPES: [string, string][] = [
   ['Create a repo when you ask', 'Omada can set up a new repo for you during onboarding — it never changes the code in repos you already have, and you can revoke access anytime'],
 ]
 
-export function GithubStep({ onSkip, skipping, needsReconnect }: { onSkip: () => void; skipping: boolean; needsReconnect: boolean }) {
+export function GithubStep({
+  onSkip,
+  skipping,
+  onNeedsSetup,
+  markingNeedsSetup,
+  needsReconnect,
+}: {
+  onSkip: () => void
+  skipping: boolean
+  onNeedsSetup: () => void
+  markingNeedsSetup: boolean
+  needsReconnect: boolean
+}) {
   const { connect, redirectResult } = useGithubConnect('/onboarding')
 
   return (
@@ -25,7 +37,7 @@ export function GithubStep({ onSkip, skipping, needsReconnect }: { onSkip: () =>
         <p style={{ fontSize: 14, color: C.t2, lineHeight: 1.55 }}>
           {needsReconnect
             ? 'Your GitHub connection was made before we switched to the more secure GitHub App install flow, and needs to be renewed — or skip it and reconnect later.'
-            : 'Connecting GitHub lets the roadmap AI read your repos to plan around what already exists — or skip it and connect later.'}
+            : "Connecting GitHub lets the roadmap AI read your repos to plan around what already exists. If you've never used GitHub, say so below and we'll build setting it up into your plan."}
         </p>
       </div>
 
@@ -58,13 +70,30 @@ export function GithubStep({ onSkip, skipping, needsReconnect }: { onSkip: () =>
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <Btn size="lg" onClick={() => connect.mutate()} disabled={connect.isPending} style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}>
-          {connect.isPending ? <><Spinner size={14} color="rgba(255,255,255,0.85)" /> Redirecting…</> : <>{needsReconnect ? 'Reconnect GitHub →' : 'Connect GitHub →'}</>}
-        </Btn>
-        <Btn variant="ghost" onClick={onSkip} disabled={skipping}>
-          {skipping ? 'Skipping…' : 'Skip for now'}
-        </Btn>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Btn size="lg" onClick={() => connect.mutate()} disabled={connect.isPending} style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}>
+            {connect.isPending ? <><Spinner size={14} color="rgba(255,255,255,0.85)" /> Redirecting…</> : <>{needsReconnect ? 'Reconnect GitHub →' : 'Connect GitHub →'}</>}
+          </Btn>
+          {/* A legacy connection is proof the founder already has GitHub, so
+              they get the plain skip — offering them a beginner setup
+              milestone would be wrong. Everyone else gets the honest option. */}
+          {needsReconnect ? (
+            <Btn variant="ghost" onClick={onSkip} disabled={skipping}>
+              {skipping ? 'Skipping…' : 'Skip for now'}
+            </Btn>
+          ) : (
+            <Btn variant="ghost" onClick={onNeedsSetup} disabled={markingNeedsSetup}>
+              {markingNeedsSetup ? 'Saving…' : "I don't have GitHub yet"}
+            </Btn>
+          )}
+        </div>
+        {!needsReconnect && (
+          <p style={{ fontSize: 12.5, color: C.t3, lineHeight: 1.5 }}>
+            Never used GitHub? That's fine — we'll put a short, step-by-step setup
+            milestone at the start of your plan and you can connect it then.
+          </p>
+        )}
       </div>
     </div>
   )

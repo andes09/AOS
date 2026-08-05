@@ -21,7 +21,10 @@ function makeState(current: 'profile' | 'purpose' | 'idea_chat' | 'github_repo' 
     steps: order.map((id, i) => ({ id, status: status(i), skippable: id === 'github_repo' })),
     // GitHub is only skipped once the walk reaches (and skips) github_repo,
     // the last tracked step here — i.e. only once we're at 'done'.
-    github: { connected: false, login: null, skipped: currentIdx > 3, needsReconnect: false },
+    github: {
+      connected: false, login: null, skipped: currentIdx > 3,
+      needsReconnect: false, needsSetup: currentIdx > 3,
+    },
     profile:
       currentIdx > 0
         ? { name: 'Ada Lovelace', phone: '+1 555 123 4567', complete: true }
@@ -54,7 +57,7 @@ const SSE_TURN = [
 ].join('\n')
 
 test.describe('Onboarding v2 flow', () => {
-  test('walks profile → purpose → idea chat → GitHub skip → done', async ({ page }) => {
+  test('walks profile → purpose → idea chat → "I don\'t have GitHub yet" → done', async ({ page }) => {
     // GET /state serves whatever step the flow has reached; mutations advance it.
     let state = makeState('profile')
 
@@ -99,7 +102,7 @@ test.describe('Onboarding v2 flow', () => {
       state = makeState('github_repo')
       return route.fulfill({ status: 200, body: JSON.stringify(state) })
     })
-    await page.route('**/api/onboarding/v2/github/skip', route => {
+    await page.route('**/api/onboarding/v2/github/needs-setup', route => {
       state = makeState('done')
       return route.fulfill({ status: 200, body: JSON.stringify(state) })
     })
@@ -132,9 +135,10 @@ test.describe('Onboarding v2 flow', () => {
     await page.getByRole('button', { name: "That's enough — finish up" }).click()
 
     // Step 4: GitHub + repo (merged step, phase A since GitHub isn't
-    // connected), skipped.
+    // connected). The beginner's way out — which also gets a GitHub setup
+    // milestone prepended to the plan (see services/github_setup_plan).
     await expect(page.getByRole('heading', { name: 'Connect your GitHub' })).toBeVisible()
-    await page.getByRole('button', { name: 'Skip for now' }).click()
+    await page.getByRole('button', { name: "I don't have GitHub yet" }).click()
 
     // No "you're all set" interstitial — the last step finishes onboarding
     // and drops the founder straight into the app.
@@ -231,5 +235,22 @@ test.describe('Onboarding v2 flow', () => {
     )
     await page.goto('/onboarding/v2?github=error&reason=token_exchange_failed')
     await expect(page.getByRole('alert')).toContainText('token_exchange_failed')
+  })
+
+  test('a legacy connection needing reconnect keeps the plain skip', async ({ page }) => {
+    // Someone with an old connection demonstrably has GitHub — offering them
+    // a beginner setup milestone would be wrong, so they get "Skip for now".
+    const state = {
+      ...makeState('github_repo'),
+      github: { connected: true, login: 'octocat', skipped: false, needsReconnect: true, needsSetup: false },
+    }
+    await page.route('**/api/onboarding/v2/state', route =>
+      route.fulfill({ status: 200, body: JSON.stringify(state) }),
+    )
+    await page.goto('/onboarding/v2')
+
+    await expect(page.getByRole('heading', { name: 'Reconnect your GitHub' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Skip for now' })).toBeVisible()
+    await expect(page.getByRole('button', { name: "I don't have GitHub yet" })).toHaveCount(0)
   })
 })

@@ -198,7 +198,10 @@ async def test_state_initial(tmp_db):
     assert [s["status"] for s in body["steps"]] == [
         "current", "pending", "pending", "pending", "pending", "pending",
     ]
-    assert body["github"] == {"connected": False, "login": None, "skipped": False, "needsReconnect": False}
+    assert body["github"] == {
+        "connected": False, "login": None, "skipped": False,
+        "needsReconnect": False, "needsSetup": False,
+    }
     assert body["profile"] == {"name": None, "phone": None, "complete": False}
     assert body["purpose"] == {"value": None, "complete": False}
     assert body["techStack"] == {"stack": [], "experience": None, "complete": False}
@@ -227,6 +230,54 @@ async def test_github_skip_advances_flow(tmp_db):
     assert [s["status"] for s in body["steps"]] == [
         "current", "pending", "pending", "pending", "complete", "pending",
     ]
+
+
+@pytest.mark.asyncio
+async def test_github_needs_setup_advances_flow_and_flags_the_session(tmp_db):
+    """"I don't have GitHub yet" advances the step exactly like a skip, and
+    additionally records the signal the roadmap generator reads."""
+    await _seed_org_and_team()
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.post("/api/onboarding/v2/github/needs-setup", headers=AUTH)
+    body = resp.json()
+    assert body["github"]["needsSetup"] is True
+    assert body["github"]["skipped"] is True
+    assert [s["status"] for s in body["steps"]] == [
+        "current", "pending", "pending", "pending", "complete", "pending",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_github_needs_setup_is_idempotent(tmp_db):
+    await _seed_org_and_team()
+    from sqlalchemy import select
+
+    from src.database import get_db
+    from src.models.onboarding_session import OnboardingSession
+
+    with _patch_clerk():
+        async with _client() as client:
+            await client.post("/api/onboarding/v2/github/needs-setup", headers=AUTH)
+            async for db in app.dependency_overrides[get_db]():
+                first = (await db.scalars(select(OnboardingSession))).one().github_setup_needed_at
+                break
+            resp = await client.post("/api/onboarding/v2/github/needs-setup", headers=AUTH)
+    assert resp.json()["github"]["needsSetup"] is True
+    async for db in app.dependency_overrides[get_db]():
+        session = (await db.scalars(select(OnboardingSession))).one()
+        assert session.github_setup_needed_at == first
+        break
+
+
+@pytest.mark.asyncio
+async def test_plain_github_skip_does_not_request_setup(tmp_db):
+    """A skip is still just "not now" — it must not sprout a setup milestone."""
+    await _seed_org_and_team()
+    with _patch_clerk():
+        async with _client() as client:
+            resp = await client.post("/api/onboarding/v2/github/skip", headers=AUTH)
+    assert resp.json()["github"]["needsSetup"] is False
 
 
 @pytest.mark.asyncio
@@ -882,6 +933,83 @@ async def test_plan_draft_is_idempotent(tmp_db):
             second_project_id = second_resp.json()["projectId"]
     assert first_project_id == second_project_id
     assert fake_groq.chat.completions.create.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_plan_draft_adds_github_setup_to_an_already_generated_plan(tmp_db):
+    """The prewarm race, which is the whole reason the setup milestone is
+    injected rather than prompted for: roadmap generation starts the moment
+    the interview ends, *before* the founder reaches the GitHub step, so by
+    the time they say "I don't have GitHub yet" the plan usually already
+    exists. /plan/draft's idempotent path has to fix that up."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    from src.database import get_db
+    from src.models.milestone import Milestone
+    from src.services.github_setup_plan import MILESTONE_TITLE, SETUP_TASKS
+
+    org_id, team_id = await _seed_org_and_team()
+    await _complete_profile_and_chat(org_id, team_id, {"projectName": "Prewarmed Co"})
+    fake_groq = _fake_groq({
+        "projectName": "Prewarmed Co",
+        "milestones": [{"title": "Kickoff", "tasks": [{"title": "T", "dayOffset": 0}]}],
+    })
+
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake_groq):
+        async with _client() as client:
+            # Stands in for the prewarm task: a plan generated with no idea the
+            # founder is about to say they've never used GitHub.
+            first = await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)
+            project_id = _parse_sse(first.text)[-1][1]["projectId"]
+
+            await client.post("/api/onboarding/v2/github/needs-setup", headers=AUTH)
+
+            second = await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)
+            assert second.json()["projectId"] == project_id
+
+    async for db in app.dependency_overrides[get_db]():
+        milestones = (await db.scalars(
+            select(Milestone)
+            .where(Milestone.project_id == uuid.UUID(project_id))
+            .order_by(Milestone.sort_order)
+            .options(selectinload(Milestone.tasks))
+        )).all()
+        break
+
+    assert [m.title for m in milestones] == [MILESTONE_TITLE, "Kickoff"]
+    assert len(milestones[0].tasks) == len(SETUP_TASKS)
+    # No second generation — the fix-up is a plain insert, not a re-plan.
+    assert fake_groq.chat.completions.create.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_plan_draft_survives_a_failed_github_setup_injection(tmp_db):
+    """The injection is a nice-to-have bolted onto the plan-review step's
+    critical path — if it blows up, the founder must still get their plan
+    rather than a 500. (Also guards the rollback-then-log path, where reading
+    an expired `session.id` would raise MissingGreenlet.)"""
+    org_id, team_id = await _seed_org_and_team()
+    await _complete_profile_and_chat(org_id, team_id, {"projectName": "Resilient Co"})
+    fake_groq = _fake_groq({
+        "projectName": "Resilient Co",
+        "milestones": [{"title": "Kickoff", "tasks": [{"title": "T", "dayOffset": 0}]}],
+    })
+
+    boom = patch(
+        "src.services.github_setup_plan.ensure_github_setup_milestone",
+        new=AsyncMock(side_effect=RuntimeError("boom")),
+    )
+    with _patch_clerk(), _patch_api_key(), _patch_groq(fake_groq):
+        async with _client() as client:
+            first = await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)
+            project_id = _parse_sse(first.text)[-1][1]["projectId"]
+            await client.post("/api/onboarding/v2/github/needs-setup", headers=AUTH)
+            with boom:
+                resp = await client.post("/api/onboarding/v2/plan/draft", headers=AUTH)
+
+    assert resp.status_code == 200
+    assert resp.json()["projectId"] == project_id
 
 
 @pytest.mark.asyncio

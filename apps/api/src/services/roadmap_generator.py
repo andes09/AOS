@@ -37,6 +37,7 @@ from src.models.project import Project
 from src.models.task import Task
 from src.models.team import Team
 from src.services.cost_tracker import record_generation_cost
+from src.services.github_setup_plan import ensure_github_setup_milestone
 from src.services.idea_interview import _PURPOSE_GUIDANCE
 from src.services.llm_errors import RATE_LIMIT_MESSAGE, LLMRateLimitError, is_rate_limit
 from src.services.roadmap_shapes import (
@@ -115,6 +116,23 @@ _ENV_SETUP_GUIDANCE = (
     "this specific project."
 )
 
+# Purely a de-duplication guard against _ENV_SETUP_GUIDANCE above, which would
+# otherwise cheerfully produce its own "install git" task. The GitHub-setup
+# work itself is injected deterministically after generation (see
+# services/github_setup_plan), precisely because this prompt can't be relied
+# on to have the flag in time — the roadmap is often pre-warmed before the
+# founder even reaches the GitHub step.
+_GITHUB_SETUP_GUIDANCE = (
+    "The founder has never used GitHub and has no git installed. A separate, "
+    "fixed first milestone already covers creating a GitHub account, "
+    "installing git and the GitHub CLI, creating the repository, and "
+    "connecting it to Omada — do not produce tasks for any of that, and don't "
+    "reference GitHub setup in your own first milestone. Do still cover the "
+    "rest of the environment setup as described above. Assume they are a "
+    "beginner: version control will be new to them, so keep task descriptions "
+    "concrete and free of unexplained jargon."
+)
+
 
 def _system_prompt(purpose: str | None) -> str:
     guidance = _PURPOSE_GUIDANCE.get(purpose or "")
@@ -191,6 +209,8 @@ def _brief_prompt(session: OnboardingSession) -> str:
     tech_stack_guidance = _tech_stack_prompt(session)
     if tech_stack_guidance:
         parts.append(tech_stack_guidance)
+    if session.github_setup_needed_at is not None:
+        parts.append(_GITHUB_SETUP_GUIDANCE)
     return "\n\n".join(parts)
 
 
@@ -394,6 +414,8 @@ async def generate_roadmap(
     if session.selected_github_repo_full_name:
         project.github_repo_full_name = session.selected_github_repo_full_name
 
+    await ensure_github_setup_milestone(session, project, db)
+
     await record_generation_cost(
         "roadmap_generate",
         usage,
@@ -470,6 +492,10 @@ async def regenerate_roadmap(
         project.summary = data["summary"]
     org = await db.get(Organization, team.organization_id)
     await _persist_milestones(project, milestones, org, db, source="regenerate")
+    # The deletes above took the setup milestone with them — put it back, so a
+    # founder who regenerates from the plan-review step doesn't silently lose
+    # the only instructions they have for getting GitHub working.
+    await ensure_github_setup_milestone(session, project, db)
 
     await record_generation_cost(
         "roadmap_regenerate",

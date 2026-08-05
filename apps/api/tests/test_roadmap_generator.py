@@ -7,7 +7,7 @@ break on sqlite).
 
 import json
 import uuid
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -468,6 +468,21 @@ def test_brief_prompt_always_includes_environment_setup_guidance():
     assert roadmap_generator._ENV_SETUP_GUIDANCE in roadmap_generator._brief_prompt(session)
 
 
+def test_brief_prompt_omits_github_guidance_by_default():
+    session = OnboardingSession(project_brief={"projectName": "Trail Buddy"})
+    assert roadmap_generator._GITHUB_SETUP_GUIDANCE not in roadmap_generator._brief_prompt(session)
+
+
+def test_brief_prompt_tells_the_planner_not_to_duplicate_github_setup():
+    """The milestone itself is injected deterministically; this guidance only
+    stops _ENV_SETUP_GUIDANCE producing a rival "install git" task."""
+    session = OnboardingSession(
+        project_brief={"projectName": "Trail Buddy"},
+        github_setup_needed_at=datetime(2026, 8, 5),
+    )
+    assert roadmap_generator._GITHUB_SETUP_GUIDANCE in roadmap_generator._brief_prompt(session)
+
+
 # ─── generate_roadmap ──────────────────────────────────────────────────────────
 
 async def test_generate_roadmap_happy_path(roadmap_db):
@@ -514,6 +529,64 @@ async def test_generate_roadmap_happy_path(roadmap_db):
             assert t.scheduled_date is not None
             assert t.scheduled_date.weekday() < 5  # only weekdays
             assert t.scheduled_date >= date.today()
+
+
+async def test_generate_roadmap_prepends_github_setup_when_asked(roadmap_db):
+    """The "I don't have GitHub yet" path: the fixed setup milestone goes in
+    front of whatever the planner produced."""
+    from src.services.github_setup_plan import MILESTONE_TITLE, SETUP_TASKS
+
+    team_id, session_id = await _seed(roadmap_db)
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        session.github_setup_needed_at = datetime.utcnow()
+        await db.commit()
+
+    fake = _fake_groq(_ROADMAP_PAYLOAD)
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_groq(fake):
+            project = await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
+
+    # The planner is also told not to duplicate it.
+    assert roadmap_generator._GITHUB_SETUP_GUIDANCE in (
+        fake.chat.completions.create.await_args.kwargs["messages"][1]["content"]
+    )
+
+    async with roadmap_db() as db:
+        milestones = (await db.execute(
+            select(Milestone)
+            .where(Milestone.project_id == project.id)
+            .order_by(Milestone.sort_order)
+            .options(selectinload(Milestone.tasks))
+        )).scalars().all()
+        assert [m.title for m in milestones] == [MILESTONE_TITLE, "Foundations", "Core loop"]
+        assert [m.sort_order for m in milestones] == [0, 1, 2]
+        assert len(milestones[0].tasks) == len(SETUP_TASKS)
+        # The generated tasks keep their own short_ids — no collision with the
+        # injected batch.
+        all_short_ids = [t.short_id for t in (await db.execute(select(Task))).scalars().all()]
+        assert len(set(all_short_ids)) == len(all_short_ids)
+
+
+async def test_generate_roadmap_leaves_plan_alone_when_github_is_fine(roadmap_db):
+    from src.services.github_setup_plan import MILESTONE_TITLE
+
+    team_id, session_id = await _seed(roadmap_db)
+    fake = _fake_groq(_ROADMAP_PAYLOAD)
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_groq(fake):
+            project = await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
+
+    async with roadmap_db() as db:
+        milestones = (await db.execute(
+            select(Milestone).where(Milestone.project_id == project.id).order_by(Milestone.sort_order)
+        )).scalars().all()
+        assert [m.title for m in milestones] == ["Foundations", "Core loop"]
+        assert MILESTONE_TITLE not in [m.title for m in milestones]
 
 
 async def test_generate_roadmap_once_returns_winner_project_on_conflict(roadmap_db):
@@ -778,6 +851,47 @@ async def test_regenerate_roadmap_keeps_project_id_and_replaces_content(roadmap_
         # No orphaned tasks from the first generation.
         all_tasks = (await db.execute(select(Task))).scalars().all()
         assert [t.title for t in all_tasks] == ["Redo it"]
+
+
+async def test_regenerate_roadmap_readds_the_github_setup_milestone(roadmap_db):
+    """Regeneration deletes every milestone — including the injected one. A
+    founder who hits "regenerate" on the plan-review step must not lose the
+    only GitHub instructions they have."""
+    from src.services.github_setup_plan import MILESTONE_TITLE, SETUP_TASKS
+
+    team_id, session_id = await _seed(roadmap_db)
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        session.github_setup_needed_at = datetime.utcnow()
+        await db.commit()
+
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_groq(_fake_groq(_ROADMAP_PAYLOAD)):
+            first = await roadmap_generator.generate_roadmap(session, team, "sk-key", db)
+
+    regen_payload = {
+        "projectName": "Trail Buddy 2",
+        "milestones": [{"title": "Restart", "tasks": [{"title": "Redo it", "dayOffset": 0}]}],
+    }
+    async with roadmap_db() as db:
+        session = await db.get(OnboardingSession, session_id)
+        team = await db.get(Team, team_id)
+        with _patch_groq(_fake_groq(regen_payload)):
+            await roadmap_generator.regenerate_roadmap(session, team, "sk-key", db)
+
+    async with roadmap_db() as db:
+        milestones = (await db.execute(
+            select(Milestone)
+            .where(Milestone.project_id == first.id)
+            .order_by(Milestone.sort_order)
+            .options(selectinload(Milestone.tasks))
+        )).scalars().all()
+        assert [m.title for m in milestones] == [MILESTONE_TITLE, "Restart"]
+        assert [m.sort_order for m in milestones] == [0, 1]
+        # Exactly one copy, not one per regeneration.
+        assert len(milestones[0].tasks) == len(SETUP_TASKS)
 
 
 # ─── regenerate_milestone ──────────────────────────────────────────────────────

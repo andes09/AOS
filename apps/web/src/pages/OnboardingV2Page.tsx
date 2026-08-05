@@ -28,7 +28,8 @@ const shellFont = "'Inter', system-ui, sans-serif"
 
 export function OnboardingV2Page() {
   const {
-    state, isLoading, error, skipGithub, saveProfile, savePurpose, saveTechStack, savePlanSource, complete,
+    state, isLoading, error, skipGithub, needsGithubSetup, saveProfile, savePurpose, saveTechStack,
+    savePlanSource, complete,
   } = useOnboardingState()
 
   // Lets the founder step back to review or edit an earlier answer. The
@@ -198,6 +199,8 @@ export function OnboardingV2Page() {
               githubNeedsReconnect={state.github.needsReconnect}
               onSkipGithub={() => { setViewStep(null); skipGithub.mutate() }}
               skippingGithub={skipGithub.isPending}
+              onNeedsGithubSetup={() => { setViewStep(null); needsGithubSetup.mutate() }}
+              markingNeedsSetup={needsGithubSetup.isPending}
               repoAvailable={state.repo.available}
               onboardingPath={state.onboardingPath}
               canCreate={state.repo.canCreate}

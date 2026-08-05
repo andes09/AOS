@@ -59,6 +59,10 @@ export function createOnboardingApi(getToken: GetToken, apiUrl: string = DEFAULT
     // --- flow state ---
     getState: () => request<OnboardingState>('/api/onboarding/v2/state'),
     skipGithub: () => request<OnboardingState>('/api/onboarding/v2/github/skip', { method: 'POST' }),
+    /** "I don't have GitHub yet" — advances the step like skipGithub, and also
+     *  gets a GitHub setup milestone prepended to the generated roadmap. */
+    needsGithubSetup: () =>
+      request<OnboardingState>('/api/onboarding/v2/github/needs-setup', { method: 'POST' }),
     saveProfile: (profile: { name: string; phone: string }) =>
       request<OnboardingState>('/api/onboarding/v2/profile', {
         method: 'PUT',

@@ -21,6 +21,8 @@ export function GithubRepoStep({
   githubNeedsReconnect,
   onSkipGithub,
   skippingGithub,
+  onNeedsGithubSetup,
+  markingNeedsSetup,
   repoAvailable,
   onboardingPath,
   canCreate,
@@ -30,6 +32,8 @@ export function GithubRepoStep({
   githubNeedsReconnect: boolean
   onSkipGithub: () => void
   skippingGithub: boolean
+  onNeedsGithubSetup: () => void
+  markingNeedsSetup: boolean
   repoAvailable: boolean
   onboardingPath: PlanSource | null
   canCreate: boolean
@@ -40,6 +44,8 @@ export function GithubRepoStep({
       <GithubStep
         onSkip={onSkipGithub}
         skipping={skippingGithub}
+        onNeedsSetup={onNeedsGithubSetup}
+        markingNeedsSetup={markingNeedsSetup}
         needsReconnect={githubNeedsReconnect}
       />
     )

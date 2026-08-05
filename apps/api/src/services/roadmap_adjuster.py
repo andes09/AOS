@@ -184,19 +184,38 @@ async def _org_for_project(project: Project, db: AsyncSession) -> Organization:
     )
 
 
-async def _call_adjuster(api_key: str, context: str):
-    """One forced-tool Groq call for the feedback re-plan."""
-    return await _call_tool(api_key, _SYSTEM_PROMPT, "Current plan and feedback:\n" + context, _ADJUST_TOOL)
+async def _call_adjuster(api_key: str, context: str, extra_context: str | None = None):
+    """One forced-tool Groq call for the feedback re-plan.
+
+    `extra_context` is appended as an additional evidence block — used by the
+    drift reconcile path (services/roadmap_drift.build_reconcile_context) to
+    hand the planner what the repo actually shows, alongside what the user
+    typed. It is passed here rather than merged into `Task.feedback` so the
+    user's own words are never overwritten by a derived signal.
+    """
+    user_content = "Current plan and feedback:\n" + context
+    if extra_context:
+        user_content += "\n\n" + extra_context
+    return await _call_tool(api_key, _SYSTEM_PROMPT, user_content, _ADJUST_TOOL)
 
 
 async def adjust_roadmap(
-    project: Project, api_key: str, db: AsyncSession, today: date | None = None
+    project: Project,
+    api_key: str,
+    db: AsyncSession,
+    today: date | None = None,
+    extra_context: str | None = None,
 ) -> Project:
     """
     Re-plan the project's `todo` tasks from feedback, preserving completed work.
 
     Generation + validation happen before any delete, so a failed or empty
     adjustment leaves the roadmap untouched.
+
+    `extra_context` adds a second evidence source to the same call — see
+    `_call_adjuster`. Everything else about the contract is unchanged, which is
+    why the drift reconcile endpoint reuses this rather than adding a parallel
+    generation path that would have to re-derive "done is fixed history".
     """
     today = today or date.today()
 
@@ -207,7 +226,7 @@ async def adjust_roadmap(
         .options(selectinload(Project.milestones).selectinload(Milestone.tasks))
     )
 
-    data, usage = await _call_adjuster(api_key, _plan_context(project))
+    data, usage = await _call_adjuster(api_key, _plan_context(project), extra_context)
 
     # Validate/normalize with the generator's helpers (title clamp, day clamp,
     # time parse, duration clamp) so the adjuster and generator agree on shape.

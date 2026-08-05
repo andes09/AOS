@@ -419,7 +419,7 @@ async def generate_roadmap(
     await record_generation_cost(
         "roadmap_generate",
         usage,
-        provider="anthropic",
+        provider="groq",
         org_id=team.organization_id,
         team_id=team.id,
         model=_MODEL,
@@ -500,7 +500,7 @@ async def regenerate_roadmap(
     await record_generation_cost(
         "roadmap_regenerate",
         usage,
-        provider="anthropic",
+        provider="groq",
         org_id=team.organization_id,
         team_id=team.id,
         model=_MODEL,
@@ -576,7 +576,7 @@ async def regenerate_milestone(
     await record_generation_cost(
         "roadmap_regenerate_milestone",
         usage,
-        provider="anthropic",
+        provider="groq",
         org_id=org.id,
         team_id=milestone_team_id,
         model=_MODEL,

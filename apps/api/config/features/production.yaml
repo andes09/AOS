@@ -17,3 +17,4 @@ features:
     master_dashboard: false
     mcp_server: false
     tech_stack_step: false
+    roadmap_drift: false

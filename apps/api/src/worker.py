@@ -90,6 +90,7 @@ celery_app.conf.update(
 # already bound above by the time this runs, the circular import resolves
 # cleanly (standard "import task modules at the bottom" Celery pattern).
 from src.integrations.github import events as _github_events  # noqa: E402,F401
+from src.services import github_classifier as _github_classifier  # noqa: E402,F401
 from src.services import roadmap_generator as _roadmap_generator  # noqa: E402,F401
 
 # Beat schedule — the reconciliation sweep is a safety net for missed GitHub

@@ -13,6 +13,7 @@ import { useApi } from '../../lib/api'
 import type { Roadmap, RoadmapTask, TaskRescheduleItem } from '../../types/roadmap'
 import { addTask, mapTask, mapTasks } from './plannerCache'
 import { MEMBERS_KEY, ROADMAP_KEY } from './usePlannerData'
+import { DRIFT_KEY } from './useDriftSignal'
 
 /** Fields a single-task PATCH may carry. Omitted keys mean "leave alone". */
 export interface TaskPatch {
@@ -86,6 +87,18 @@ export function usePlannerMutations() {
     onSettled: settleBoth,
   })
 
+  // Same non-destructive engine as `adjust`, but driven by observed GitHub
+  // drift instead of typed feedback. Invalidates the drift query too, since a
+  // successful reconcile is exactly what should clear the banner.
+  const reconcile = useMutation({
+    mutationFn: () => post<Roadmap>(`${base}/reconcile`, {}),
+    onSuccess: data => qc.setQueryData(roadmapKey, data),
+    onSettled: () => {
+      settleBoth()
+      qc.invalidateQueries({ queryKey: DRIFT_KEY(projectId) })
+    },
+  })
+
   const updateTask = useMutation({
     mutationFn: ({ id, patch: body }: { id: string; patch: TaskPatch }) =>
       patch<RoadmapTask>(`${base}/tasks/${id}`, body),
@@ -138,5 +151,5 @@ export function usePlannerMutations() {
     })
   }
 
-  return { generate, regenerate, adjust, updateTask, createTask, rescheduleTasks, toggleDone }
+  return { generate, regenerate, adjust, reconcile, updateTask, createTask, rescheduleTasks, toggleDone }
 }

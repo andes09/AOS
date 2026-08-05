@@ -394,3 +394,155 @@ async def test_short_id_match_is_scoped_to_the_event_org(tmp_db):
         assert _status(task_a) == TaskStatus.IN_PROGRESS.value
         assert _status(task_b) == TaskStatus.TODO.value
         break
+
+
+# ─── heuristic tier: evidence only, never authority ─────────────────────────
+#
+# The exact-short_id tier above is authoritative and may move a task. This tier
+# fires when nobody typed an identifier — the common case for a founder driving
+# an AI coding agent — and it must record the link *without* touching status.
+async def _retitle_task(task_id, title, *, github_path=None):
+    """Give the seeded task a distinctive title the heuristic can latch onto.
+
+    `_seed`'s default "Do the thing" is deliberately all stopwords, so it can
+    never be matched heuristically — which is why every test above still
+    exercises only the exact path.
+    """
+    async for db in app.dependency_overrides[get_db]():
+        task = await db.get(Task, task_id)
+        task.title = title
+        if github_path is not None:
+            task.github_path = github_path
+        await db.commit()
+        break
+
+
+@pytest.mark.asyncio
+async def test_heuristic_match_records_evidence_without_moving_the_task(tmp_db):
+    ids = await _seed(short_id="AOS-1")
+    await _retitle_task(ids["task"], "Implement JWT refresh token rotation")
+
+    # No "AOS-1" anywhere — only overlapping vocabulary.
+    payload = _push_payload("AOS-1")
+    payload["commits"][0]["message"] = "Implement JWT refresh token rotation"
+
+    async for db in app.dependency_overrides[get_db]():
+        await process_github_event_async(ids["org"], "push", payload, db)
+        break
+
+    from sqlalchemy import select
+
+    async for db in app.dependency_overrides[get_db]():
+        task = await db.get(Task, ids["task"])
+        # The link is recorded...
+        events = (await db.execute(select(GithubActivityEvent))).scalars().all()
+        assert len(events) == 1
+        assert events[0].matched_task_id == ids["task"]
+        assert events[0].match_method == "heuristic"
+        assert events[0].match_confidence is not None and 0 < events[0].match_confidence <= 1
+        # ...but the task did NOT move. This is the whole point.
+        assert _status(task) == TaskStatus.TODO.value
+        break
+
+
+@pytest.mark.asyncio
+async def test_merged_pr_matched_only_heuristically_does_not_complete_task(tmp_db):
+    """The most dangerous case: a merge is the one event that sets DONE +
+    completed_at, so a fuzzy match must not be allowed to trigger it."""
+    ids = await _seed(short_id="AOS-1")
+    await _retitle_task(ids["task"], "Implement JWT refresh token rotation")
+
+    payload = _pull_request_payload("AOS-1", action="closed", merged=True)
+    payload["pull_request"]["title"] = "Implement JWT refresh token rotation"
+    payload["pull_request"]["head"]["ref"] = "feat/jwt-refresh-rotation"
+
+    async for db in app.dependency_overrides[get_db]():
+        await process_github_event_async(ids["org"], "pull_request", payload, db)
+        break
+
+    from sqlalchemy import select
+
+    async for db in app.dependency_overrides[get_db]():
+        task = await db.get(Task, ids["task"])
+        assert _status(task) == TaskStatus.TODO.value
+        assert task.completed_at is None
+        events = (await db.execute(select(GithubActivityEvent))).scalars().all()
+        assert events[0].match_method == "heuristic"
+        assert events[0].matched_task_id == ids["task"]
+        break
+
+
+@pytest.mark.asyncio
+async def test_exact_short_id_still_wins_over_the_heuristic(tmp_db):
+    """Tier ordering: when an identifier is present it decides, even if another
+    task's wording is a closer textual fit."""
+    ids = await _seed(short_id="AOS-1")
+    await _retitle_task(ids["task"], "Something entirely unrelated to parsers")
+
+    payload = _push_payload("AOS-1")
+    payload["commits"][0]["message"] = "AOS-1 parser lexer tokenizer grammar rewrite"
+
+    async for db in app.dependency_overrides[get_db]():
+        await process_github_event_async(ids["org"], "push", payload, db)
+        break
+
+    from sqlalchemy import select
+
+    async for db in app.dependency_overrides[get_db]():
+        task = await db.get(Task, ids["task"])
+        assert _status(task) == TaskStatus.IN_PROGRESS.value
+        events = (await db.execute(select(GithubActivityEvent))).scalars().all()
+        assert events[0].match_method == "short_id"
+        assert events[0].match_confidence is None
+        break
+
+
+@pytest.mark.asyncio
+async def test_unmatchable_event_is_recorded_as_unmatched(tmp_db):
+    """The row still lands — an event belonging to no planned task is exactly
+    what the drift service reads as unplanned work."""
+    ids = await _seed(short_id="AOS-1")
+    await _retitle_task(ids["task"], "Implement JWT refresh token rotation")
+
+    payload = _push_payload("AOS-1")
+    payload["commits"][0]["message"] = "Bump dependency versions"
+
+    async for db in app.dependency_overrides[get_db]():
+        await process_github_event_async(ids["org"], "push", payload, db)
+        break
+
+    from sqlalchemy import select
+
+    async for db in app.dependency_overrides[get_db]():
+        events = (await db.execute(select(GithubActivityEvent))).scalars().all()
+        assert len(events) == 1
+        assert events[0].matched_task_id is None
+        assert events[0].match_method == "unmatched"
+        assert _status(await db.get(Task, ids["task"])) == TaskStatus.TODO.value
+        break
+
+
+@pytest.mark.asyncio
+async def test_heuristic_candidates_are_scoped_to_the_event_org(tmp_db):
+    """Same guarantee the exact path has: a commit in one org's repo can never
+    attach to another org's task, however well the words line up."""
+    ids_a = await _seed(clerk_org_id="org_a_heur", installation_id="inst_ha", short_id="AOS-1")
+    ids_b = await _seed(clerk_org_id="org_b_heur", installation_id="inst_hb", short_id="AOS-1")
+    await _retitle_task(ids_b["task"], "Implement JWT refresh token rotation")
+
+    payload = _push_payload("AOS-1")
+    payload["commits"][0]["message"] = "Implement JWT refresh token rotation"
+
+    # Delivered as org A, whose only task is the all-stopwords default.
+    async for db in app.dependency_overrides[get_db]():
+        await process_github_event_async(ids_a["org"], "push", payload, db)
+        break
+
+    from sqlalchemy import select
+
+    async for db in app.dependency_overrides[get_db]():
+        events = (await db.execute(select(GithubActivityEvent))).scalars().all()
+        assert len(events) == 1
+        assert events[0].matched_task_id is None
+        assert events[0].match_method == "unmatched"
+        break

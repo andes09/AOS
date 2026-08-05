@@ -6,7 +6,7 @@
 // Task color comes strictly from the assignee — see lib/laneColors.ts.
 
 import { useMemo, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useOutletContext, useParams } from 'react-router-dom'
 import {
   DndContext,
   DragOverlay,
@@ -38,8 +38,10 @@ import { UnscheduledTray } from '../../components/planner/UnscheduledTray'
 import { TaskCard } from '../../components/planner/TaskCard'
 import { TaskDetailModal } from '../../components/planner/TaskDetailModal'
 import { AssistantChat } from '../../components/planner/AssistantChat'
+import { DriftBanner } from '../../components/planner/DriftBanner'
 import { usePlannerData, type FlatTask } from './usePlannerData'
 import { usePlannerMutations, type TaskPatch } from './usePlannerMutations'
+import { useDriftSignal, driftingMilestoneIds } from './useDriftSignal'
 import { EMPTY_FILTERS, toggleInSet, UNASSIGNED, type PlannerFilters } from './plannerFilters'
 
 /** Visible window of the timed grid. Outside these hours nothing renders. */
@@ -58,6 +60,7 @@ export function PlannerPage() {
   // `view` and the people-panel collapse state live in the layout so the top
   // bar (switcher + panel toggle) and this page share them.
   const { view, lanesHidden, onToggleLanes } = useOutletContext<PlannerOutletContext>()
+  const { projectId } = useParams<{ projectId: string }>()
 
   const [filters, setFilters] = useState<PlannerFilters>(EMPTY_FILTERS)
   const [anchorOverride, setAnchorOverride] = useState<Date | null>(null)
@@ -75,7 +78,8 @@ export function PlannerPage() {
   // `rescheduleTasks` is intentionally not destructured here — a single drag is
   // one task, so it goes through updateTask. The bulk endpoint is wired up in
   // the hook and waits for multi-select.
-  const { generate, regenerate, adjust, updateTask, createTask, toggleDone } = usePlannerMutations()
+  const { generate, regenerate, adjust, reconcile, updateTask, createTask, toggleDone } = usePlannerMutations()
+  const drift = useDriftSignal(projectId)
 
   // Require a real drag before starting one, or the checkbox on each card
   // stops being clickable.
@@ -272,6 +276,22 @@ export function PlannerPage() {
           )}
 
           <main style={{ flex: 1, minWidth: 0 }}>
+            {/* Self-gating: renders null unless the server found warning-level
+                drift, so it costs nothing on a healthy project. */}
+            <DriftBanner
+              report={drift.data}
+              isLoading={drift.isLoading}
+              onOpenPlanMap={() => setPlanMapOpen(true)}
+              onReconcile={() => reconcile.mutate()}
+              isReconciling={reconcile.isPending}
+              reconcileError={
+                reconcile.isError
+                  ? reconcile.error instanceof Error
+                    ? reconcile.error.message
+                    : 'Could not update the plan.'
+                  : null
+              }
+            />
             <PlannerToolbar
               done={isCalendar ? rangeStats.done : data.stats.done}
               total={isCalendar ? rangeStats.total : data.stats.total}
@@ -404,7 +424,10 @@ export function PlannerPage() {
           style={{ marginBottom: 'var(--space-4)' }}
         />
         {planMapTab === 'milestones' ? (
-          <MilestoneMap milestones={data.roadmap?.milestones ?? []} />
+          <MilestoneMap
+            milestones={data.roadmap?.milestones ?? []}
+            driftingIds={driftingMilestoneIds(drift.data)}
+          />
         ) : (
           <DependencyGraph tasksById={data.tasksById} colorOf={colorOf} onOpen={t => setOpenTaskId(t.id)} />
         )}

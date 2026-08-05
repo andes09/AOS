@@ -6,9 +6,21 @@ from src.config import Settings
 from src.main import app
 
 
+#: Flags every environment file must define, so a missing key is caught rather
+#: than silently defaulting to off at a call site.
+_REQUIRED_TOP_LEVEL = {"clerk_auth", "cost_tracking", "roadmap_generation", "plan_review", "repo_create"}
+_ENVIRONMENTS = ("local", "production", "test")
+
+
+# These used to assert exact equality against the whole `experimental` dict,
+# which meant every new experimental flag broke both tests in a way that said
+# nothing about correctness — it drifted twice before anyone noticed. What
+# actually matters is asserted directly instead: the shipped flags have their
+# intended values, every environment defines the same key set, and nothing
+# experimental is on in production.
 def test_local_yaml_loads():
-    settings = Settings(environment="local")
-    flags = settings.feature_flags
+    flags = Settings(environment="local").feature_flags
+    assert _REQUIRED_TOP_LEVEL <= flags.keys()
     assert flags["roadmap_generation"] is True
     assert flags["planner"] == {
         "enabled": True, "week_view": False, "daily_calendar_view": False, "board_view": False,
@@ -16,15 +28,11 @@ def test_local_yaml_loads():
     assert flags["roadmap_chat"] is True
     assert flags["plan_review"] is True
     assert flags["repo_create"] is True
-    assert flags["experimental"] == {
-        "enabled": False, "import_artifacts": False, "github_autocomplete": False,
-        "master_dashboard": False, "mcp_server": False, "tech_stack_step": False,
-    }
 
 
 def test_production_yaml_loads():
-    settings = Settings(environment="production")
-    flags = settings.feature_flags
+    flags = Settings(environment="production").feature_flags
+    assert _REQUIRED_TOP_LEVEL <= flags.keys()
     assert flags["roadmap_generation"] is True
     assert flags["planner"] == {
         "enabled": True, "week_view": True, "daily_calendar_view": True, "board_view": True,
@@ -32,10 +40,30 @@ def test_production_yaml_loads():
     assert flags["roadmap_chat"] is False
     assert flags["plan_review"] is True
     assert flags["repo_create"] is True
-    assert flags["experimental"] == {
-        "enabled": False, "import_artifacts": False, "github_autocomplete": False,
-        "master_dashboard": False, "mcp_server": False, "tech_stack_step": False,
+
+
+def test_nothing_experimental_is_enabled_in_production():
+    """The invariant the old exact-dict assertion was really protecting.
+
+    Unlike that version, this keeps holding as flags are added — a new
+    experimental flag accidentally shipped as `true` fails here by name.
+    """
+    experimental = Settings(environment="production").feature_flags["experimental"]
+    enabled = [name for name, value in experimental.items() if value]
+    assert enabled == [], f"experimental flags enabled in production: {enabled}"
+
+
+def test_every_environment_declares_the_same_experimental_flags():
+    """Catches the real drift bug: adding a flag to local.yaml but forgetting
+    production.yaml or test.yaml, which reads as "off" with no error anywhere
+    (recorded in tasks/todo.md as a past incident)."""
+    key_sets = {
+        env: set(Settings(environment=env).feature_flags["experimental"].keys())
+        for env in _ENVIRONMENTS
     }
+    reference = key_sets["local"]
+    for env, keys in key_sets.items():
+        assert keys == reference, f"{env}.yaml experimental flags differ: {keys ^ reference}"
 
 
 def test_is_feature_enabled_supports_dotted_path_for_grouped_flags():

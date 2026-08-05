@@ -1,9 +1,29 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, Float, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from src.database import Base
+
+
+class MatchMethod:
+    """Values for `GithubActivityEvent.match_method`.
+
+    A plain string namespace rather than an Enum column on purpose: this
+    codebase has been bitten three times by `SAEnum(..., native_enum=False)`
+    reloading as the enum *member* and silently breaking `==` comparisons
+    against string literals (see integrations/github/events.py's module
+    docstring). The set is small and closed; a String column plus these
+    constants gets the readability without the footgun.
+    """
+
+    SHORT_ID = "short_id"    # exact "AOS-142" token — the only status-mutating path
+    HEURISTIC = "heuristic"  # token/path overlap with a task, above threshold
+    LLM = "llm"              # Groq classifier's call on what heuristics missed
+    UNMATCHED = "unmatched"  # looked at, belongs to no planned task
+
+    #: Methods that are evidence only and must never move a task's status.
+    FUZZY = (HEURISTIC, LLM)
 
 
 class GithubActivityEvent(Base):
@@ -47,6 +67,15 @@ class GithubActivityEvent(Base):
     matched_task_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # How `matched_task_id` was arrived at — see MatchMethod below. Load-bearing,
+    # not decorative: only "short_id" is trusted enough to move a task's status.
+    match_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # 0.0–1.0 for heuristic/llm matches; NULL for short_id (an exact identifier
+    # match has no meaningful score) and for unmatched rows.
+    match_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # When the LLM classifier last considered this row, so it can skip what it
+    # has already paid to look at.
+    classified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

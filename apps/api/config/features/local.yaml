@@ -13,7 +13,8 @@ features:
   experimental:
     enabled: false
     import_artifacts: false
-    github_autocomplete: false
+    github_autocomplete: true
     master_dashboard: false
     mcp_server: false
     tech_stack_step: true
+    roadmap_drift: true

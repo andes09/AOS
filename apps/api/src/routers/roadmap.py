@@ -17,6 +17,7 @@ GET    /api/projects/{project_id}/roadmap/members                      → team 
 POST   /api/projects/{project_id}/roadmap/generate                     → idempotent repair: regenerate from brief only if no milestones exist yet
 POST   /api/projects/{project_id}/roadmap/regenerate                   → replan the whole roadmap
 POST   /api/projects/{project_id}/roadmap/adjust                       → non-destructive re-plan from per-task feedback
+POST   /api/projects/{project_id}/roadmap/reconcile                    → non-destructive re-plan from observed GitHub drift
 POST   /api/projects/{project_id}/roadmap/milestones/{id}/regenerate   → replan one milestone
 POST   /api/projects/{project_id}/roadmap/tasks                        → create a task
 POST   /api/projects/{project_id}/roadmap/tasks/reschedule             → bulk move/reassign (drag-drop)
@@ -25,6 +26,7 @@ PATCH  /api/projects/{project_id}/roadmap/tasks/{task_id}              → updat
 DELETE /api/projects/{project_id}/roadmap/tasks/{task_id}              → delete a task
 GET    /api/projects/{project_id}/roadmap/status                       → readiness check for the planner's badge
 GET    /api/projects/{project_id}/roadmap/quality                      → plan-quality telemetry for the task dependency graph
+GET    /api/projects/{project_id}/roadmap/drift                        → where the plan and the repo have diverged
 GET    /api/projects/{project_id}/roadmap/chat                         → refine-chat transcript
 POST   /api/projects/{project_id}/roadmap/chat/message                 → refine-chat turn (SSE)
 """
@@ -47,11 +49,13 @@ from src.dependencies import mark_developer_active
 from src.models.onboarding_session import OnboardingMessage
 from src.models.task import Task, TaskStatus
 from src.routers.project_common import _get_org, _owned_project
+from src.config import settings
 from src.services import (
     activity,
     idea_interview,
     plan_quality,
     roadmap_adjuster,
+    roadmap_drift,
     roadmap_generator,
 )
 from src.services import roadmap_service as svc
@@ -199,6 +203,50 @@ async def adjust(
 
     try:
         await roadmap_adjuster.adjust_roadmap(project, api_key, db)
+    except ValueError as exc:  # bad key
+        raise HTTPException(status_code=402, detail=str(exc))
+    except LLMRateLimitError as exc:  # provider quota — retrying now won't help
+        raise HTTPException(status_code=429, detail=str(exc))
+    except RuntimeError as exc:  # upstream / model failure
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    project = await _owned_project(project_id, org, db)
+    return svc.project_json(project)
+
+
+@router.post("/reconcile")
+async def reconcile(
+    project_id: uuid.UUID,
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Re-plan the roadmap against what the repo actually shows.
+
+    The human-triggered half of drift detection: `GET /drift` reports, this
+    acts, and nothing acts on its own. Routed through the *adjuster*, not
+    `regenerate` — regenerate deletes every task in the project and resets
+    statuses, assignees and completed_at, which would throw away the very
+    history that makes the drift evidence meaningful. The adjuster treats
+    done/in-progress work as fixed and only re-plans `todo` tasks.
+
+    409 when there's no roadmap, or when there's no drift to reconcile — no
+    point paying for a model call to change nothing.
+    """
+    org = await _get_org(clerk_org_id, db)
+    project = await _owned_project(project_id, org, db)
+    if not project.milestones:
+        raise HTTPException(status_code=409, detail="no_roadmap")
+    if not settings.is_feature_enabled("experimental.roadmap_drift"):
+        raise HTTPException(status_code=404, detail="not_found")
+
+    evidence = await roadmap_drift.build_reconcile_context(org.id, project, db)
+    if evidence is None:
+        raise HTTPException(status_code=409, detail="no_drift")
+
+    api_key = await idea_interview.resolve_api_key(clerk_org_id, db)
+
+    try:
+        await roadmap_adjuster.adjust_roadmap(project, api_key, db, extra_context=evidence)
     except ValueError as exc:  # bad key
         raise HTTPException(status_code=402, detail=str(exc))
     except LLMRateLimitError as exc:  # provider quota — retrying now won't help
@@ -534,6 +582,26 @@ async def get_quality(
     org = await _get_org(clerk_org_id, db)
     project = await _owned_project(project_id, org, db)
     return await plan_quality.compute_plan_quality(project.id, db)
+
+
+@router.get("/drift")
+async def get_drift(
+    project_id: uuid.UUID,
+    clerk_org_id: str = Depends(get_current_org_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Where the plan and the repo disagree — see services/roadmap_drift.py.
+
+    Read-only by design: this reports, and a human decides whether to act on it
+    via `POST /roadmap/reconcile`. Returns an empty signal list rather than 404
+    while the flag is off, so the frontend can mount the banner unconditionally
+    and let it self-gate (same posture as the welcome-back banner).
+    """
+    org = await _get_org(clerk_org_id, db)
+    project = await _owned_project(project_id, org, db)
+    if not settings.is_feature_enabled("experimental.roadmap_drift"):
+        return {"hasDrift": False, "signals": [], "repoConnected": False}
+    return await roadmap_drift.compute_drift(org.id, project, db)
 
 
 @router.get("/chat")

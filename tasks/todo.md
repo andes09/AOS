@@ -11,6 +11,54 @@ None. Both previously-stranded branches were merged to `main` on 2026-08-04
 
 ---
 
+## ✅ DONE — Idea interview could strand the founder on step 4 (2026-08-04, uncommitted)
+
+**Report:** onboarding hung on "Your idea" — brief marked Ready, the AI said
+"I've gathered all the necessary information… Thank you", and nothing advanced.
+Reproduced from the DB: session `f656d4d2` had both messages persisted but
+`status='in_progress'`, `awaiting_confirmation=true`.
+
+**Root cause — two signals for one decision.** The wrap-up handshake ("ask if
+they have anything to add, then the next message ends the interview") was armed
+by the *extraction* pass's model-judged `isComplete`, decided **after** the
+reply was streamed. The reply itself was written against `missing_fields()` on
+the brief as it stood **before** the turn. The two disagreed, so the flag landed
+a turn late: the model gave its sign-off on the very turn `awaiting_confirmation`
+first flipped on. Result — no question left to answer, `status` never reached
+`completed`, and `IdeaChatStep` hid "That's enough — finish up" precisely
+*because* `awaitingConfirmation` was true. Dead end.
+
+- [x] `idea_interview.py` — arm the handshake from the same brief snapshot the
+      reply prompt saw (`asks_for_confirmation = not missing_fields(...)`,
+      captured before extraction). Flag and conversation can no longer disagree.
+- [x] Dropped `isComplete` from the extraction tool schema entirely;
+      `brief_complete` is now derived (`not missing_fields(...)`). One source of
+      truth, so the divergence can't be reintroduced.
+- [x] `POST /chat/complete` clears `awaiting_confirmation` alongside `status`.
+- [x] `IdeaChatStep` — the founder always has a way forward once the chat has
+      substance: primary "Looks good — continue →" when the brief is complete or
+      confirmation is pending, the subtle "finish up" otherwise, and a spinner
+      line while the next step loads. A misbehaving model can't strand the flow.
+- [x] `useIdeaChat.complete()` catches (it was an unhandled rejection) and
+      exposes `isCompleting`.
+
+**Verification:** `pytest tests/test_idea_interview.py tests/test_project_brief.py
+tests/test_onboarding_v2.py tests/test_projects.py` → 102 passed, including a new
+`test_handshake_does_not_depend_on_the_extraction_pass` (extraction returning no
+tool call at all still completes). New Playwright test replays the exact stuck
+state and fails on the pre-fix `IdeaChatStep` (verified by stashing it), passes
+after — 5/5 e2e green. `tsc --noEmit` + `vite build` clean. Full API suite:
+379 passed, 3 pre-existing unrelated failures (activity, features, sprints).
+
+**Drive-by:** `test_brief_tool_derivation_matches_original_hand_written_shape`
+was already failing on `main` (asserted the Anthropic `input_schema` shape after
+the tool moved to the Groq function form) — updated to the current contract.
+
+**Existing stuck session:** no data fix needed — reloading `/onboarding` now
+shows the continue button; sending any message also completes it.
+
+---
+
 ## ✅ DONE — Cut two friction points out of signup (2026-08-04, uncommitted)
 
 Founders hit two screens whose only job was one more click. Both removed.

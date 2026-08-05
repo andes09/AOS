@@ -127,12 +127,17 @@ def test_anthropic_tool_properties_shape():
 
 
 def test_brief_tool_derivation_matches_original_hand_written_shape():
-    assert _BRIEF_TOOL["name"] == "update_project_brief"
-    schema = _BRIEF_TOOL["input_schema"]
-    assert schema["required"] == ["isComplete"]
-    assert schema["properties"]["isComplete"]["type"] == "boolean"
+    # OpenAI/Groq function-tool form (the interview moved off Anthropic).
+    assert _BRIEF_TOOL["type"] == "function"
+    assert _BRIEF_TOOL["function"]["name"] == "update_project_brief"
+    schema = _BRIEF_TOOL["function"]["parameters"]
     for alias in _ORIGINAL_FIELD_ALIASES:
         assert alias in schema["properties"]
+    # Extraction records facts only. Completeness is derived from the merged
+    # brief by missing_fields(), never asked of the model — a second, model-
+    # judged opinion is what used to strand the interview mid-handshake.
+    assert "isComplete" not in schema["properties"]
+    assert "required" not in schema
 
 
 def test_merge_brief_still_ignores_purpose_fields_absent_from_extraction():

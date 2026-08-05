@@ -144,9 +144,9 @@ def anthropic_tool_properties() -> dict[str, dict[str, Any]]:
 
     Single source of truth for the extraction tool's field list, types, and
     descriptions. `schema_version` is excluded — it's not conversation
-    content. `isComplete` is NOT included here: it's an extraction-protocol
-    control field, not project data, and must be layered on top by the
-    caller (see `services/idea_interview.py`).
+    content. The tool records facts only; whether the brief is *complete* is
+    derived from these fields afterwards (see `idea_interview.missing_fields`)
+    rather than asked of the model.
     """
     schema = ProjectBrief.model_json_schema()  # by_alias=True is the default
     properties: dict[str, dict[str, Any]] = {}

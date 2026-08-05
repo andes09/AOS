@@ -335,14 +335,13 @@ _FULL_BRIEF = {
 
 @pytest.mark.asyncio
 async def test_brief_complete_asks_for_confirmation_instead_of_finishing(tmp_db):
-    """The first turn the model judges complete must NOT end the interview —
-    it should just flip briefComplete/awaitingConfirmation and wait."""
+    """Filling the brief must NOT end the interview — it flips briefComplete,
+    and the *next* turn (the one whose reply asks the closing question) flips
+    awaitingConfirmation."""
     await _seed_org_and_team()
     fake = _fake_groq([
-        (
-            ["Sounds great — here's what I've got. ", "Anything else to add?"],
-            {**_FULL_BRIEF, "isComplete": True},
-        ),
+        (["Sounds great. What's the timeline?"], _FULL_BRIEF),
+        (["Here's what I've got. ", "Anything else to add?"], _FULL_BRIEF),
     ])
     with (
         _patch_clerk(),
@@ -363,10 +362,21 @@ async def test_brief_complete_asks_for_confirmation_instead_of_finishing(tmp_db)
             brief_event = next(d for e, d in events if e == "brief")
             done_event = next(d for e, d in events if e == "done")
 
+            # The brief filled up on this turn, but the reply was written
+            # against the *old* brief, so it can't have asked to wrap up yet.
             assert brief_event["briefComplete"] is True
-            assert brief_event["awaitingConfirmation"] is True
-            # Not completed yet — still waiting on the founder's answer.
+            assert brief_event["awaitingConfirmation"] is False
             assert done_event["status"] == "in_progress"
+
+            # Next turn: the prompt saw a complete brief, so its reply is the
+            # closing question and the handshake arms.
+            resp = await client.post(
+                "/api/onboarding/v2/chat/message", json={"content": "sounds right"}, headers=AUTH
+            )
+            events = _parse_sse(resp.text)
+            assert next(d for e, d in events if e == "brief")["awaitingConfirmation"] is True
+            # Not completed yet — still waiting on the founder's answer.
+            assert next(d for e, d in events if e == "done")["status"] == "in_progress"
 
             # The session is still open: a follow-up message is accepted.
             state = (await client.get("/api/onboarding/v2/state", headers=AUTH)).json()
@@ -379,8 +389,9 @@ async def test_brief_complete_asks_for_confirmation_instead_of_finishing(tmp_db)
 async def test_confirmation_turn_completes_when_founder_says_no(tmp_db):
     await _seed_org_and_team()
     fake = _fake_groq([
-        (["Anything else to add?"], {**_FULL_BRIEF, "isComplete": True}),
-        (["Great, you're all set!"], {**_FULL_BRIEF, "isComplete": True}),
+        (["Tell me more."], _FULL_BRIEF),
+        (["Anything else to add?"], _FULL_BRIEF),
+        (["Great, you're all set!"], _FULL_BRIEF),
     ])
     with (
         _patch_clerk(),
@@ -392,11 +403,11 @@ async def test_confirmation_turn_completes_when_founder_says_no(tmp_db):
         mock_settings.groq_model = "llama-3.3-70b-versatile"
         async with _client() as client:
             await _start_chat(client)
-            await client.post(
-                "/api/onboarding/v2/chat/message",
-                json={"content": "here's everything..."},
-                headers=AUTH,
-            )
+            # Fills the brief, then draws the closing question.
+            for msg in ("here's everything...", "yep, that's the shape of it"):
+                await client.post(
+                    "/api/onboarding/v2/chat/message", json={"content": msg}, headers=AUTH
+                )
 
             resp = await client.post(
                 "/api/onboarding/v2/chat/message", json={"content": "no, that's everything"}, headers=AUTH
@@ -423,10 +434,11 @@ async def test_confirmation_turn_completes_after_founder_adds_more(tmp_db):
     ends this turn — the extra detail is merged into the brief first."""
     await _seed_org_and_team()
     fake = _fake_groq([
-        (["Anything else to add?"], {**_FULL_BRIEF, "isComplete": True}),
+        (["Tell me more."], _FULL_BRIEF),
+        (["Anything else to add?"], _FULL_BRIEF),
         (
             ["Got it, noted that. You're all set!"],
-            {**_FULL_BRIEF, "techConstraints": ["must run on Postgres"], "isComplete": True},
+            {**_FULL_BRIEF, "techConstraints": ["must run on Postgres"]},
         ),
     ])
     with (
@@ -439,11 +451,11 @@ async def test_confirmation_turn_completes_after_founder_adds_more(tmp_db):
         mock_settings.groq_model = "llama-3.3-70b-versatile"
         async with _client() as client:
             await _start_chat(client)
-            await client.post(
-                "/api/onboarding/v2/chat/message",
-                json={"content": "here's everything..."},
-                headers=AUTH,
-            )
+            # Fills the brief, then draws the closing question.
+            for msg in ("here's everything...", "yep, that's the shape of it"):
+                await client.post(
+                    "/api/onboarding/v2/chat/message", json={"content": msg}, headers=AUTH
+                )
 
             resp = await client.post(
                 "/api/onboarding/v2/chat/message",
@@ -460,6 +472,41 @@ async def test_confirmation_turn_completes_after_founder_adds_more(tmp_db):
             state = (await client.get("/api/onboarding/v2/state", headers=AUTH)).json()
             assert state["ideaChat"]["status"] == "completed"
             assert state["ideaChat"]["brief"]["techConstraints"] == ["must run on Postgres"]
+
+
+@pytest.mark.asyncio
+async def test_handshake_does_not_depend_on_the_extraction_pass(tmp_db):
+    """Regression: the interview used to arm (and therefore finish) only when
+    the extraction pass judged the brief complete — a judgment made *after*
+    the reply, and independent of what the reply actually asked. When they
+    disagreed the founder got a sign-off message, no question to answer, and a
+    session stuck at in_progress forever. The handshake now keys off the same
+    brief snapshot the reply prompt saw, so an extraction that returns nothing
+    at all can't stall it."""
+    await _seed_org_and_team()
+    fake = _fake_groq([
+        (["Tell me more."], _FULL_BRIEF),
+        (["Anything else to add?"], None),   # extraction returns no tool call
+        (["All set!"], None),
+    ])
+    with (
+        _patch_clerk(),
+        patch("src.services.idea_interview.settings") as mock_settings,
+        _patch_groq(fake),
+    ):
+        mock_settings.groq_api_key = "gsk-platform"
+        mock_settings.groq_base_url = "https://api.groq.com/openai/v1"
+        mock_settings.groq_model = "llama-3.3-70b-versatile"
+        async with _client() as client:
+            await _start_chat(client)
+            for msg in ("here's everything...", "yep"):
+                await client.post(
+                    "/api/onboarding/v2/chat/message", json={"content": msg}, headers=AUTH
+                )
+            resp = await client.post(
+                "/api/onboarding/v2/chat/message", json={"content": "nope"}, headers=AUTH
+            )
+            assert next(d for e, d in _parse_sse(resp.text) if e == "done")["status"] == "completed"
 
 
 @pytest.mark.asyncio

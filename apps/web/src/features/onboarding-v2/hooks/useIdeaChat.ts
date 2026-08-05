@@ -25,6 +25,7 @@ export function useIdeaChat() {
   const [streamingReply, setStreamingReply] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [isCompleting, setIsCompleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const startedRef = useRef(false)
@@ -108,9 +109,17 @@ export function useIdeaChat() {
   )
 
   const complete = useCallback(async () => {
-    await api.completeChat()
-    setStatus('completed')
-    invalidateFlowState()
+    setIsCompleting(true)
+    setError(null)
+    try {
+      await api.completeChat()
+      setStatus('completed')
+      invalidateFlowState()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setIsCompleting(false)
+    }
   }, [api, invalidateFlowState])
 
   const reopen = useCallback(async () => {
@@ -128,6 +137,7 @@ export function useIdeaChat() {
     streamingReply,
     isStreaming,
     isLoading,
+    isCompleting,
     error,
     send,
     /** User override: end the interview without waiting for the AI to judge it done. */

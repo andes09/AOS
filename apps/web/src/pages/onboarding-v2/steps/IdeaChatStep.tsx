@@ -19,6 +19,9 @@ export function IdeaChatStep() {
   // extraction failed on every turn) — without a way back the founder is
   // stuck with a disabled input and a roadmap that can never draft.
   const stuckEmpty = chat.status === 'completed' && !hasBriefContent(chat.brief)
+  // The brief has every required field, or the AI has asked its closing
+  // question — either way the founder can move on whenever they like.
+  const readyToFinish = chat.briefComplete || chat.awaitingConfirmation
 
   const reopen = async () => {
     setReopening(true)
@@ -100,10 +103,33 @@ export function IdeaChatStep() {
         <BriefPanel brief={chat.brief} complete={chat.briefComplete} />
       </div>
 
-      {chat.status !== 'completed' && !chat.awaitingConfirmation && chat.messages.length > 2 && hasBriefContent(chat.brief) && (
-        <div>
-          <Btn variant="outline" size="sm" onClick={() => void chat.complete()}>That's enough — finish up</Btn>
-        </div>
+      {/* Always reachable once there's a usable brief. The AI decides when it
+          has enough, but it doesn't get the last word — a model that signs off
+          without asking its closing question (or asks one more than the founder
+          wants to answer) must never be able to strand the flow on this step.
+          The hasBriefContent gate stays: finishing with an empty brief just
+          moves the dead end to PlanReviewStep, which can't draft from one. */}
+      {chat.status === 'completed' ? (
+        !stuckEmpty && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.t3, fontSize: 13.5 }}>
+            <Spinner /> Interview complete — setting up the next step…
+          </div>
+        )
+      ) : chat.messages.length > 2 && hasBriefContent(chat.brief) && (
+        readyToFinish ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Btn onClick={() => void chat.complete()} disabled={disabled || chat.isCompleting}>
+              {chat.isCompleting ? <Spinner size={13} color="rgba(255,255,255,0.85)" /> : 'Looks good — continue →'}
+            </Btn>
+            <span style={{ fontSize: 12.5, color: C.t3 }}>Your brief has everything we need. Keep chatting to refine it.</span>
+          </div>
+        ) : (
+          <div>
+            <Btn variant="outline" size="sm" onClick={() => void chat.complete()} disabled={disabled || chat.isCompleting}>
+              That's enough — finish up
+            </Btn>
+          </div>
+        )
       )}
     </div>
   )

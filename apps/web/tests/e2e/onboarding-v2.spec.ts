@@ -141,6 +141,50 @@ test.describe('Onboarding v2 flow', () => {
     await expect(page).toHaveURL(/\/app$/)
   })
 
+  test('idea chat: a finished-sounding AI with no closing question is not a dead end', async ({ page }) => {
+    // Regression: the AI signed off ("I've gathered all the necessary
+    // information") on the same turn awaitingConfirmation flipped on, so the
+    // session never reached 'completed' and the step hid its finish button —
+    // no question to answer, no button to click, flow stuck. Whatever the
+    // model does, this state must still offer a way forward.
+    let state = makeState('idea_chat')
+    await page.route('**/api/onboarding/v2/state', route =>
+      route.fulfill({ status: 200, body: JSON.stringify(state) }),
+    )
+    await page.route('**/api/onboarding/v2/chat/start', route =>
+      route.fulfill({
+        status: 200,
+        body: JSON.stringify({
+          sessionId: 'sess-1',
+          status: 'in_progress',
+          messages: [
+            { id: 'm-0', role: 'assistant', content: 'Anything else to add?', createdAt: new Date().toISOString() },
+            { id: 'm-1', role: 'user', content: 'no', createdAt: new Date().toISOString() },
+            {
+              id: 'm-2',
+              role: 'assistant',
+              content: "I've gathered all the necessary information about your project.",
+              createdAt: new Date().toISOString(),
+            },
+          ],
+          brief: { projectName: 'Cybersecurity Agent' },
+          briefComplete: true,
+          awaitingConfirmation: true,
+        }),
+      }),
+    )
+    await page.route('**/api/onboarding/v2/chat/complete', route => {
+      state = makeState('github_repo')
+      return route.fulfill({ status: 200, body: JSON.stringify(state) })
+    })
+
+    await page.goto('/onboarding/v2')
+
+    await expect(page.getByRole('heading', { name: 'Tell us about your idea' })).toBeVisible()
+    await page.getByRole('button', { name: /Looks good — continue/ }).click()
+    await expect(page.getByRole('heading', { name: 'Connect your GitHub' })).toBeVisible()
+  })
+
   test('tech_stack step: picking known tools advances to build_plan', async ({ page }) => {
     let state: Record<string, unknown> = {
       currentStep: 'tech_stack',

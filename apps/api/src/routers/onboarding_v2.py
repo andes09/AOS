@@ -766,6 +766,7 @@ async def complete_chat(
         raise HTTPException(status_code=409, detail="chat_not_started")
     if session.status != "completed":
         session.status = "completed"
+        session.awaiting_confirmation = False
         session.completed_at = datetime.utcnow()
         await db.commit()
         _maybe_prewarm_roadmap(session)

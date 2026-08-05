@@ -4,7 +4,8 @@ Idea interview — the LLM-driven onboarding questionnaire (onboarding v2).
 Each turn makes two LLM calls (Groq, via its OpenAI-compatible API):
 1. A streaming conversational reply (tokens forwarded to the caller for SSE).
 2. A non-streaming forced-tool extraction over the transcript that updates the
-   structured ProjectBrief and judges whether the interview has enough.
+   structured ProjectBrief. Whether the interview has enough is decided from
+   that brief by `missing_fields()`, not by the model.
 
 Keeping extraction out of the streamed reply keeps the SSE protocol dumb and
 the brief deterministic; onboarding runs once per org so the extra call is
@@ -141,20 +142,15 @@ def _system_prompt(purpose: str | None) -> str:
 
 
 def _brief_tool_input_schema() -> dict:
-    """Derive the forced-tool input_schema from ProjectBrief, then layer
-    `isComplete` on top — it's an extraction-protocol control field, not
-    project content, so it's intentionally not part of ProjectBrief itself.
+    """Derive the forced-tool input_schema from ProjectBrief.
+
+    Extraction records facts only — it deliberately does NOT judge whether the
+    interview is done. Completeness is decided from the merged brief by
+    `missing_fields()`, the same signal that drives the reply prompt, so the
+    conversation and the confirmation handshake can't disagree about where the
+    interview stands.
     """
-    properties = anthropic_tool_properties()
-    properties["isComplete"] = {
-        "type": "boolean",
-        "description": "True when the brief has enough substance to plan a roadmap",
-    }
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": ["isComplete"],
-    }
+    return {"type": "object", "properties": anthropic_tool_properties()}
 
 
 # OpenAI/Groq function-tool form. `_brief_tool_input_schema()` returns a plain
@@ -258,6 +254,16 @@ async def run_interview_turn(
     # answer — which always ends the interview, regardless of content.
     was_awaiting_confirmation = session.awaiting_confirmation
 
+    # Whether the reply we're about to stream is that closing question. The
+    # system prompt below is built from the brief as it stands *now*, so when
+    # nothing is missing the model is told to summarize and ask it. Deriving
+    # the handshake from the same snapshot the prompt saw is what keeps the
+    # flag and the conversation in lockstep — judging completeness after the
+    # reply (from the extraction pass) lands the flag a turn late, which can
+    # leave the founder holding a goodbye message with no question to answer
+    # and an interview that never reaches "completed".
+    asks_for_confirmation = not missing_fields(session.project_brief)
+
     seq = await _next_seq(session, db)
     db.add(OnboardingMessage(session_id=session.id, role="user", content=user_content, seq=seq))
     await db.flush()
@@ -334,19 +340,11 @@ async def run_interview_turn(
         if tool_call is not None:
             extracted = json.loads(tool_call.function.arguments)
             session.project_brief = merge_brief(session.project_brief, extracted)
-            # Trust the model's judgment only when the required fields back it
-            # up — and only the first time: once we're waiting on the founder's
-            # confirmation, this flag has already done its job.
-            if (
-                not was_awaiting_confirmation
-                and extracted.get("isComplete")
-                and not missing_fields(session.project_brief)
-            ):
-                session.brief_complete = True
-                session.awaiting_confirmation = True
     except (APIError, json.JSONDecodeError):
         # Extraction is best-effort — a failed pass must not lose the reply.
         logger.exception("idea_interview extraction failed for session %s", session.id)
+
+    session.brief_complete = not missing_fields(session.project_brief)
 
     user_message_count = sum(1 for m in transcript if m["role"] == "user")
     if was_awaiting_confirmation or user_message_count >= MAX_USER_MESSAGES:
@@ -354,6 +352,8 @@ async def run_interview_turn(
         session.awaiting_confirmation = False
         if session.completed_at is None:
             session.completed_at = datetime.utcnow()
+    elif asks_for_confirmation:
+        session.awaiting_confirmation = True
 
     await record_generation_cost(
         "idea_interview",

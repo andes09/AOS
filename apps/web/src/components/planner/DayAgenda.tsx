@@ -212,7 +212,7 @@ function TaskRow({
         justifyContent: 'center',
         borderRadius: '50%',
         cursor: waiting ? 'not-allowed' : 'pointer',
-        border: `2px solid ${done ? 'var(--color-success)' : waiting ? 'var(--color-border-subtle)' : lane.solid}`,
+        border: `2px solid ${done ? 'var(--color-success)' : waiting ? 'var(--color-border-strong)' : lane.solid}`,
         background: done ? 'var(--color-success)' : 'transparent',
         opacity: waiting ? 0.5 : 1,
         transition: 'background 0.15s, border-color 0.15s',

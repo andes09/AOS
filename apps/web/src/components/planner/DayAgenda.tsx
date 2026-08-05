@@ -142,6 +142,15 @@ export function DayAgenda({
   )
 }
 
+const planMapWrapStyle: CSSProperties = {
+  // In normal flow (not fixed/overlaid) so it can never sit on top of a task
+  // card — the list is short and capped at VISIBLE_COUNT, so this stays
+  // reachable without scrolling in practice.
+  display: 'flex',
+  justifyContent: 'center',
+  marginTop: 'var(--space-5)',
+}
+
 function TaskRow({
   task,
   waiting,
@@ -340,17 +349,6 @@ const addNoteBtnStyle: CSSProperties = {
   fontFamily: 'var(--font-sans)',
   fontSize: 'var(--text-xs)',
   color: 'var(--color-text-muted)',
-}
-
-// Fixed in the lower fifth of the viewport rather than flowing after the
-// task list, so it stays reachable at a consistent spot regardless of queue
-// length or scroll position.
-const planMapWrapStyle: CSSProperties = {
-  position: 'fixed',
-  left: '50%',
-  bottom: '16vh',
-  transform: 'translateX(-50%)',
-  zIndex: 10,
 }
 
 const planMapBtnStyle: CSSProperties = {

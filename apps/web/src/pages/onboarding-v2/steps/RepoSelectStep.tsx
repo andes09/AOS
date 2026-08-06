@@ -7,13 +7,14 @@
  * is a defensive fallback for that case.
  *
  * Path-aware: the import path connects the repo the project already lives in;
- * the chat path (greenfield) additionally offers "create a new repo" when the
- * install can create one (`canCreate` — an Organization install with
- * experimental.repo_create on; personal accounts are connect-only, see
- * github_app_repo_create_constraint).
+ * the chat path (greenfield) additionally offers repo creation. Organization
+ * installs (`canCreate`, experimental.repo_create on) create in-app via the
+ * API. Personal-account installs can't (see github_app_repo_create_constraint)
+ * so they get a link out to github.com/new plus a way to grant the install
+ * access to the new repo (`showLinkOutCreate`).
  */
 import { useMemo, useState } from 'react'
-import { useRepoSelect } from '../../../features/onboarding-v2'
+import { useGithubConnect, useRepoSelect } from '../../../features/onboarding-v2'
 import type { PlanSource } from '../../../features/onboarding-v2'
 import { Alert, Btn, C, Spinner } from '../theme'
 
@@ -29,11 +30,16 @@ export function RepoSelectStep({
   ownerLogin: string | null
 }) {
   const { repos, page, setPage, selectRepo, skip, createRepo } = useRepoSelect()
+  const { connect } = useGithubConnect('/onboarding')
   const [search, setSearch] = useState('')
   const [newName, setNewName] = useState('')
   const [isPrivate, setIsPrivate] = useState(true)
 
   const showCreate = canCreate && onboardingPath === 'chat'
+  // Personal-account installs can't create repos via the API (see
+  // github_app_repo_create_constraint) — link out to GitHub's own create
+  // form instead, then let them grant the install access to the new repo.
+  const showLinkOutCreate = !canCreate && onboardingPath === 'chat'
 
   const filtered = useMemo(() => {
     const list = repos.data ?? []
@@ -48,7 +54,9 @@ export function RepoSelectStep({
     ? 'Connect the repo this project lives in — or skip and connect one later.'
     : showCreate
       ? 'Create a repo for this project, or connect one you already made — or skip.'
-      : 'Pick the repo this project lives in — or skip and connect one later.'
+      : showLinkOutCreate
+        ? 'Create a repo on GitHub, grant Omada access, and connect it below — or skip.'
+        : 'Pick the repo this project lives in — or skip and connect one later.'
 
   const nameValid = /^[A-Za-z0-9._-]+$/.test(newName.trim())
 
@@ -90,7 +98,35 @@ export function RepoSelectStep({
         </div>
       )}
 
-      {showCreate && (
+      {showLinkOutCreate && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '16px', borderRadius: 10, border: `1.5px solid ${C.border}`, background: C.bg0 }}>
+          <div>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: C.t1, marginBottom: 3 }}>Create a new repo</div>
+            <div style={{ fontSize: 12.5, color: C.t3, lineHeight: 1.5 }}>
+              Personal GitHub accounts create repos on github.com directly — Omada
+              can't do that for you. Create it there, grant Omada access to it, then
+              connect it below.
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+            <Btn
+              size="sm"
+              variant="outline"
+              onClick={() => window.open('https://github.com/new?visibility=private', '_blank', 'noopener,noreferrer')}
+            >
+              Create on GitHub ↗
+            </Btn>
+            <Btn size="sm" onClick={() => connect.mutate()} disabled={connect.isPending}>
+              {connect.isPending ? <><Spinner size={13} color="rgba(255,255,255,0.85)" /> Redirecting…</> : 'Grant Omada access →'}
+            </Btn>
+            <Btn size="sm" variant="ghost" onClick={() => repos.refetch()} disabled={repos.isFetching}>
+              {repos.isFetching ? 'Refreshing…' : 'Refresh list'}
+            </Btn>
+          </div>
+        </div>
+      )}
+
+      {(showCreate || showLinkOutCreate) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.t3, fontSize: 12 }}>
           <div style={{ flex: 1, height: 1, background: C.border }} />
           or connect an existing repo
